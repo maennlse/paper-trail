@@ -7,8 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-from .gi_helpers import load_modules
 from .folder_colors import folder_badge_text, folder_color_css_class
+from .gi_helpers import load_modules
 from .popover_helpers import popdown, popup_with_delayed_prelight
 
 _GI_MODULES = cast(

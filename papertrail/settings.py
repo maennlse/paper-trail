@@ -10,12 +10,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import cast
 
-from .gi_helpers import call_nullary, load_modules
 from .folder_colors import (
     DEFAULT_FOLDER_COLOR,
     PRESET_FOLDER_COLORS,
     normalize_folder_color,
 )
+from .gi_helpers import call_nullary, load_modules
 
 _GI_MODULES = cast(tuple[object], load_modules(("GLib", "2.0")))
 GLib = _GI_MODULES[0]

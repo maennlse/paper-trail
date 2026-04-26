@@ -7,8 +7,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import cast
 
-from .gi_helpers import load_modules
 from .folder_colors import folder_badge_text, folder_color_css_class
+from .gi_helpers import load_modules
 from .note_repository import NoteRecord
 from .popover_helpers import popdown, popup_with_delayed_prelight
 
