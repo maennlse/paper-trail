@@ -1,0 +1,11 @@
+{
+  "threshold": 5,
+  "gitignore": true,
+  "ignore": [
+    "_build/**",
+    "flatpak-build/**",
+    ".flatpak-builder/**",
+    "repo/**",
+    "super-linter.log"
+  ]
+}

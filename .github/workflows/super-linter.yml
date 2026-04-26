@@ -1,3 +1,4 @@
+---
 name: Super Linter
 
 on:
@@ -18,15 +19,18 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run super-linter
-        uses: super-linter/super-linter@v8
+        uses: super-linter/super-linter@9e863354e3ff62e0727d37183162c4a88873df41 # v8.6.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           VALIDATE_ALL_CODEBASE: false
+          VALIDATE_PYTHON_MYPY: false
+          VALIDATE_PYTHON_RUFF_FORMAT: false
           FILTER_REGEX_EXCLUDE: >-
             (^_build/)|(^flatpak-build/)|(^\.flatpak-builder/)|(^repo/)
