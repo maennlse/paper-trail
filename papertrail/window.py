@@ -990,6 +990,7 @@ class PaperTrailWindow(
             row.set_language_label(self._get_note_language_label(note))
             row.set_pinned(self.settings.is_note_pinned(note.path))
             row.set_folder_color_token(self.settings.get_folder_color(note.path.parent))
+            row.set_folder_colorized(self._show_all_folders or bool(query))
             row.set_move_targets(
                 [
                     (str(folder), self.settings.get_folder_color(folder))

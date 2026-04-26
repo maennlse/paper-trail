@@ -275,12 +275,30 @@ popover.context-menu {
 }
 
 .folder-row.active,
+.folder-row:hover.active {
+  background-color: transparent;
+}
+
 .folder-row.active .folder-row-card,
-.folder-row:hover.active,
 .folder-row:hover.active .folder-row-card,
 .folder-row-card.active,
 .folder-row:hover .folder-row-card.active {
-  background-color: var(--papertrail-note-active-bg, var(--accent-bg-color));
+  background-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.folder-row-active-indicator {
+  min-width: 3px;
+  min-height: 24px;
+  margin-left: 2px;
+  border-radius: 999px;
+  background-color: currentColor;
+  opacity: 0;
+}
+
+.folder-row.active .folder-row-active-indicator,
+.folder-row-card.active .folder-row-active-indicator,
+.folder-row:hover.active .folder-row-active-indicator {
+  opacity: 1;
 }
 
 .folder-row-icon {
@@ -461,6 +479,10 @@ popover.context-menu {
   transition: background-color 120ms ease;
 }
 
+.note-row-card.folder-colored {
+  background-color: color-mix(in srgb, currentColor 18%, transparent);
+}
+
 .note-row-card-content {
   margin: 0;
   padding: 4px 0;
@@ -478,7 +500,7 @@ popover.context-menu {
 
 .note-row-card.active,
 .note-row:hover .note-row-card.active {
-  background-color: var(--papertrail-note-active-bg, var(--accent-bg-color));
+  background-color: color-mix(in srgb, currentColor 18%, transparent);
 }
 
 .note-row-title,
@@ -507,19 +529,27 @@ popover.context-menu {
 .note-row-card.active .note-row-pin,
 .note-row-card.active .note-row-filename.dim-label,
 .note-row-card.active .caption.dim-label {
-  color: var(--papertrail-note-active-fg);
+  color: var(--papertrail-note-fg);
+}
+
+.note-row-card.active .note-row-filename,
+.note-row-card.active .note-row-preview,
+.note-row-card.active .note-row-pin,
+.note-row-card.active .note-row-filename.dim-label,
+.note-row-card.active .caption.dim-label {
+  color: var(--papertrail-note-dim-fg);
 }
 
 .note-row-card.active entry,
 .note-row-card.active entry > text {
-  color: var(--papertrail-note-active-fg);
-  caret-color: var(--papertrail-note-active-fg);
+  color: var(--papertrail-note-fg);
+  caret-color: var(--papertrail-note-fg);
 }
 
 .note-row-card.active entry selection,
 .note-row-card.active entry > text selection {
-  color: var(--papertrail-note-pill-active-fg);
-  background-color: var(--papertrail-note-pill-active-bg);
+  color: var(--papertrail-note-pill-fg);
+  background-color: var(--papertrail-note-pill-bg);
 }
 
 .scheme-flow {
@@ -828,6 +858,12 @@ dialog.papertrail-dialog preferencespage > scrolledwindow > viewport {
   padding: 2px 10px;
   margin-top: 2px;
   min-height: 1.6em;
+}
+
+.note-row-card.active .note-row-language {
+  color: var(--papertrail-note-pill-fg);
+  background-color: var(--papertrail-note-pill-bg);
+  box-shadow: inset 0 0 0 1px var(--papertrail-note-pill-border);
 }
 
 .note-row-card.active .note-row-language {

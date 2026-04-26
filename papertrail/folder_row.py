@@ -69,13 +69,23 @@ class FolderRow(Gtk.Button):  # pylint: disable=too-many-instance-attributes
         icon_overlay.set_child(icon)
         icon_overlay.add_overlay(initials)
 
+        active_indicator = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        active_indicator.add_css_class("folder-row-active-indicator")
+        active_indicator.set_halign(Gtk.Align.START)
+        active_indicator.set_valign(Gtk.Align.CENTER)
+
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         card.add_css_class("folder-row-card")
-        card.append(icon_overlay)
+
+        card_overlay = Gtk.Overlay()
+        card_overlay.set_child(icon_overlay)
+        card_overlay.add_overlay(active_indicator)
+        card.append(card_overlay)
 
         self.set_child(card)
         self._icon = icon
         self._initials = initials
+        self._active_indicator = active_indicator
         self._card = card
         self._suppress_first_menu_prelight = True
         self._menu_popover = self._build_menu_popover() if menu_enabled else None
@@ -106,9 +116,13 @@ class FolderRow(Gtk.Button):  # pylint: disable=too-many-instance-attributes
         if self._color_class:
             self._icon.remove_css_class(self._color_class)
             self._initials.remove_css_class(self._color_class)
+            self._active_indicator.remove_css_class(self._color_class)
+            self._card.remove_css_class(self._color_class)
         new_class = folder_color_css_class(color_token)
         self._icon.add_css_class(new_class)
         self._initials.add_css_class(new_class)
+        self._active_indicator.add_css_class(new_class)
+        self._card.add_css_class(new_class)
         self._color_class = new_class
 
     def _build_menu_popover(self) -> Gtk.Popover:

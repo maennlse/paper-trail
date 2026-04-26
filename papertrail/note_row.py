@@ -61,6 +61,7 @@ class NoteRow(Gtk.Box):  # pylint: disable=too-many-instance-attributes
         self.note_path = note.path
         self._active = False
         self._pinned = False
+        self._folder_colorized = False
         self._folder_color_class = ""
         self._move_targets: list[tuple[str, str]] = []
 
@@ -107,10 +108,10 @@ class NoteRow(Gtk.Box):  # pylint: disable=too-many-instance-attributes
 
         folder_indicator = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         folder_indicator.add_css_class("note-row-folder-indicator")
+        folder_indicator.set_visible(False)
 
-        card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         card.add_css_class("note-row-card")
-        card.append(folder_indicator)
         card.append(body)
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -179,13 +180,24 @@ class NoteRow(Gtk.Box):  # pylint: disable=too-many-instance-attributes
         if hasattr(self, "_move_to_folder_button"):
             self._rebuild_move_targets()
 
+    def set_folder_colorized(self, enabled: bool) -> None:
+        """Toggle whether the card should use its folder color tint."""
+
+        self._folder_colorized = enabled
+        if enabled:
+            self._card.add_css_class("folder-colored")
+        else:
+            self._card.remove_css_class("folder-colored")
+
     def set_folder_color_token(self, color_token: str) -> None:
         """Apply the folder color accent shown on the row."""
 
         if self._folder_color_class:
             self._folder_indicator.remove_css_class(self._folder_color_class)
+            self._card.remove_css_class(self._folder_color_class)
         color_class = folder_color_css_class(color_token)
         self._folder_indicator.add_css_class(color_class)
+        self._card.add_css_class(color_class)
         self._folder_color_class = color_class
 
     # pylint: disable-next=too-many-locals,too-many-statements
