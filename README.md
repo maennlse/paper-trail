@@ -47,6 +47,14 @@ meson install -C _build
 
 This is a Python GNOME app, so `meson compile` mostly validates/configures packaging and `meson install` installs the launcher, desktop file, metainfo, Python package, and UI files.
 
+## Tests
+
+Run the test suite from the repository root with:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
 ## Runtime dependencies
 
 You need these GNOME Python bindings and libraries available on your system:

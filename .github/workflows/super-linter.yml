@@ -32,5 +32,6 @@ jobs:
           VALIDATE_ALL_CODEBASE: false
           VALIDATE_PYTHON_MYPY: false
           VALIDATE_PYTHON_RUFF_FORMAT: false
+          JSCPD_LINTER_RULES: .jscpd.json
           FILTER_REGEX_EXCLUDE: >-
             (^_build/)|(^flatpak-build/)|(^\.flatpak-builder/)|(^repo/)
