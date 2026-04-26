@@ -2,7 +2,9 @@
 
 Paper Trail is a local plain-text note app built as a fresh GNOME application.
 
-It is completely vibe coded and a shameless copy of Folio, GNOME Text Editor, and Iotas.
+> [!IMPORTANT]
+> This project is completely vibe coded.
+> It is also a shameless copy of Folio, GNOME Text Editor, and Iotas.
 
 It is intentionally narrow in scope:
 
