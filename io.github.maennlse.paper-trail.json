@@ -1,0 +1,43 @@
+{
+  "app-id": "io.github.maennlse.paper-trail",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "50",
+  "sdk": "org.gnome.Sdk",
+  "command": "paper-trail",
+  "finish-args": [
+    "--share=ipc",
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--device=dri"
+  ],
+  "cleanup": [
+    "/include",
+    "/lib/pkgconfig",
+    "/share/pkgconfig",
+    "/share/man",
+    "*.la",
+    "*.a"
+  ],
+  "modules": [
+    {
+      "name": "paper-trail",
+      "buildsystem": "meson",
+      "builddir": true,
+      "sources": [
+        {
+          "type": "dir",
+          "path": ".",
+          "skip": [
+            ".git",
+            "_build",
+            ".flatpak-builder",
+            "dist",
+            "__pycache__",
+            ".venv",
+            "venv"
+          ]
+        }
+      ]
+    }
+  ]
+}

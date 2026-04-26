@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>@APP_ID@</id>
+  <name>@APP_NAME@</name>
+  <summary>Local plain-text note taking with a focused GNOME layout</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>
+      Paper Trail is a local-first note taking app for plain text files. It keeps the
+      note-list-and-editor workflow of Iotas while using a GtkSourceView-based editor
+      tuned for unformatted text instead of markdown.
+    </p>
+    <p>
+      Notes are stored as regular UTF-8 <code>.txt</code> files in a folder you choose.
+      There is no database, no sync engine, and no markdown rendering layer.
+    </p>
+  </description>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/maennlse/paper-trail/main/data/screenshots/desktop.png</image>
+      <caption>Recent notes view with the folder sidebar and note preview card.</caption>
+    </screenshot>
+  </screenshots>
+  <launchable type="desktop-id">@APP_ID@.desktop</launchable>
+  <developer_name>sm</developer_name>
+  <url type="homepage">https://github.com/maennlse/paper-trail</url>
+  <url type="bugtracker">https://github.com/maennlse/paper-trail/issues</url>
+  <url type="vcs-browser">https://github.com/maennlse/paper-trail</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@APP_VERSION@" date="2026-04-19"/>
+  </releases>
+</component>

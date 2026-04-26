@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=@APP_NAME@
+Exec=@APP_EXEC@
+Icon=@APP_ID@
+Terminal=false
+Categories=Utility;TextEditor;Office;
+Keywords=notes;text;plain text;editor;local;
+StartupNotify=true
