@@ -1,0 +1,14 @@
+{
+	"files": {
+		"ignoreUnknown": true,
+		"includes": [
+			"**/*.json",
+			"**/*.jsonc",
+			"!_build",
+			"!builddir",
+			"!.flatpak-builder",
+			"!flatpak-build",
+			"!repo"
+		]
+	}
+}

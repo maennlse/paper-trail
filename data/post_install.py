@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 
+"""Run post-install desktop integration updates when available."""
+
 from __future__ import annotations
 
-from pathlib import Path
 import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 
 def main() -> int:
+    """Update icon and desktop caches after installation."""
+
     if os.environ.get("DESTDIR"):
         return 0
 

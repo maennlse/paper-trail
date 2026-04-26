@@ -1,27 +1,42 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Load and persist user settings for the application."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-import os
-from pathlib import Path
 import json
+import os
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import cast
 
-from gi.repository import GLib
+from .gi_helpers import call_nullary, load_modules
+from .folder_colors import (
+    DEFAULT_FOLDER_COLOR,
+    PRESET_FOLDER_COLORS,
+    normalize_folder_color,
+)
 
-from .folder_colors import DEFAULT_FOLDER_COLOR, PRESET_FOLDER_COLORS, normalize_folder_color
+_GI_MODULES = cast(tuple[object], load_modules(("GLib", "2.0")))
+GLib = _GI_MODULES[0]
 
 
 def _default_notes_dir() -> Path:
+    """Return the default notes directory for the current environment."""
+
     if os.environ.get("FLATPAK_ID"):
-        return Path(GLib.get_user_data_dir()) / "notes"
-    documents = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOCUMENTS)
+        return Path(call_nullary(GLib.get_user_data_dir)) / "notes"
+    documents = getattr(GLib, "get_user_special_dir")(
+        GLib.UserDirectory.DIRECTORY_DOCUMENTS
+    )
     base = Path(documents) if documents else Path.home() / "Documents"
     return base / "Paper Trail"
 
 
 @dataclass(slots=True)
-class SettingsData:
+class SettingsData:  # pylint: disable=too-many-instance-attributes
+    """Serializable settings stored in the user config file."""
+
     notes_dir: str
     note_folders: list[str] | None = None
     folder_colors: dict[str, str] | None = None
@@ -42,13 +57,17 @@ class SettingsData:
 
 
 class Settings:
+    """Read, normalize, and persist application settings."""
+
     def __init__(self) -> None:
-        config_dir = Path(GLib.get_user_config_dir()) / "paper-trail"
+        config_dir = Path(call_nullary(GLib.get_user_config_dir)) / "paper-trail"
         self._path = config_dir / "settings.json"
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self.data = self._load()
 
-    def _load(self) -> SettingsData:
+    def _load(self) -> SettingsData:  # pylint: disable=too-many-branches
+        """Load settings from disk and normalize persisted values."""
+
         default_dir = str(_default_notes_dir())
         defaults = SettingsData(notes_dir=default_dir, note_folders=[default_dir])
         if not self._path.exists():
@@ -72,7 +91,9 @@ class Settings:
         colors = data.folder_colors if isinstance(data.folder_colors, dict) else {}
         normalised_colors: dict[str, str] = {}
         for folder in folders:
-            normalised_colors[folder] = normalize_folder_color(colors.get(folder, DEFAULT_FOLDER_COLOR))
+            normalised_colors[folder] = normalize_folder_color(
+                colors.get(folder, DEFAULT_FOLDER_COLOR)
+            )
         data.folder_colors = normalised_colors
         pins = data.pinned_notes if isinstance(data.pinned_notes, list) else []
         unique_pins: list[str] = []
@@ -85,7 +106,10 @@ class Settings:
         data.pinned_notes = unique_pins
         if data.theme_mode not in {"system", "light", "dark"}:
             data.theme_mode = defaults.theme_mode
-        if not isinstance(data.editor_style_scheme, str) or not data.editor_style_scheme.strip():
+        if (
+            not isinstance(data.editor_style_scheme, str)
+            or not data.editor_style_scheme.strip()
+        ):
             data.editor_style_scheme = defaults.editor_style_scheme
         elif data.editor_style_scheme == "automatic":
             data.editor_style_scheme = defaults.editor_style_scheme
@@ -105,6 +129,8 @@ class Settings:
         folders: list[str] | None,
         fallback: str,
     ) -> list[str]:
+        """Return a unique ordered list of normalized folder paths."""
+
         unique: list[str] = []
         for value in folders or [fallback]:
             path = str(Path(value).expanduser())
@@ -115,6 +141,8 @@ class Settings:
         return unique
 
     def save(self) -> None:
+        """Persist the current settings to disk."""
+
         self._path.write_text(
             json.dumps(asdict(self.data), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -122,13 +150,19 @@ class Settings:
 
     @property
     def notes_dir(self) -> Path:
+        """Return the active notes directory."""
+
         return Path(self.data.notes_dir).expanduser()
 
     @property
     def note_folders(self) -> list[Path]:
+        """Return all configured note folders."""
+
         return [Path(folder).expanduser() for folder in self.data.note_folders or []]
 
     def set_notes_dir(self, path: Path) -> None:
+        """Set the active notes directory and add it to the folder list."""
+
         normalised = str(path.expanduser())
         folders = self._normalise_folders(self.data.note_folders, normalised)
         if normalised not in folders:
@@ -138,13 +172,17 @@ class Settings:
         self.save()
 
     def add_notes_dir(self, path: Path, activate: bool = False) -> None:
+        """Add a notes directory and optionally activate it immediately."""
+
         normalised = str(path.expanduser())
         folders = self._normalise_folders(self.data.note_folders, normalised)
         if normalised not in folders:
             folders.append(normalised)
         self.data.note_folders = folders
         colors = dict(self.data.folder_colors or {})
-        colors.setdefault(normalised, f"preset-{len(folders) % len(PRESET_FOLDER_COLORS)}")
+        colors.setdefault(
+            normalised, f"preset-{len(folders) % len(PRESET_FOLDER_COLORS)}"
+        )
         self.data.folder_colors = colors
         if activate:
             self.data.notes_dir = normalised
@@ -153,8 +191,14 @@ class Settings:
         self.save()
 
     def remove_notes_dir(self, path: Path) -> None:
+        """Remove a notes directory from the configured folder list."""
+
         normalised = str(path.expanduser())
-        folders = [folder for folder in self._normalise_folders(self.data.note_folders, normalised) if folder != normalised]
+        folders = [
+            folder
+            for folder in self._normalise_folders(self.data.note_folders, normalised)
+            if folder != normalised
+        ]
         if not folders:
             return
         self.data.note_folders = folders
@@ -166,6 +210,8 @@ class Settings:
         self.save()
 
     def reorder_notes_dirs(self, folders: list[Path]) -> None:
+        """Persist a new folder ordering when it matches known folders."""
+
         ordered = [str(folder.expanduser()) for folder in folders]
         current = self._normalise_folders(self.data.note_folders, self.data.notes_dir)
         if len(ordered) != len(current) or set(ordered) != set(current):
@@ -174,10 +220,14 @@ class Settings:
         self.save()
 
     def is_note_pinned(self, path: Path) -> bool:
+        """Return whether a note is pinned."""
+
         normalised = str(path.expanduser())
         return normalised in (self.data.pinned_notes or [])
 
     def set_note_pinned(self, path: Path, pinned: bool) -> None:
+        """Add or remove a note from the pinned notes list."""
+
         normalised = str(path.expanduser())
         pins = list(self.data.pinned_notes or [])
         if pinned:
@@ -189,24 +239,34 @@ class Settings:
         self.save()
 
     def rename_pinned_note(self, old_path: Path, new_path: Path) -> None:
+        """Update a pinned-note entry after a rename."""
+
         old_key = str(old_path.expanduser())
         new_key = str(new_path.expanduser())
-        pins = [new_key if pin == old_key else pin for pin in (self.data.pinned_notes or [])]
+        pins = [
+            new_key if pin == old_key else pin for pin in (self.data.pinned_notes or [])
+        ]
         self.data.pinned_notes = pins
         self.save()
 
     def delete_pinned_note(self, path: Path) -> None:
+        """Remove a deleted note from the pinned notes list."""
+
         normalised = str(path.expanduser())
         pins = [pin for pin in (self.data.pinned_notes or []) if pin != normalised]
         self.data.pinned_notes = pins
         self.save()
 
     def get_folder_color(self, path: Path) -> str:
+        """Return the configured color token for a folder."""
+
         normalised = str(path.expanduser())
         colors = self.data.folder_colors or {}
         return normalize_folder_color(colors.get(normalised, DEFAULT_FOLDER_COLOR))
 
     def set_folder_color(self, path: Path, color: str) -> None:
+        """Persist a folder color token."""
+
         normalised = str(path.expanduser())
         colors = dict(self.data.folder_colors or {})
         colors[normalised] = normalize_folder_color(color)
@@ -214,9 +274,14 @@ class Settings:
         self.save()
 
     def rename_folder(self, old_path: Path, new_path: Path) -> None:
+        """Update folder-related settings after a folder rename."""
+
         old_key = str(old_path.expanduser())
         new_key = str(new_path.expanduser())
-        folders = [new_key if folder == old_key else folder for folder in self._normalise_folders(self.data.note_folders, new_key)]
+        folders = [
+            new_key if folder == old_key else folder
+            for folder in self._normalise_folders(self.data.note_folders, new_key)
+        ]
         self.data.note_folders = folders
         if self.data.notes_dir == old_key:
             self.data.notes_dir = new_key
@@ -233,7 +298,7 @@ class Settings:
             if key == old_key:
                 updated_overrides[new_key] = value
             elif key.startswith(old_prefix):
-                suffix = key[len(old_prefix):]
+                suffix = key[len(old_prefix) :]
                 updated_overrides[f"{new_key}/{suffix}"] = value
             else:
                 updated_overrides[key] = value
@@ -241,10 +306,14 @@ class Settings:
         self.save()
 
     def get_language_override(self, path: Path) -> str | None:
+        """Return a saved language override for a note path, if any."""
+
         overrides = self.data.note_language_overrides or {}
         return overrides.get(str(path))
 
     def set_language_override(self, path: Path, language_id: str | None) -> None:
+        """Persist or clear a language override for a note."""
+
         overrides = dict(self.data.note_language_overrides or {})
         key = str(path)
         if language_id:
@@ -255,6 +324,8 @@ class Settings:
         self.save()
 
     def rename_language_override(self, old_path: Path, new_path: Path) -> None:
+        """Move a language override entry after a note rename."""
+
         overrides = dict(self.data.note_language_overrides or {})
         old_key = str(old_path)
         if old_key in overrides:
@@ -263,6 +334,8 @@ class Settings:
             self.save()
 
     def delete_language_override(self, path: Path) -> None:
+        """Delete any stored language override for a removed note."""
+
         overrides = dict(self.data.note_language_overrides or {})
         if overrides.pop(str(path), None) is not None:
             self.data.note_language_overrides = overrides

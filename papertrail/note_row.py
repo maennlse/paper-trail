@@ -1,16 +1,37 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Custom widget used to render a note inside the sidebar list."""
+
 from __future__ import annotations
 
 from datetime import datetime
+from typing import cast
 
-from gi.repository import GLib, GObject, Gdk, Gtk, Pango
-
-from .folder_colors import folder_color_css_class
+from .gi_helpers import load_modules
+from .folder_colors import folder_badge_text, folder_color_css_class
 from .note_repository import NoteRecord
+from .popover_helpers import popdown, popup_with_delayed_prelight
+
+_GI_MODULES = cast(
+    tuple[object, object, object, object, object],
+    load_modules(
+        ("Gdk", "4.0"),
+        ("GLib", "2.0"),
+        ("GObject", "2.0"),
+        ("Gtk", "4.0"),
+        ("Pango", "1.0"),
+    ),
+)
+Gdk = _GI_MODULES[0]
+GLib = _GI_MODULES[1]
+GObject = _GI_MODULES[2]
+Gtk = _GI_MODULES[3]
+Pango = _GI_MODULES[4]
 
 
 def _format_modified(modified_at: datetime) -> str:
+    """Format a note timestamp for compact sidebar display."""
+
     now = datetime.now()
     if modified_at.date() == now.date():
         return modified_at.strftime("%H:%M")
@@ -19,15 +40,9 @@ def _format_modified(modified_at: datetime) -> str:
     return modified_at.strftime("%Y-%m-%d")
 
 
-def _folder_badge_text(title: str) -> str:
-    words = [part for part in title.replace("_", " ").replace("-", " ").split() if part]
-    if len(words) >= 2:
-        return (words[0][0] + words[1][0]).upper()[:2]
-    compact = "".join(ch for ch in title if ch.isalnum())
-    return compact[:2].upper() or "F"
+class NoteRow(Gtk.Box):  # pylint: disable=too-many-instance-attributes
+    """Sidebar row widget representing a single note."""
 
-
-class NoteRow(Gtk.Box):
     __gsignals__ = {
         "activated": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "rename-submitted": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
@@ -37,7 +52,10 @@ class NoteRow(Gtk.Box):
         "delete-requested": (GObject.SignalFlags.RUN_FIRST, None, ()),
     }
 
+    # pylint: disable-next=too-many-locals,too-many-statements
     def __init__(self, note: NoteRecord) -> None:
+        """Build the row widgets and bind the initial note state."""
+
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.add_css_class("note-row")
         self.note_path = note.path
@@ -125,15 +143,21 @@ class NoteRow(Gtk.Box):
         self.update(note)
 
     def update(self, note: NoteRecord) -> None:
+        """Refresh the row contents from a note record."""
+
         self.note_path = note.path
         self._title_label.set_text(note.title)
         self._filename_label.set_text(note.path.name)
         self._modified.set_text(_format_modified(note.modified_at))
 
     def set_language_label(self, label: str) -> None:
+        """Set the human-readable language label shown for the note."""
+
         self._language.set_text(label)
 
     def set_active(self, active: bool) -> None:
+        """Toggle the active visual state for the row."""
+
         self._active = active
         if active:
             self._card.add_css_class("active")
@@ -141,23 +165,30 @@ class NoteRow(Gtk.Box):
             self._card.remove_css_class("active")
 
     def set_pinned(self, pinned: bool) -> None:
+        """Update the row to reflect whether the note is pinned."""
+
         self._pinned = pinned
         self._pin_icon.set_visible(pinned)
         if hasattr(self, "_pin_label"):
             self._pin_label.set_text("Unpin" if pinned else "Pin to Top")
 
     def set_move_targets(self, folders: list[tuple[str, str]]) -> None:
+        """Replace the available move targets in the context menu."""
+
         self._move_targets = folders
         if hasattr(self, "_move_to_folder_button"):
             self._rebuild_move_targets()
 
     def set_folder_color_token(self, color_token: str) -> None:
+        """Apply the folder color accent shown on the row."""
+
         if self._folder_color_class:
             self._folder_indicator.remove_css_class(self._folder_color_class)
         color_class = folder_color_css_class(color_token)
         self._folder_indicator.add_css_class(color_class)
         self._folder_color_class = color_class
 
+    # pylint: disable-next=too-many-locals,too-many-statements
     def _build_menu_popover(self) -> Gtk.Popover:
         popover = Gtk.Popover()
         popover.add_css_class("papertrail-popover")
@@ -214,14 +245,18 @@ class NoteRow(Gtk.Box):
         move_to_folder_button.set_focus_on_click(False)
         move_to_folder_button.set_halign(Gtk.Align.FILL)
         move_to_folder_button.set_hexpand(True)
-        move_to_folder_button.connect("clicked", self._on_move_to_folder_action_activated)
+        move_to_folder_button.connect(
+            "clicked", self._on_move_to_folder_action_activated
+        )
         move_to_folder_label = Gtk.Label(label="Move to Folder", xalign=0)
         move_to_folder_label.add_css_class("submenu-label")
         move_to_folder_label.set_halign(Gtk.Align.START)
         move_to_folder_label.set_hexpand(True)
         move_to_folder_chevron = Gtk.Image.new_from_icon_name("go-next-symbolic")
         move_to_folder_chevron.add_css_class("dim-label")
-        move_to_folder_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        move_to_folder_content = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=12
+        )
         move_to_folder_content.set_halign(Gtk.Align.FILL)
         move_to_folder_content.set_hexpand(True)
         move_to_folder_content.append(move_to_folder_label)
@@ -300,7 +335,9 @@ class NoteRow(Gtk.Box):
             self._move_to_folder_chevron.set_visible(False)
             return
 
-        self._move_to_folder_button.set_sensitive(not self._suppress_first_menu_prelight)
+        self._move_to_folder_button.set_sensitive(
+            not self._suppress_first_menu_prelight
+        )
         self._move_to_folder_chevron.set_visible(True)
         for folder_path, color_token in self._move_targets:
             button = Gtk.Button()
@@ -317,11 +354,18 @@ class NoteRow(Gtk.Box):
             icon.add_css_class("move-target-icon")
             icon.add_css_class(folder_color_css_class(color_token))
 
-            title = Gtk.Label(label=GLib.path_get_basename(folder_path) or folder_path, xalign=0)
+            title = Gtk.Label(
+                label=GLib.path_get_basename(folder_path) or folder_path, xalign=0
+            )
             title.set_halign(Gtk.Align.START)
             title.set_hexpand(True)
 
-            badge = Gtk.Label(label=_folder_badge_text(GLib.path_get_basename(folder_path) or folder_path), xalign=0.5)
+            badge = Gtk.Label(
+                label=folder_badge_text(
+                    GLib.path_get_basename(folder_path) or folder_path
+                ),
+                xalign=0.5,
+            )
             badge.add_css_class("caption")
             badge.add_css_class("dim-label")
 
@@ -361,10 +405,13 @@ class NoteRow(Gtk.Box):
         actions.append(rename_button)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        content.set_margin_top(12)
-        content.set_margin_bottom(12)
-        content.set_margin_start(12)
-        content.set_margin_end(12)
+        for set_margin in (
+            content.set_margin_top,
+            content.set_margin_bottom,
+            content.set_margin_start,
+            content.set_margin_end,
+        ):
+            set_margin(12)
         content.append(title)
         content.append(entry)
         content.append(actions)
@@ -387,15 +434,16 @@ class NoteRow(Gtk.Box):
         self._filename_anchor.y = self._outer.get_allocated_height() // 2
         self._filename_anchor.width = 1
         self._filename_anchor.height = 1
-        self._move_to_folder_popover.popdown()
-        self._menu_popover.popdown()
-        self._menu_popover.popup()
-        if self._suppress_first_menu_prelight:
-            GLib.idle_add(self._enable_first_menu_buttons, self._menu_popover)
+        popdown(self._move_to_folder_popover)
+        popdown(self._menu_popover)
+        popup_with_delayed_prelight(
+            self._menu_popover,
+            self._enable_first_menu_buttons,
+            suppress_first_prelight=self._suppress_first_menu_prelight,
+        )
 
     def _on_rename_action_activated(self, *_args) -> None:
-        if self._menu_popover is not None:
-            self._menu_popover.popdown()
+        popdown(self._menu_popover)
         self._rename_entry.set_text(self.note_path.name)
         self._rename_entry.select_region(0, -1)
         self._rename_popover.set_pointing_to(self._filename_anchor)
@@ -403,11 +451,11 @@ class NoteRow(Gtk.Box):
         self._rename_entry.grab_focus()
 
     def _on_pin_action_activated(self, *_args) -> None:
-        self._menu_popover.popdown()
+        popdown(self._menu_popover)
         self.emit("pin-toggled", not self._pinned)
 
     def _on_open_folder_action_activated(self, *_args) -> None:
-        self._menu_popover.popdown()
+        popdown(self._menu_popover)
         self.emit("open-folder-requested")
 
     def _on_move_to_folder_action_activated(self, *_args) -> None:
@@ -415,18 +463,21 @@ class NoteRow(Gtk.Box):
             self._move_to_folder_popover.popup()
 
     def _on_move_target_clicked(self, _button: Gtk.Button, folder_path: str) -> None:
-        self._move_to_folder_popover.popdown()
-        self._menu_popover.popdown()
+        popdown(self._move_to_folder_popover)
+        popdown(self._menu_popover)
         self.emit("move-to-folder-requested", folder_path)
 
     def _on_delete_action_activated(self, *_args) -> None:
-        self._menu_popover.popdown()
+        popdown(self._menu_popover)
         self.emit("delete-requested")
 
     def _enable_first_menu_buttons(self, popover: Gtk.Popover) -> bool:
         if self._menu_popover is popover:
             for button in self._menu_buttons:
-                button.set_sensitive(button is not self._move_to_folder_button or bool(self._move_targets))
+                button.set_sensitive(
+                    button is not self._move_to_folder_button
+                    or bool(self._move_targets)
+                )
             self._suppress_first_menu_prelight = False
         return False
 

@@ -1,16 +1,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Persistent storage helpers for note files."""
+
 from __future__ import annotations
 
+import itertools
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-import itertools
-import uuid
 
 
 @dataclass(slots=True)
 class NoteRecord:
+    """A loaded note and its derived metadata."""
+
     path: Path
     title: str
     preview: str
@@ -19,18 +23,26 @@ class NoteRecord:
 
 
 class NoteRepository:
+    """Manage note files within the active notes directory."""
+
     def __init__(self, notes_dir: Path) -> None:
         self.set_notes_dir(notes_dir)
 
     def set_notes_dir(self, notes_dir: Path) -> None:
+        """Switch the repository to a different notes directory."""
+
         self._notes_dir = notes_dir.expanduser()
         self._notes_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def notes_dir(self) -> Path:
+        """Return the current notes directory."""
+
         return self._notes_dir
 
     def list_notes(self) -> list[NoteRecord]:
+        """Return all notes in the current directory, newest first."""
+
         notes: list[NoteRecord] = []
         for path in sorted(self._notes_dir.iterdir()):
             if path.is_file():
@@ -40,7 +52,11 @@ class NoteRepository:
         return notes
 
     def load_note(self, path: Path) -> NoteRecord:
-        body = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        """Load a note from disk and compute its metadata."""
+
+        body = (
+            path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        )
         stat = path.stat()
         title, preview = self._summarize(path, body)
         return NoteRecord(
@@ -52,6 +68,8 @@ class NoteRepository:
         )
 
     def create_note(self) -> NoteRecord:
+        """Create a new uniquely named empty note file."""
+
         stem = datetime.now().strftime("%Y%m%d-%H%M%S")
         for suffix in itertools.chain([""], [f"-{index}" for index in range(1, 100)]):
             path = self._notes_dir / f"{stem}{suffix}.txt"
@@ -64,10 +82,14 @@ class NoteRepository:
         return self.load_note(path)
 
     def save_note(self, path: Path, body: str) -> NoteRecord:
+        """Write note contents and return the refreshed record."""
+
         path.write_text(body, encoding="utf-8")
         return self.load_note(path)
 
     def rename_note(self, path: Path, requested_name: str) -> NoteRecord:
+        """Rename a note while keeping the filename unique."""
+
         target_name = self._normalise_filename(requested_name)
         target_path = self._unique_path(path.parent, target_name, path)
         if target_path != path:
@@ -75,6 +97,8 @@ class NoteRepository:
         return self.load_note(target_path)
 
     def move_note(self, path: Path, folder: Path) -> NoteRecord:
+        """Move a note into another folder, resolving name collisions."""
+
         target_folder = folder.expanduser()
         target_folder.mkdir(parents=True, exist_ok=True)
         target_path = self._unique_path(target_folder, path.name, path)
@@ -83,17 +107,23 @@ class NoteRepository:
         return self.load_note(target_path)
 
     def delete_note(self, path: Path) -> None:
+        """Delete a note if it still exists."""
+
         if path.exists():
             path.unlink()
 
     def _normalise_filename(self, requested_name: str) -> str:
         cleaned = requested_name.strip().replace("/", "-").replace("\\", "-")
-        cleaned = "".join(ch for ch in cleaned if ch not in '<>:"|?*').strip().rstrip(".")
+        cleaned = (
+            "".join(ch for ch in cleaned if ch not in '<>:"|?*').strip().rstrip(".")
+        )
         if not cleaned:
             cleaned = "untitled-note"
         return cleaned
 
-    def _unique_path(self, folder: Path, filename: str, current_path: Path | None = None) -> Path:
+    def _unique_path(
+        self, folder: Path, filename: str, current_path: Path | None = None
+    ) -> Path:
         candidate = folder / filename
         if current_path is not None and candidate == current_path:
             return candidate
@@ -113,9 +143,15 @@ class NoteRepository:
 
     def _summarize(self, path: Path, body: str) -> tuple[str, str]:
         lines = body.splitlines()
-        title = lines[0].strip() if lines and lines[0].strip() else path.stem.replace("-", " ")
+        title = (
+            lines[0].strip()
+            if lines and lines[0].strip()
+            else path.stem.replace("-", " ")
+        )
 
-        preview_source = [line.rstrip() for line in lines[1:]] if lines else body.splitlines()
+        preview_source = (
+            [line.rstrip() for line in lines[1:]] if lines else body.splitlines()
+        )
         while preview_source and not preview_source[0].strip():
             preview_source.pop(0)
 

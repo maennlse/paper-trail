@@ -1,23 +1,46 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Main application window and UI coordination logic."""
+
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
+import math
 from pathlib import Path
+from typing import cast
 
-import gi
-
-gi.require_version("Adw", "1")
-gi.require_version("Gtk", "4.0")
-gi.require_version("GtkSource", "5")
-
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk, GtkSource, Pango
-
-from .folder_colors import PRESET_FOLDER_COLORS, custom_folder_colors, folder_color_css_class, is_custom_folder_color
+from .folder_colors import (
+    PRESET_FOLDER_COLORS,
+    custom_folder_colors,
+    folder_color_css_class,
+    is_custom_folder_color,
+)
 from .folder_row import FolderRow
+from .gi_helpers import call_nullary, load_modules
 from .note_repository import NoteRecord, NoteRepository
 from .note_row import NoteRow
 from .settings import Settings
 
+_GTK_MODULES = cast(
+    tuple[object, object, object, object, object, object, object],
+    load_modules(
+        ("Adw", "1"),
+        ("Gdk", "4.0"),
+        ("Gio", "2.0"),
+        ("GLib", "2.0"),
+        ("Gtk", "4.0"),
+        ("GtkSource", "5"),
+        ("Pango", "1.0"),
+    ),
+)
+Adw = _GTK_MODULES[0]
+Gdk = _GTK_MODULES[1]
+Gio = _GTK_MODULES[2]
+GLib = _GTK_MODULES[3]
+Gtk = _GTK_MODULES[4]
+GtkSource = _GTK_MODULES[5]
+Pango = _GTK_MODULES[6]
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
 STYLES_DIR = Path(__file__).resolve().parent / "styles"
@@ -58,56 +81,61 @@ STYLE_SCHEME_ALIASES = {
 
 
 @Gtk.Template(filename=str(UI_DIR / "window.ui"))
-class PaperTrailWindow(Adw.ApplicationWindow):
+class PaperTrailWindow(
+    Adw.ApplicationWindow
+):  # pylint: disable=too-many-instance-attributes
+    """Primary application window for browsing and editing notes."""
+
     __gtype_name__ = "PaperTrailWindow"
 
-    main_paned: Gtk.Box = Gtk.Template.Child()
-    sidebar_panel: Gtk.Box = Gtk.Template.Child()
-    sidebar_divider: Gtk.Separator = Gtk.Template.Child()
-    sidebar_search_button: Gtk.Button = Gtk.Template.Child()
-    sidebar_search_revealer: Gtk.Revealer = Gtk.Template.Child()
-    sidebar_folders_scroller: Gtk.ScrolledWindow = Gtk.Template.Child()
-    sidebar_folders_viewport: Gtk.Viewport = Gtk.Template.Child()
-    sidebar_add_folder_button: Gtk.Button = Gtk.Template.Child()
-    sidebar_inline_add_box: Gtk.Box = Gtk.Template.Child()
-    sidebar_inline_add_folder_button: Gtk.Button = Gtk.Template.Child()
-    sidebar_folder_add_box: Gtk.Box = Gtk.Template.Child()
-    folder_list: Gtk.Box = Gtk.Template.Child()
-    note_list: Gtk.Box = Gtk.Template.Child()
-    sidebar_search_entry: Gtk.SearchEntry = Gtk.Template.Child()
-    sidebar_title_label: Gtk.Label = Gtk.Template.Child()
-    sidebar_subtitle_label: Gtk.Label = Gtk.Template.Child()
-    editor_stack: Gtk.Stack = Gtk.Template.Child()
-    empty_page: Gtk.ScrolledWindow = Gtk.Template.Child()
-    empty_state_stack: Gtk.Stack = Gtk.Template.Child()
-    recent_notes_page: Gtk.Box = Gtk.Template.Child()
-    empty_folder_page: Gtk.Box = Gtk.Template.Child()
-    recent_notes_subtitle_label: Gtk.Label = Gtk.Template.Child()
-    recent_notes_grid: Gtk.FlowBox = Gtk.Template.Child()
-    editor_page: Gtk.ScrolledWindow = Gtk.Template.Child()
-    editor_title_label: Gtk.Label = Gtk.Template.Child()
-    editor_filename_label: Gtk.Label = Gtk.Template.Child()
-    info_button: Gtk.ToggleButton = Gtk.Template.Child()
-    info_revealer: Gtk.Revealer = Gtk.Template.Child()
-    info_title_row: Adw.ActionRow = Gtk.Template.Child()
-    info_name_row: Adw.ActionRow = Gtk.Template.Child()
-    info_location_row: Adw.ActionRow = Gtk.Template.Child()
-    info_type_row: Adw.ActionRow = Gtk.Template.Child()
-    language_popout_button: Gtk.MenuButton = Gtk.Template.Child()
-    language_popover: Gtk.Popover = Gtk.Template.Child()
-    language_search_entry: Gtk.SearchEntry = Gtk.Template.Child()
-    language_listbox: Gtk.ListBox = Gtk.Template.Child()
-    editor_search_revealer: Gtk.Revealer = Gtk.Template.Child()
-    editor_replace_revealer: Gtk.Revealer = Gtk.Template.Child()
-    editor_search_entry: Gtk.SearchEntry = Gtk.Template.Child()
-    editor_replace_entry: Gtk.Entry = Gtk.Template.Child()
-    editor_replace_toggle_button: Gtk.ToggleButton = Gtk.Template.Child()
-    editor_search_status_label: Gtk.Label = Gtk.Template.Child()
-    info_delete_button: Gtk.Button = Gtk.Template.Child()
-    notes_menu_button: Gtk.MenuButton = Gtk.Template.Child()
+    main_paned = Gtk.Template.Child()
+    sidebar_panel = Gtk.Template.Child()
+    sidebar_divider = Gtk.Template.Child()
+    sidebar_search_button = Gtk.Template.Child()
+    sidebar_search_revealer = Gtk.Template.Child()
+    sidebar_folders_scroller = Gtk.Template.Child()
+    sidebar_folders_viewport = Gtk.Template.Child()
+    sidebar_add_folder_button = Gtk.Template.Child()
+    sidebar_inline_add_box = Gtk.Template.Child()
+    sidebar_inline_add_folder_button = Gtk.Template.Child()
+    sidebar_folder_add_box = Gtk.Template.Child()
+    folder_list = Gtk.Template.Child()
+    note_list = Gtk.Template.Child()
+    sidebar_search_entry = Gtk.Template.Child()
+    sidebar_title_label = Gtk.Template.Child()
+    sidebar_subtitle_label = Gtk.Template.Child()
+    editor_stack = Gtk.Template.Child()
+    empty_page = Gtk.Template.Child()
+    empty_state_stack = Gtk.Template.Child()
+    recent_notes_page = Gtk.Template.Child()
+    empty_folder_page = Gtk.Template.Child()
+    recent_notes_subtitle_label = Gtk.Template.Child()
+    recent_notes_grid = Gtk.Template.Child()
+    editor_page = Gtk.Template.Child()
+    editor_title_label = Gtk.Template.Child()
+    editor_filename_label = Gtk.Template.Child()
+    info_button = Gtk.Template.Child()
+    info_revealer = Gtk.Template.Child()
+    info_title_row = Gtk.Template.Child()
+    info_name_row = Gtk.Template.Child()
+    info_location_row = Gtk.Template.Child()
+    info_type_row = Gtk.Template.Child()
+    language_popout_button = Gtk.Template.Child()
+    language_popover = Gtk.Template.Child()
+    language_search_entry = Gtk.Template.Child()
+    language_listbox = Gtk.Template.Child()
+    editor_search_revealer = Gtk.Template.Child()
+    editor_replace_revealer = Gtk.Template.Child()
+    editor_search_entry = Gtk.Template.Child()
+    editor_replace_entry = Gtk.Template.Child()
+    editor_replace_toggle_button = Gtk.Template.Child()
+    editor_search_status_label = Gtk.Template.Child()
+    info_delete_button = Gtk.Template.Child()
+    notes_menu_button = Gtk.Template.Child()
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs) -> None:  # pylint: disable=too-many-statements
         super().__init__(**kwargs)
+        self._bind_template_children()
         self.add_css_class("papertrail-window")
         self.language_popover.add_css_class("papertrail-popover")
 
@@ -160,13 +188,23 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         self.sidebar_panel.set_hexpand(False)
         self.sidebar_panel.set_halign(Gtk.Align.START)
         self.sidebar_title_label.set_text("Paper Trail")
-        self.sidebar_search_button.connect("clicked", self._on_sidebar_search_button_clicked)
-        self.sidebar_add_folder_button.connect("clicked", self._on_add_folder_button_clicked)
-        self.sidebar_inline_add_folder_button.connect("clicked", self._on_add_folder_button_clicked)
-        self.sidebar_search_entry.connect("search-changed", self._on_sidebar_search_changed)
+        self.sidebar_search_button.connect(
+            "clicked", self._on_sidebar_search_button_clicked
+        )
+        self.sidebar_add_folder_button.connect(
+            "clicked", self._on_add_folder_button_clicked
+        )
+        self.sidebar_inline_add_folder_button.connect(
+            "clicked", self._on_add_folder_button_clicked
+        )
+        self.sidebar_search_entry.connect(
+            "search-changed", self._on_sidebar_search_changed
+        )
         self.sidebar_search_entry.connect("stop-search", self._on_sidebar_search_stop)
         self.sidebar_search_revealer.set_reveal_child(False)
-        self.editor_search_entry.connect("search-changed", self._on_editor_search_changed)
+        self.editor_search_entry.connect(
+            "search-changed", self._on_editor_search_changed
+        )
         self.editor_search_entry.connect("activate", self._find_next)
         self.editor_replace_entry.connect("activate", self._replace_current_match)
         self._add_entry_key_bindings()
@@ -175,7 +213,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         type_click.connect("released", self._on_info_type_clicked)
         self.info_type_row.add_controller(type_click)
         self.info_delete_button.connect("clicked", self._delete_current_note)
-        self.info_revealer.connect("notify::child-revealed", self._on_info_child_revealed)
+        self.info_revealer.connect(
+            "notify::child-revealed", self._on_info_child_revealed
+        )
         buffer = self.editor_view.get_buffer()
         buffer.connect("changed", self._on_buffer_changed)
         folders_adjustment = self.sidebar_folders_scroller.get_vadjustment()
@@ -199,7 +239,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         self.editor_view.set_tab_width(4)
         self.editor_view.set_insert_spaces_instead_of_tabs(True)
         self.editor_view.set_wrap_mode(
-            Gtk.WrapMode.WORD_CHAR if self.settings.data.wrap_text else Gtk.WrapMode.NONE
+            Gtk.WrapMode.WORD_CHAR
+            if self.settings.data.wrap_text
+            else Gtk.WrapMode.NONE
         )
         self.editor_view.set_show_line_numbers(self.settings.data.show_line_numbers)
         self.editor_view.set_monospace(self.settings.data.use_monospace)
@@ -221,16 +263,82 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         self.editor_page.set_child(self.editor_view)
         self._search_settings = GtkSource.SearchSettings()
         self._search_settings.set_case_sensitive(False)
-        self._search_context = GtkSource.SearchContext.new(buffer, self._search_settings)
+        self._search_context = GtkSource.SearchContext.new(
+            buffer, self._search_settings
+        )
         self._search_context.set_highlight(False)
-        self._search_context.connect("notify::occurrences-count", self._on_occurrences_count_changed)
+        self._search_context.connect(
+            "notify::occurrences-count", self._on_occurrences_count_changed
+        )
 
-        self._style_manager = Adw.StyleManager.get_default()
+        self._style_manager = call_nullary(Adw.StyleManager.get_default)
         self._style_manager.connect("notify::dark", self._on_style_variant_changed)
-        self._style_scheme_manager = GtkSource.StyleSchemeManager.get_default()
+        self._style_scheme_manager = call_nullary(
+            GtkSource.StyleSchemeManager.get_default
+        )
         self._style_scheme_manager.prepend_search_path(str(STYLES_DIR))
-        self._language_manager = GtkSource.LanguageManager.get_default()
+        self._language_manager = call_nullary(GtkSource.LanguageManager.get_default)
         self._update_style_scheme()
+
+    def _bind_template_children(self) -> None:
+        self.main_paned = cast(Gtk.Box, self.main_paned)
+        self.sidebar_panel = cast(Gtk.Box, self.sidebar_panel)
+        self.sidebar_divider = cast(Gtk.Separator, self.sidebar_divider)
+        self.sidebar_search_button = cast(Gtk.Button, self.sidebar_search_button)
+        self.sidebar_search_revealer = cast(Gtk.Revealer, self.sidebar_search_revealer)
+        self.sidebar_folders_scroller = cast(
+            Gtk.ScrolledWindow, self.sidebar_folders_scroller
+        )
+        self.sidebar_folders_viewport = cast(
+            Gtk.Viewport, self.sidebar_folders_viewport
+        )
+        self.sidebar_add_folder_button = cast(
+            Gtk.Button, self.sidebar_add_folder_button
+        )
+        self.sidebar_inline_add_box = cast(Gtk.Box, self.sidebar_inline_add_box)
+        self.sidebar_inline_add_folder_button = cast(
+            Gtk.Button, self.sidebar_inline_add_folder_button
+        )
+        self.sidebar_folder_add_box = cast(Gtk.Box, self.sidebar_folder_add_box)
+        self.folder_list = cast(Gtk.Box, self.folder_list)
+        self.note_list = cast(Gtk.Box, self.note_list)
+        self.sidebar_search_entry = cast(Gtk.SearchEntry, self.sidebar_search_entry)
+        self.sidebar_title_label = cast(Gtk.Label, self.sidebar_title_label)
+        self.sidebar_subtitle_label = cast(Gtk.Label, self.sidebar_subtitle_label)
+        self.editor_stack = cast(Gtk.Stack, self.editor_stack)
+        self.empty_page = cast(Gtk.ScrolledWindow, self.empty_page)
+        self.empty_state_stack = cast(Gtk.Stack, self.empty_state_stack)
+        self.recent_notes_page = cast(Gtk.Box, self.recent_notes_page)
+        self.empty_folder_page = cast(Gtk.Box, self.empty_folder_page)
+        self.recent_notes_subtitle_label = cast(
+            Gtk.Label, self.recent_notes_subtitle_label
+        )
+        self.recent_notes_grid = cast(Gtk.FlowBox, self.recent_notes_grid)
+        self.editor_page = cast(Gtk.ScrolledWindow, self.editor_page)
+        self.editor_title_label = cast(Gtk.Label, self.editor_title_label)
+        self.editor_filename_label = cast(Gtk.Label, self.editor_filename_label)
+        self.info_button = cast(Gtk.ToggleButton, self.info_button)
+        self.info_revealer = cast(Gtk.Revealer, self.info_revealer)
+        self.info_title_row = cast(Adw.ActionRow, self.info_title_row)
+        self.info_name_row = cast(Adw.ActionRow, self.info_name_row)
+        self.info_location_row = cast(Adw.ActionRow, self.info_location_row)
+        self.info_type_row = cast(Adw.ActionRow, self.info_type_row)
+        self.language_popout_button = cast(Gtk.MenuButton, self.language_popout_button)
+        self.language_popover = cast(Gtk.Popover, self.language_popover)
+        self.language_search_entry = cast(Gtk.SearchEntry, self.language_search_entry)
+        self.language_listbox = cast(Gtk.ListBox, self.language_listbox)
+        self.editor_search_revealer = cast(Gtk.Revealer, self.editor_search_revealer)
+        self.editor_replace_revealer = cast(Gtk.Revealer, self.editor_replace_revealer)
+        self.editor_search_entry = cast(Gtk.SearchEntry, self.editor_search_entry)
+        self.editor_replace_entry = cast(Gtk.Entry, self.editor_replace_entry)
+        self.editor_replace_toggle_button = cast(
+            Gtk.ToggleButton, self.editor_replace_toggle_button
+        )
+        self.editor_search_status_label = cast(
+            Gtk.Label, self.editor_search_status_label
+        )
+        self.info_delete_button = cast(Gtk.Button, self.info_delete_button)
+        self.notes_menu_button = cast(Gtk.MenuButton, self.notes_menu_button)
 
     def _setup_language_chooser(self) -> None:
         languages = []
@@ -241,9 +349,13 @@ class PaperTrailWindow(Adw.ApplicationWindow):
 
         languages.sort(key=lambda item: item[0].casefold())
         self._language_options = [("Automatic", None)] + languages
-        self.language_search_entry.connect("search-changed", self._on_language_search_changed)
+        self.language_search_entry.connect(
+            "search-changed", self._on_language_search_changed
+        )
         self.language_listbox.connect("row-activated", self._on_language_row_activated)
-        self.language_popover.connect("notify::visible", self._on_language_popover_visible_changed)
+        self.language_popover.connect(
+            "notify::visible", self._on_language_popover_visible_changed
+        )
         self._rebuild_language_list()
 
     def _setup_actions(self) -> None:
@@ -252,8 +364,8 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         self._add_simple_action("close-note", self._close_current_note)
         self._add_simple_action("choose-folder", self._choose_folder)
         self._add_simple_action("print-note", self._print_current_note)
-        self._add_simple_action("show-preferences", self._show_preferences)
-        self._add_simple_action("show-shortcuts", self._show_shortcuts)
+        self._add_simple_action("show-preferences", self.show_preferences)
+        self._add_simple_action("show-shortcuts", self.show_shortcuts)
         self._add_simple_action("toggle-fullscreen", self._toggle_fullscreen)
         self._add_simple_action("zoom-in", self._zoom_in)
         self._add_simple_action("zoom-out", self._zoom_out)
@@ -312,10 +424,12 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         window_keys.connect("key-pressed", self._on_window_key_pressed)
         self.add_controller(window_keys)
 
-    def _setup_menu(self) -> None:
+    def _setup_menu(self) -> None:  # pylint: disable=too-many-statements
         menu = Gio.Menu()
         custom_item = Gio.MenuItem()
-        custom_item.set_attribute_value("custom", GLib.Variant.new_string("theme-selector"))
+        custom_item.set_attribute_value(
+            "custom", GLib.Variant.new_string("theme-selector")
+        )
         theme_section = Gio.Menu()
         theme_section.append_item(custom_item)
         menu.append_section(None, theme_section)
@@ -602,7 +716,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         )
 
     def _refresh_folder_color_css(self, extra_colors: set[str] | None = None) -> None:
-        colors = custom_folder_colors(list((self.settings.data.folder_colors or {}).values()))
+        colors = custom_folder_colors(
+            list((self.settings.data.folder_colors or {}).values())
+        )
         if extra_colors:
             colors.update(custom_folder_colors(list(extra_colors)))
         css = "\n".join(
@@ -617,7 +733,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         self.add_action(action)
 
     def _add_stateful_action(self, name: str, initial: bool, callback) -> None:
-        action = Gio.SimpleAction.new_stateful(name, None, GLib.Variant.new_boolean(initial))
+        action = Gio.SimpleAction.new_stateful(
+            name, None, GLib.Variant.new_boolean(initial)
+        )
         action.connect("change-state", callback)
         self.add_action(action)
 
@@ -650,7 +768,10 @@ class PaperTrailWindow(Adw.ApplicationWindow):
             rules.append(f"font-size: {percent}%;")
 
         if rules:
-            css = f".editor-view, .editor-view text, .recent-note-preview {{ {' '.join(rules)} }}".encode("utf-8")
+            css = (
+                ".editor-view, .editor-view text, .recent-note-preview "
+                f"{{ {' '.join(rules)} }}"
+            ).encode("utf-8")
         else:
             css = b""
         self._editor_zoom_provider.load_from_data(css)
@@ -685,7 +806,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
             unit = "px" if description.get_size_is_absolute() else "pt"
             declarations.append(f"font-size: {scaled_size:.2f}{unit};")
         elif self.settings.data.font_scale != 1.0:
-            declarations.append(f"font-size: {int(round(self.settings.data.font_scale * 100))}%;")
+            declarations.append(
+                f"font-size: {int(round(self.settings.data.font_scale * 100))}%;"
+            )
 
         return " ".join(declarations)
 
@@ -723,7 +846,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
             row.connect("clicked", self._on_folder_row_clicked, folder)
             row.connect("edit-requested", self._on_folder_row_edit_requested, folder)
             row.connect("close-requested", self._on_folder_row_close_requested, folder)
-            row.connect("reorder-requested", self._on_folder_row_reorder_requested, folder)
+            row.connect(
+                "reorder-requested", self._on_folder_row_reorder_requested, folder
+            )
             self.folder_list.append(row)
             if not self._show_all_folders and folder == active_folder:
                 self._select_folder_row(row)
@@ -733,16 +858,25 @@ class PaperTrailWindow(Adw.ApplicationWindow):
     def _queue_sync_folder_add_button_visibility(self) -> None:
         if self._folder_add_visibility_source_id is not None:
             return
-        self._folder_add_visibility_source_id = GLib.idle_add(self._sync_folder_add_button_visibility)
+        self._folder_add_visibility_source_id = GLib.idle_add(
+            self._sync_folder_add_button_visibility
+        )
 
     def _sync_folder_add_button_visibility(self) -> bool:
         self._folder_add_visibility_source_id = None
 
         folder_height = self.folder_list.get_allocated_height()
         viewport_height = self.sidebar_folders_viewport.get_allocated_height()
-        inline_height = self.sidebar_inline_add_box.get_allocated_height() or self.sidebar_folder_add_box.get_allocated_height()
+        inline_height = (
+            self.sidebar_inline_add_box.get_allocated_height()
+            or self.sidebar_folder_add_box.get_allocated_height()
+        )
 
-        show_inline = folder_height > 0 and viewport_height > 0 and folder_height + inline_height <= viewport_height
+        show_inline = (
+            folder_height > 0
+            and viewport_height > 0
+            and folder_height + inline_height <= viewport_height
+        )
         self.sidebar_inline_add_box.set_visible(show_inline)
         self.sidebar_folder_add_box.set_visible(not show_inline)
         return GLib.SOURCE_REMOVE
@@ -806,8 +940,13 @@ class PaperTrailWindow(Adw.ApplicationWindow):
                 row.connect("activated", self._on_row_activated)
                 row.connect("rename-submitted", self._on_sidebar_row_rename_submitted)
                 row.connect("pin-toggled", self._on_sidebar_row_pin_toggled)
-                row.connect("open-folder-requested", self._on_sidebar_row_open_folder_requested)
-                row.connect("move-to-folder-requested", self._on_sidebar_row_move_to_folder_requested)
+                row.connect(
+                    "open-folder-requested", self._on_sidebar_row_open_folder_requested
+                )
+                row.connect(
+                    "move-to-folder-requested",
+                    self._on_sidebar_row_move_to_folder_requested,
+                )
                 row.connect("delete-requested", self._on_sidebar_row_delete_requested)
             row.update(note)
             row.set_language_label(self._get_note_language_label(note))
@@ -822,14 +961,32 @@ class PaperTrailWindow(Adw.ApplicationWindow):
             )
             self.note_list.append(row)
 
-        folder_name = "All" if self._show_all_folders else (self.repository.notes_dir.name or str(self.repository.notes_dir))
-        note_count = f"{len(self._notes)} note" if len(self._notes) == 1 else f"{len(self._notes)} notes"
+        folder_name = (
+            "All"
+            if self._show_all_folders
+            else (self.repository.notes_dir.name or str(self.repository.notes_dir))
+        )
+        note_count = (
+            f"{len(self._notes)} note"
+            if len(self._notes) == 1
+            else f"{len(self._notes)} notes"
+        )
         if query:
-            match_count = f"{len(visible_notes)} match" if len(visible_notes) == 1 else f"{len(visible_notes)} matches"
+            match_count = (
+                f"{len(visible_notes)} match"
+                if len(visible_notes) == 1
+                else f"{len(visible_notes)} matches"
+            )
             self.sidebar_subtitle_label.set_text(f"{folder_name} - {match_count}")
         else:
-            count_label = f"{len(visible_notes)} note" if len(visible_notes) == 1 else f"{len(visible_notes)} notes"
-            self.sidebar_subtitle_label.set_text(f"{folder_name} - {count_label if self._show_all_folders else note_count}")
+            count_label = (
+                f"{len(visible_notes)} note"
+                if len(visible_notes) == 1
+                else f"{len(visible_notes)} notes"
+            )
+            self.sidebar_subtitle_label.set_text(
+                f"{folder_name} - {count_label if self._show_all_folders else note_count}"
+            )
 
         if self.current_note and not self.current_note.path.exists():
             self.current_note = None
@@ -949,7 +1106,11 @@ class PaperTrailWindow(Adw.ApplicationWindow):
     ) -> None:
         dragged_folder = Path(dragged_path).expanduser()
         folders = list(self.settings.note_folders)
-        if dragged_folder == target_folder or dragged_folder not in folders or target_folder not in folders:
+        if (
+            dragged_folder == target_folder
+            or dragged_folder not in folders
+            or target_folder not in folders
+        ):
             return
 
         folders.remove(dragged_folder)
@@ -1036,7 +1197,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
     def _show_empty_state(self) -> None:
         self.editor_stack.set_visible_child(self.empty_page)
         has_notes = bool(self._notes)
-        self.empty_state_stack.set_visible_child(self.recent_notes_page if has_notes else self.empty_folder_page)
+        self.empty_state_stack.set_visible_child(
+            self.recent_notes_page if has_notes else self.empty_folder_page
+        )
         self._set_title_label("Recent Notes" if has_notes else "Get started")
         self._set_filename_label("")
         self.editor_view.get_buffer().set_language(None)
@@ -1062,7 +1225,7 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         self._clear_info_panel()
         self._close_editor_search()
 
-    def _rebuild_recent_notes_grid(self) -> None:
+    def _rebuild_recent_notes_grid(self) -> None:  # pylint: disable=too-many-statements
         child = self.recent_notes_grid.get_first_child()
         while child is not None:
             next_child = child.get_next_sibling()
@@ -1071,7 +1234,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
 
         recent_notes = self._recent_notes_source()[:9]
         self.recent_notes_grid.set_visible(bool(recent_notes))
-        self.recent_notes_subtitle_label.set_text("Open one of your latest notes or create a new one.")
+        self.recent_notes_subtitle_label.set_text(
+            "Open one of your latest notes or create a new one."
+        )
 
         for note in recent_notes:
             tile = Gtk.Button()
@@ -1161,7 +1326,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
             row.set_pinned(self.settings.is_note_pinned(note.path))
             row.set_folder_color_token(self.settings.get_folder_color(note.path.parent))
 
-    def _replace_cached_note(self, note: NoteRecord, old_path: Path | None = None) -> None:
+    def _replace_cached_note(
+        self, note: NoteRecord, old_path: Path | None = None
+    ) -> None:
         target = old_path or note.path
         for index, existing in enumerate(self._notes):
             if existing.path == target:
@@ -1224,20 +1391,30 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         if response != "delete":
             return
 
-        deleted_current = self.current_note is not None and self.current_note.path == path
+        deleted_current = (
+            self.current_note is not None and self.current_note.path == path
+        )
 
         self.repository.delete_note(path)
         self.settings.delete_language_override(path)
         self.settings.delete_pinned_note(path)
         if deleted_current:
             self.current_note = None
-        self._refresh_notes(selected_path=None if deleted_current else self.current_note.path if self.current_note else None)
+        self._refresh_notes(
+            selected_path=(
+                None
+                if deleted_current
+                else self.current_note.path if self.current_note else None
+            )
+        )
         if not deleted_current:
             return
 
         first_row = self.note_list.get_first_child()
         if isinstance(first_row, NoteRow):
-            note = next(note for note in self._notes if note.path == first_row.note_path)
+            note = next(
+                note for note in self._notes if note.path == first_row.note_path
+            )
             self._show_note(note)
         else:
             self._show_empty_state()
@@ -1263,7 +1440,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         chooser.connect("response", self._on_choose_folder_response)
         chooser.show()
 
-    def _on_choose_folder_response(self, chooser: Gtk.FileChooserNative, response: int) -> None:
+    def _on_choose_folder_response(
+        self, chooser: Gtk.FileChooserNative, response: int
+    ) -> None:
         if response != Gtk.ResponseType.ACCEPT:
             chooser.destroy()
             return
@@ -1340,7 +1519,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         self.sidebar_panel.set_visible(self._sidebar_visible)
         self.sidebar_divider.set_visible(self._sidebar_visible)
 
-    def _toggle_line_numbers(self, action: Gio.SimpleAction, value: GLib.Variant) -> None:
+    def _toggle_line_numbers(
+        self, action: Gio.SimpleAction, value: GLib.Variant
+    ) -> None:
         enabled = value.get_boolean()
         action.set_state(value)
         self.editor_view.set_show_line_numbers(enabled)
@@ -1351,7 +1532,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
     def _toggle_wrap(self, action: Gio.SimpleAction, value: GLib.Variant) -> None:
         enabled = value.get_boolean()
         action.set_state(value)
-        self.editor_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR if enabled else Gtk.WrapMode.NONE)
+        self.editor_view.set_wrap_mode(
+            Gtk.WrapMode.WORD_CHAR if enabled else Gtk.WrapMode.NONE
+        )
         self.settings.data.wrap_text = enabled
         self.settings.save()
         self._sync_preferences_window()
@@ -1430,7 +1613,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         compositor.set_wrap_mode(self.editor_view.get_wrap_mode())
         operation = Gtk.PrintOperation()
 
-        def on_begin_print(_operation: Gtk.PrintOperation, context: Gtk.PrintContext) -> None:
+        def on_begin_print(
+            _operation: Gtk.PrintOperation, context: Gtk.PrintContext
+        ) -> None:
             compositor.paginate(context)
             operation.set_n_pages(compositor.get_n_pages())
 
@@ -1445,7 +1630,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         operation.connect("draw-page", on_draw_page)
         operation.run(Gtk.PrintOperationAction.PRINT_DIALOG, self)
 
-    def _show_preferences(self, *_args) -> None:
+    def show_preferences(self, *_args) -> None:
+        """Present the preferences dialog."""
+
         if self._preferences_window is None:
             self._preferences_window = self._build_preferences_window()
         self._sync_preferences_dialog_size()
@@ -1462,16 +1649,23 @@ class PaperTrailWindow(Adw.ApplicationWindow):
     def _ensure_preferences_size_sync(self) -> None:
         if self._preferences_size_sync_source_id is not None:
             return
-        self._preferences_size_sync_source_id = GLib.timeout_add(100, self._sync_preferences_dialog_size_poll)
+        self._preferences_size_sync_source_id = GLib.timeout_add(
+            100, self._sync_preferences_dialog_size_poll
+        )
 
     def _sync_preferences_dialog_size_poll(self) -> bool:
-        if self._preferences_window is None or not self._preferences_window.get_visible():
+        if (
+            self._preferences_window is None
+            or not self._preferences_window.get_visible()
+        ):
             self._preferences_size_sync_source_id = None
             return False
         self._sync_preferences_dialog_size()
         return True
 
-    def _show_shortcuts(self, *_args) -> None:
+    def show_shortcuts(self, *_args) -> None:
+        """Present the keyboard shortcuts dialog."""
+
         if self._shortcuts_window is None:
             self._shortcuts_window = self._build_shortcuts_window()
         self._sync_shortcuts_window("")
@@ -1541,7 +1735,11 @@ class PaperTrailWindow(Adw.ApplicationWindow):
             ("Find", "Ctrl+F", "Open search"),
             ("Replace", "Ctrl+H", "Open replace"),
             ("Next Match", "F3 / Ctrl+G", "Go to next search match"),
-            ("Previous Match", "Shift+F3 / Ctrl+Shift+G", "Go to previous search match"),
+            (
+                "Previous Match",
+                "Shift+F3 / Ctrl+Shift+G",
+                "Go to previous search match",
+            ),
             ("Replace Current", "Ctrl+Enter", "Replace the current match"),
             ("Replace All", "Ctrl+Shift+Enter", "Replace all matches"),
             ("Close Search", "Escape", "Close the search bar"),
@@ -1595,6 +1793,31 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         page = Adw.PreferencesPage()
         page.add_css_class("papertrail-preferences-page")
 
+        appearance_group = self._build_preferences_appearance_group()
+        font_group = self._build_preferences_font_group()
+        editor_group = self._build_preferences_editor_group()
+        workspace_group = self._build_preferences_workspace_group()
+
+        page.add(appearance_group[0])
+        page.add(font_group[0])
+        page.add(editor_group[0])
+        page.add(workspace_group[0])
+        window.add(page)
+
+        window.appearance_preview = appearance_group[1]
+        window.scheme_holder = appearance_group[2]
+        window.scheme_flow = appearance_group[3]
+        window.custom_font_picker_row = font_group[1]
+        window.font_dialog = font_group[2]
+        window.line_numbers_row = editor_group[1]
+        window.wrap_row = editor_group[2]
+        window.ruler_row = editor_group[3]
+        window.folders_box = workspace_group[1]
+        return window
+
+    def _build_preferences_appearance_group(
+        self,
+    ) -> tuple[Adw.PreferencesGroup, GtkSource.View, Gtk.Box, Gtk.FlowBox]:
         appearance = Adw.PreferencesGroup(title="Appearance")
         preview = GtkSource.View()
         preview_buffer = GtkSource.Buffer()
@@ -1628,19 +1851,35 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         scheme_holder.append(scheme_flow)
         appearance.add(scheme_holder)
 
+        return appearance, preview, scheme_holder, scheme_flow
+
+    def _build_preferences_font_group(
+        self,
+    ) -> tuple[Adw.PreferencesGroup, Adw.ActionRow, Gtk.FontDialog]:
         font_settings = Adw.PreferencesGroup()
 
         custom_font_picker_row = Adw.ActionRow(title="Editor Font")
         custom_font_picker_row.set_activatable(True)
-        custom_font_picker_row.connect("activated", self._on_preferences_pick_custom_font)
-        custom_font_picker_row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        custom_font_picker_row.connect(
+            "activated", self._on_preferences_pick_custom_font
+        )
+        custom_font_picker_row.add_suffix(
+            Gtk.Image.new_from_icon_name("go-next-symbolic")
+        )
         font_dialog = Gtk.FontDialog()
         font_dialog.set_modal(True)
         font_settings.add(custom_font_picker_row)
 
+        return font_settings, custom_font_picker_row, font_dialog
+
+    def _build_preferences_editor_group(
+        self,
+    ) -> tuple[Adw.PreferencesGroup, Adw.SwitchRow, Adw.SwitchRow, Adw.SwitchRow]:
         editor = Adw.PreferencesGroup(title="Editor")
         line_numbers_row = Adw.SwitchRow(title="Show Line Numbers")
-        line_numbers_row.connect("notify::active", self._on_preferences_line_numbers_changed)
+        line_numbers_row.connect(
+            "notify::active", self._on_preferences_line_numbers_changed
+        )
         wrap_row = Adw.SwitchRow(title="Wrap Text")
         wrap_row.connect("notify::active", self._on_preferences_wrap_changed)
         ruler_row = Adw.SwitchRow(title="Show Ruler")
@@ -1650,6 +1889,11 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         editor.add(wrap_row)
         editor.add(ruler_row)
 
+        return editor, line_numbers_row, wrap_row, ruler_row
+
+    def _build_preferences_workspace_group(
+        self,
+    ) -> tuple[Adw.PreferencesGroup, Gtk.Box]:
         workspace = Adw.PreferencesGroup(title="Folders")
         add_folder_row = Adw.ActionRow(title="Add Folder…")
         add_folder_row.set_activatable(True)
@@ -1660,31 +1904,22 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         workspace.add(add_folder_row)
         workspace.add(folders_box)
 
-        page.add(appearance)
-        page.add(font_settings)
-        page.add(editor)
-        page.add(workspace)
-        window.add(page)
-
-        window.appearance_preview = preview
-        window.scheme_holder = scheme_holder
-        window.scheme_flow = scheme_flow
-        window.custom_font_picker_row = custom_font_picker_row
-        window.font_dialog = font_dialog
-        window.line_numbers_row = line_numbers_row
-        window.wrap_row = wrap_row
-        window.ruler_row = ruler_row
-        window.folders_box = folders_box
-        return window
+        return workspace, folders_box
 
     def _sync_preferences_window(self) -> None:
         if self._preferences_window is None:
             return
         self._syncing_preferences = True
         self._sync_scheme_previews()
-        font_label = self.settings.data.custom_font if self.settings.data.use_custom_font else "System Default"
+        font_label = (
+            self.settings.data.custom_font
+            if self.settings.data.use_custom_font
+            else "System Default"
+        )
         self._preferences_window.custom_font_picker_row.set_subtitle(font_label)
-        self._preferences_window.line_numbers_row.set_active(self.settings.data.show_line_numbers)
+        self._preferences_window.line_numbers_row.set_active(
+            self.settings.data.show_line_numbers
+        )
         self._preferences_window.wrap_row.set_active(self.settings.data.wrap_text)
         self._preferences_window.ruler_row.set_active(self.settings.data.show_ruler)
         self._rebuild_preferences_folders()
@@ -1704,14 +1939,16 @@ class PaperTrailWindow(Adw.ApplicationWindow):
 
         active_folder = self.repository.notes_dir
         can_remove = len(self.settings.note_folders) > 1
-        for index, folder in enumerate(self.settings.note_folders):
+        for folder in self.settings.note_folders:
             row = Adw.ActionRow(title=folder.name or str(folder))
             row.set_subtitle(str(folder))
             row.set_activatable(True)
             row.connect("activated", self._on_preferences_use_folder, folder)
 
             icon = Gtk.Image.new_from_icon_name("folder-symbolic")
-            icon.add_css_class(folder_color_css_class(self.settings.get_folder_color(folder)))
+            icon.add_css_class(
+                folder_color_css_class(self.settings.get_folder_color(folder))
+            )
             row.add_prefix(icon)
 
             if folder == active_folder:
@@ -1724,7 +1961,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
                 remove_button = Gtk.Button(icon_name="user-trash-symbolic")
                 remove_button.add_css_class("flat")
                 remove_button.set_tooltip_text("Remove Folder")
-                remove_button.connect("clicked", self._on_preferences_remove_folder, folder)
+                remove_button.connect(
+                    "clicked", self._on_preferences_remove_folder, folder
+                )
                 row.add_suffix(remove_button)
 
             box.append(row)
@@ -1733,6 +1972,45 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         if self._folder_edit_window is not None:
             self._folder_edit_window.close()
 
+        window, content = self._create_folder_edit_window()
+
+        name_row = Adw.EntryRow(title="Name")
+        name_row.set_text(folder.name)
+
+        color_label = Gtk.Label(label="Color", xalign=0)
+        color_label.add_css_class("heading")
+
+        selected_color = self.settings.get_folder_color(folder)
+
+        color_box, color_buttons = self._build_folder_color_box(window, selected_color)
+
+        custom_color_label = Gtk.Label(label="Custom Color", xalign=0)
+        custom_color_label.add_css_class("heading")
+
+        custom_color_row, custom_color_button = self._build_custom_folder_color_row(
+            window,
+            selected_color,
+            color_buttons,
+        )
+        window.name_row = name_row
+        window.color_buttons = color_buttons
+        window.custom_color_button = custom_color_button
+        actions = self._build_folder_edit_actions(
+            folder,
+            window,
+        )
+
+        content.append(name_row)
+        content.append(color_label)
+        content.append(color_box)
+        content.append(custom_color_label)
+        content.append(custom_color_row)
+        content.append(actions)
+        window.set_content(content)
+        self._folder_edit_window = window
+        window.present()
+
+    def _create_folder_edit_window(self) -> tuple[Adw.Window, Gtk.Box]:
         window = Adw.Window(transient_for=self, modal=True)
         window.add_css_class("papertrail-dialog")
         window.set_title("Edit Folder")
@@ -1744,23 +2022,17 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         content.set_margin_bottom(18)
         content.set_margin_start(18)
         content.set_margin_end(18)
+        return window, content
 
-        name_row = Adw.EntryRow(title="Name")
-        name_row.set_text(folder.name)
-
-        color_label = Gtk.Label(label="Color", xalign=0)
-        color_label.add_css_class("heading")
-
+    def _build_folder_color_box(
+        self, window: Adw.Window, selected_color: str
+    ) -> tuple[Gtk.FlowBox, list[Gtk.ToggleButton]]:
         color_box = Gtk.FlowBox()
         color_box.set_selection_mode(Gtk.SelectionMode.NONE)
         color_box.set_max_children_per_line(6)
         color_box.set_min_children_per_line(6)
         color_box.set_column_spacing(8)
         color_box.set_row_spacing(8)
-        selected_color = self.settings.get_folder_color(folder)
-
-        custom_color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        custom_color_row.set_halign(Gtk.Align.START)
 
         color_buttons: list[Gtk.ToggleButton] = []
         group_leader: Gtk.ToggleButton | None = None
@@ -1775,12 +2047,25 @@ class PaperTrailWindow(Adw.ApplicationWindow):
             else:
                 button.set_group(group_leader)
             button.set_active(selected_color == f"preset-{index}")
-            button.connect("toggled", self._on_folder_color_preset_toggled, f"preset-{index}", window)
+            button.connect(
+                "toggled",
+                self._on_folder_color_preset_toggled,
+                f"preset-{index}",
+                window,
+            )
             color_buttons.append(button)
             color_box.insert(button, -1)
 
-        custom_color_label = Gtk.Label(label="Custom Color", xalign=0)
-        custom_color_label.add_css_class("heading")
+        return color_box, color_buttons
+
+    def _build_custom_folder_color_row(
+        self,
+        window: Adw.Window,
+        selected_color: str,
+        color_buttons: list[Gtk.ToggleButton],
+    ) -> tuple[Gtk.Box, Gtk.ToggleButton]:
+        custom_color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        custom_color_row.set_halign(Gtk.Align.START)
 
         color_dialog = Gtk.ColorDialog()
         color_dialog.set_title("Select Folder Color")
@@ -1803,9 +2088,17 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         )
         custom_color_row.append(custom_color_button)
         window.custom_color_button = custom_color_button
-        window.custom_color_value = self._rgba_to_hex(self._folder_color_rgba(selected_color))
+        window.custom_color_value = self._rgba_to_hex(
+            self._folder_color_rgba(selected_color)
+        )
         window.folder_color_selection = selected_color
+        return custom_color_row, custom_color_button
 
+    def _build_folder_edit_actions(
+        self,
+        folder: Path,
+        window: Adw.Window,
+    ) -> Gtk.Box:
         cancel_button = Gtk.Button(label="Cancel")
         cancel_button.add_css_class("flat")
         cancel_button.connect("clicked", lambda *_args: window.close())
@@ -1816,9 +2109,6 @@ class PaperTrailWindow(Adw.ApplicationWindow):
             "clicked",
             self._on_folder_edit_save_clicked,
             folder,
-            name_row,
-            color_buttons,
-            custom_color_button,
             window,
         )
 
@@ -1826,16 +2116,7 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         actions.set_halign(Gtk.Align.END)
         actions.append(cancel_button)
         actions.append(save_button)
-
-        content.append(name_row)
-        content.append(color_label)
-        content.append(color_box)
-        content.append(custom_color_label)
-        content.append(custom_color_row)
-        content.append(actions)
-        window.set_content(content)
-        self._folder_edit_window = window
-        window.present()
+        return actions
 
     def _on_folder_color_preset_toggled(
         self,
@@ -1849,7 +2130,11 @@ class PaperTrailWindow(Adw.ApplicationWindow):
             if isinstance(custom_button, Gtk.ToggleButton):
                 self._sync_folder_custom_color_button(
                     custom_button,
-                    getattr(window, "custom_color_value", self._rgba_to_hex(self._folder_color_rgba(color_token))),
+                    getattr(
+                        window,
+                        "custom_color_value",
+                        self._rgba_to_hex(self._folder_color_rgba(color_token)),
+                    ),
                     False,
                 )
 
@@ -1861,10 +2146,20 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         window: Adw.Window,
     ) -> None:
         button.set_active(is_custom_folder_color(window.folder_color_selection))
-        initial = self._folder_color_rgba(getattr(window, "custom_color_value", window.folder_color_selection))
-        color_dialog.choose_rgba(self, initial, None, self._on_folder_custom_color_chosen, button, color_buttons, window)
+        initial = self._folder_color_rgba(
+            getattr(window, "custom_color_value", window.folder_color_selection)
+        )
+        color_dialog.choose_rgba(
+            self,
+            initial,
+            None,
+            self._on_folder_custom_color_chosen,
+            button,
+            color_buttons,
+            window,
+        )
 
-    def _on_folder_custom_color_chosen(
+    def _on_folder_custom_color_chosen(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         dialog: Gtk.ColorDialog,
         result: Gio.AsyncResult,
@@ -1902,21 +2197,29 @@ class PaperTrailWindow(Adw.ApplicationWindow):
 
     def _normalise_folder_name(self, value: str) -> str:
         cleaned = value.strip().replace("/", "-").replace("\\", "-")
-        cleaned = "".join(ch for ch in cleaned if ch not in '<>:"|?*').strip().rstrip(".")
+        cleaned = (
+            "".join(ch for ch in cleaned if ch not in '<>:"|?*').strip().rstrip(".")
+        )
         return cleaned or "Untitled Folder"
 
     def _on_folder_edit_save_clicked(
         self,
         _button: Gtk.Button,
         folder: Path,
-        name_row: Adw.EntryRow,
-        color_buttons: list[Gtk.ToggleButton],
-        custom_color_button: Gtk.ToggleButton,
         window: Adw.Window,
     ) -> None:
+        name_row = getattr(window, "name_row")
+        color_buttons = getattr(window, "color_buttons")
         color_token = getattr(window, "folder_color_selection", "preset-0")
         if not is_custom_folder_color(color_token):
-            color_token = next((f"preset-{index}" for index, btn in enumerate(color_buttons) if btn.get_active()), color_token)
+            color_token = next(
+                (
+                    f"preset-{index}"
+                    for index, btn in enumerate(color_buttons)
+                    if btn.get_active()
+                ),
+                color_token,
+            )
         else:
             color_token = getattr(window, "custom_color_value", color_token)
         target_name = self._normalise_folder_name(name_row.get_text())
@@ -2079,12 +2382,18 @@ class PaperTrailWindow(Adw.ApplicationWindow):
     def _on_sidebar_row_open_folder_requested(self, row: NoteRow, *_args) -> None:
         self._open_note_folder(row.note_path)
 
-    def _on_sidebar_row_move_to_folder_requested(self, row: NoteRow, folder_path: str) -> None:
+    def _on_sidebar_row_move_to_folder_requested(
+        self, row: NoteRow, folder_path: str
+    ) -> None:
         self._move_note_by_path(row.note_path, Path(folder_path))
 
     def _folder_color_rgba(self, color_token: str) -> Gdk.RGBA:
         rgba = Gdk.RGBA()
-        source = color_token if color_token.startswith("#") else PRESET_FOLDER_COLORS[int(color_token.removeprefix("preset-"))]
+        source = (
+            color_token
+            if color_token.startswith("#")
+            else PRESET_FOLDER_COLORS[int(color_token.removeprefix("preset-"))]
+        )
         rgba.parse(source)
         return rgba
 
@@ -2122,7 +2431,11 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         self._update_info_panel(saved)
         self._refresh_search_status()
         query = self.sidebar_search_entry.get_text().strip().casefold()
-        if query and query not in saved.title.casefold() and query not in saved.body.casefold():
+        if (
+            query
+            and query not in saved.title.casefold()
+            and query not in saved.body.casefold()
+        ):
             self._refresh_notes(selected_path=saved.path)
         else:
             self._update_sidebar_row(saved)
@@ -2148,7 +2461,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         self.language_search_entry.set_text("")
         self._rebuild_language_list()
 
-    def _update_info_panel(self, note: NoteRecord, live_text: str | None = None) -> None:
+    def _update_info_panel(
+        self, note: NoteRecord, live_text: str | None = None
+    ) -> None:
         language = self.editor_view.get_buffer().get_language()
         language_name = language.get_name() if language is not None else "Plain Text"
 
@@ -2216,7 +2531,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
     def _on_info_type_clicked(self, *_args) -> None:
         self._on_info_type_activated()
 
-    def _on_language_popover_visible_changed(self, popover: Gtk.Popover, *_args) -> None:
+    def _on_language_popover_visible_changed(
+        self, popover: Gtk.Popover, *_args
+    ) -> None:
         if not popover.get_visible():
             return
         self.language_search_entry.grab_focus()
@@ -2272,7 +2589,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         self._apply_scheme_window_recolor(scheme)
         self._sync_scheme_previews()
 
-    def _apply_scheme_window_recolor(self, scheme: GtkSource.StyleScheme | None) -> None:
+    def _apply_scheme_window_recolor(  # pylint: disable=too-many-locals,too-many-statements
+        self, scheme: GtkSource.StyleScheme | None
+    ) -> None:
         if scheme is None:
             self._scheme_recolor_provider.load_from_data(b"")
             return
@@ -2285,8 +2604,12 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         selection_style = scheme.get_style("selection")
         current_line_style = scheme.get_style("current-line")
 
-        text_bg = self._parse_style_rgba(text_style, "background") or Gdk.RGBA(1, 1, 1, 1)
-        text_fg = self._parse_style_rgba(text_style, "foreground") or Gdk.RGBA(0.18, 0.18, 0.2, 1)
+        text_bg = self._parse_style_rgba(text_style, "background") or Gdk.RGBA(
+            1, 1, 1, 1
+        )
+        text_fg = self._parse_style_rgba(text_style, "foreground") or Gdk.RGBA(
+            0.18, 0.18, 0.2, 1
+        )
         current_bg = self._parse_style_rgba(current_line_style, "background") or text_bg
         selection_rgba = self._parse_style_rgba(selection_style, "background")
         is_dark = self._scheme_is_dark(scheme, text_bg)
@@ -2303,26 +2626,55 @@ class PaperTrailWindow(Adw.ApplicationWindow):
 
         window_fg_rgba = self._get_metadata_rgba(scheme, "window_fg_color")
         if window_fg_rgba is None:
-            window_fg_rgba = text_fg if self._parse_style_rgba(text_style, "foreground") else self._mix_rgba(text_bg, alt, 0.025 if not is_dark else 0.05)
+            window_fg_rgba = (
+                text_fg
+                if self._parse_style_rgba(text_style, "foreground")
+                else self._mix_rgba(text_bg, alt, 0.025 if not is_dark else 0.05)
+            )
 
         sidebar_bg = self._get_metadata_rgba(scheme, "sidebar_bg_color")
         if sidebar_bg is None:
-            sidebar_bg = self._parse_style_rgba(scheme.get_style("line-numbers"), "background") or text_bg
+            sidebar_bg = (
+                self._parse_style_rgba(scheme.get_style("line-numbers"), "background")
+                or text_bg
+            )
 
         headerbar_bg_rgba = self._get_metadata_rgba(scheme, "headerbar_bg_color")
         if headerbar_bg_rgba is None:
-            headerbar_bg_rgba = self._mix_rgba(text_bg, white, 0.07 if is_dark else 0.25)
+            headerbar_bg_rgba = self._mix_rgba(
+                text_bg, white, 0.07 if is_dark else 0.25
+            )
 
         headerbar_fg_rgba = self._get_metadata_rgba(scheme, "headerbar_fg_color")
         if headerbar_fg_rgba is None:
-            headerbar_fg_rgba = text_fg if self._parse_style_rgba(text_style, "foreground") else self._mix_rgba(text_bg, alt, 0.025 if not is_dark else 0.05)
+            headerbar_fg_rgba = (
+                text_fg
+                if self._parse_style_rgba(text_style, "foreground")
+                else self._mix_rgba(text_bg, alt, 0.025 if not is_dark else 0.05)
+            )
 
-        popover_bg = self._get_metadata_rgba(scheme, "popover_bg_color") or self._mix_rgba(text_bg, white, 0.07 if is_dark else 0.25)
-        popover_fg = self._get_metadata_rgba(scheme, "popover_fg_color") or window_fg_rgba
+        popover_bg = self._get_metadata_rgba(
+            scheme, "popover_bg_color"
+        ) or self._mix_rgba(text_bg, white, 0.07 if is_dark else 0.25)
+        popover_fg = (
+            self._get_metadata_rgba(scheme, "popover_fg_color") or window_fg_rgba
+        )
         dialog_bg = self._mix_rgba(text_bg, white, 0.07) if is_dark else text_bg
-        view_bg = self._mix_rgba(text_bg, black, 0.1) if is_dark else self._mix_rgba(text_bg, white, 0.3)
-        accent_rgba = self._get_metadata_rgba(scheme, "accent_bg_color") or selection_rgba or text_fg
-        accent_fg_rgba = self._get_metadata_rgba(scheme, "accent_fg_color") or self._parse_style_rgba(selection_style, "foreground") or white
+        view_bg = (
+            self._mix_rgba(text_bg, black, 0.1)
+            if is_dark
+            else self._mix_rgba(text_bg, white, 0.3)
+        )
+        accent_rgba = (
+            self._get_metadata_rgba(scheme, "accent_bg_color")
+            or selection_rgba
+            or text_fg
+        )
+        accent_fg_rgba = (
+            self._get_metadata_rgba(scheme, "accent_fg_color")
+            or self._parse_style_rgba(selection_style, "foreground")
+            or white
+        )
 
         base_bg = self._rgba_to_css(text_bg)
         base_fg = self._rgba_to_css(text_fg)
@@ -2332,7 +2684,9 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         headerbar_bg = self._rgba_to_css(headerbar_bg_rgba)
         headerbar_fg = self._rgba_to_css(headerbar_fg_rgba)
         sidebar_bg_css = self._rgba_to_css(sidebar_bg)
-        folder_column_bg_css = self._rgba_to_css(self._mix_rgba(sidebar_bg, black, 0.06))
+        folder_column_bg_css = self._rgba_to_css(
+            self._mix_rgba(sidebar_bg, black, 0.06)
+        )
         popover_bg_css = self._rgba_to_css(popover_bg)
         popover_fg_css = self._rgba_to_css(popover_fg)
         dialog_bg_css = self._rgba_to_css(dialog_bg)
@@ -2342,14 +2696,20 @@ class PaperTrailWindow(Adw.ApplicationWindow):
         note_fg_css = window_fg
         note_dim_fg_rgba = self._mix_rgba(window_fg_rgba, text_bg, 0.3)
         note_dim_fg_css = self._rgba_to_css(note_dim_fg_rgba)
-        note_active_fg_rgba = self._parse_style_rgba(selection_style, "foreground") or self._best_contrast_rgba(accent_rgba)
+        note_active_fg_rgba = self._parse_style_rgba(
+            selection_style, "foreground"
+        ) or self._best_contrast_rgba(accent_rgba)
         note_active_fg_css = self._rgba_to_css(note_active_fg_rgba)
         note_pill_bg_rgba = self._mix_rgba(sidebar_bg, note_dim_fg_rgba, 0.12)
         note_pill_fg_rgba = window_fg_rgba
         note_pill_border_rgba = self._mix_rgba(sidebar_bg, window_fg_rgba, 0.18)
-        note_pill_active_bg_rgba = self._mix_rgba(accent_rgba, note_active_fg_rgba, 0.22)
+        note_pill_active_bg_rgba = self._mix_rgba(
+            accent_rgba, note_active_fg_rgba, 0.22
+        )
         note_pill_active_fg_rgba = self._best_contrast_rgba(note_pill_active_bg_rgba)
-        note_pill_active_border_rgba = self._mix_rgba(note_pill_active_bg_rgba, note_pill_active_fg_rgba, 0.35)
+        note_pill_active_border_rgba = self._mix_rgba(
+            note_pill_active_bg_rgba, note_pill_active_fg_rgba, 0.35
+        )
         note_pill_bg_css = self._rgba_to_css(note_pill_bg_rgba)
         note_pill_fg_css = self._rgba_to_css(note_pill_fg_rgba)
         note_pill_border_css = self._rgba_to_css(note_pill_border_rgba)
@@ -2405,7 +2765,8 @@ window.papertrail-dialog {{
 window.papertrail-dialog.papertrail-preferences preferencespage,
 window.papertrail-dialog.papertrail-preferences .papertrail-preferences-page,
 window.papertrail-dialog.papertrail-preferences .papertrail-preferences-page > scrolledwindow,
-window.papertrail-dialog.papertrail-preferences .papertrail-preferences-page > scrolledwindow > viewport,
+window.papertrail-dialog.papertrail-preferences .papertrail-preferences-page > scrolledwindow
+  > viewport,
 window.papertrail-dialog.papertrail-preferences preferencespage > scrolledwindow > viewport {{
   background-image: none;
   background-color: {dialog_bg_css};
@@ -2595,7 +2956,9 @@ textview.editor-view window.popup separator {{
   background-color: {accent_bg};
   color: {accent_fg};
 }}
-""".encode("utf-8")
+""".encode(
+            "utf-8"
+        )
         self._scheme_recolor_provider.load_from_data(css)
 
     def _style_color(self, style: GtkSource.Style | None, prop: str) -> str | None:
@@ -2609,7 +2972,9 @@ textview.editor-view window.popup separator {{
             return None
         return str(value)
 
-    def _parse_style_rgba(self, style: GtkSource.Style | None, prop: str) -> Gdk.RGBA | None:
+    def _parse_style_rgba(
+        self, style: GtkSource.Style | None, prop: str
+    ) -> Gdk.RGBA | None:
         value = self._style_color(style, prop)
         if not value:
             return None
@@ -2618,7 +2983,9 @@ textview.editor-view window.popup separator {{
             return rgba
         return None
 
-    def _get_metadata_rgba(self, scheme: GtkSource.StyleScheme, key: str) -> Gdk.RGBA | None:
+    def _get_metadata_rgba(
+        self, scheme: GtkSource.StyleScheme, key: str
+    ) -> Gdk.RGBA | None:
         value = scheme.get_metadata(key)
         if not value:
             return None
@@ -2632,10 +2999,10 @@ textview.editor-view window.popup separator {{
         return opaque.to_string()
 
     def _rgba_to_hex(self, rgba: Gdk.RGBA) -> str:
-        return "#{:02x}{:02x}{:02x}".format(
-            round(rgba.red * 255),
-            round(rgba.green * 255),
-            round(rgba.blue * 255),
+        return (
+            f"#{round(rgba.red * 255):02x}"
+            f"{round(rgba.green * 255):02x}"
+            f"{round(rgba.blue * 255):02x}"
         )
 
     def _mix_rgba(self, a: Gdk.RGBA, b: Gdk.RGBA, level: float) -> Gdk.RGBA:
@@ -2685,18 +3052,26 @@ textview.editor-view window.popup separator {{
         return hsp <= 127.5
 
     def _effective_style_scheme_id(self) -> str:
-        scheme_id = self._normalized_style_scheme_id(self.settings.data.editor_style_scheme)
+        scheme_id = self._normalized_style_scheme_id(
+            self.settings.data.editor_style_scheme
+        )
         scheme = self._style_scheme_manager.get_scheme(scheme_id)
         if scheme is None:
             return "Adwaita-dark" if self._style_manager.get_dark() else "Adwaita"
 
         if self._style_manager.get_dark():
             dark_variant = scheme.get_metadata("dark-variant")
-            if dark_variant and self._style_scheme_manager.get_scheme(dark_variant) is not None:
+            if (
+                dark_variant
+                and self._style_scheme_manager.get_scheme(dark_variant) is not None
+            ):
                 return dark_variant
         else:
             light_variant = scheme.get_metadata("light-variant")
-            if light_variant and self._style_scheme_manager.get_scheme(light_variant) is not None:
+            if (
+                light_variant
+                and self._style_scheme_manager.get_scheme(light_variant) is not None
+            ):
                 return light_variant
 
         return scheme_id
@@ -2707,14 +3082,20 @@ textview.editor-view window.popup separator {{
             normalized = "tango"
         allowed_ids = {
             scheme_id
-            for _title, scheme_id in (LIGHT_STYLE_SCHEME_CHOICES + DARK_STYLE_SCHEME_CHOICES)
+            for _title, scheme_id in (
+                LIGHT_STYLE_SCHEME_CHOICES + DARK_STYLE_SCHEME_CHOICES
+            )
         }
         if normalized not in allowed_ids:
             return "Adwaita"
         return normalized
 
     def _current_style_scheme_choices(self) -> list[tuple[str, str]]:
-        choices = DARK_STYLE_SCHEME_CHOICES if self._style_manager.get_dark() else LIGHT_STYLE_SCHEME_CHOICES
+        choices = (
+            DARK_STYLE_SCHEME_CHOICES
+            if self._style_manager.get_dark()
+            else LIGHT_STYLE_SCHEME_CHOICES
+        )
         available: list[tuple[str, str]] = []
         for title, scheme_id in choices:
             if self._style_scheme_manager.get_scheme(scheme_id) is not None:
@@ -2787,13 +3168,19 @@ textview.editor-view window.popup separator {{
     def _create_scheme_preview_widget(self, scheme_id: str) -> Gtk.Widget:
         effective_id = self._effective_preview_scheme_id(scheme_id)
         scheme = self._style_scheme_manager.get_scheme(effective_id)
-        preview = GtkSource.StyleSchemePreview.new(scheme) if scheme is not None else Gtk.Box()
+        preview = (
+            GtkSource.StyleSchemePreview.new(scheme)
+            if scheme is not None
+            else Gtk.Box()
+        )
         preview.set_size_request(0, 60)
         preview.add_css_class("scheme-preview-view")
         return preview
 
     def _sync_scheme_previews(self) -> None:
-        selected_id = self._normalized_style_scheme_id(self.settings.data.editor_style_scheme)
+        selected_id = self._normalized_style_scheme_id(
+            self.settings.data.editor_style_scheme
+        )
         for scheme_id, button in self._scheme_preview_buttons.items():
             button.set_active(scheme_id == selected_id)
         for scheme_id, check in self._scheme_preview_checks.items():
@@ -2811,7 +3198,9 @@ textview.editor-view window.popup separator {{
         buffer = preview.get_buffer()
         if not isinstance(buffer, GtkSource.Buffer):
             return
-        scheme = self._style_scheme_manager.get_scheme(self._effective_style_scheme_id())
+        scheme = self._style_scheme_manager.get_scheme(
+            self._effective_style_scheme_id()
+        )
         if scheme is not None:
             buffer.set_style_scheme(scheme)
 
@@ -2821,12 +3210,19 @@ textview.editor-view window.popup separator {{
             return scheme_id
         if self._style_manager.get_dark():
             dark_variant = scheme.get_metadata("dark-variant")
-            if dark_variant and self._style_scheme_manager.get_scheme(dark_variant) is not None:
+            if (
+                dark_variant
+                and self._style_scheme_manager.get_scheme(dark_variant) is not None
+            ):
                 return dark_variant
         return scheme_id
 
-    def _on_scheme_preview_clicked(self, _button: Gtk.ToggleButton, scheme_id: str) -> None:
-        current_scheme_id = self._normalized_style_scheme_id(self.settings.data.editor_style_scheme)
+    def _on_scheme_preview_clicked(
+        self, _button: Gtk.ToggleButton, scheme_id: str
+    ) -> None:
+        current_scheme_id = self._normalized_style_scheme_id(
+            self.settings.data.editor_style_scheme
+        )
         if current_scheme_id == scheme_id:
             self._sync_scheme_previews()
             return
@@ -2841,7 +3237,9 @@ textview.editor-view window.popup separator {{
     def _on_language_search_changed(self, *_args) -> None:
         self._rebuild_language_list()
 
-    def _on_language_row_activated(self, _box: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
+    def _on_language_row_activated(
+        self, _box: Gtk.ListBox, row: Gtk.ListBoxRow
+    ) -> None:
         if self._syncing_language_list or self.current_note is None:
             return
 
@@ -2883,7 +3281,9 @@ textview.editor-view window.popup separator {{
         if destination_folder == note_path.parent or not note_path.exists():
             return
 
-        moving_current_note = self.current_note is not None and self.current_note.path == note_path
+        moving_current_note = (
+            self.current_note is not None and self.current_note.path == note_path
+        )
         if moving_current_note:
             self._flush_pending_save()
 
@@ -2912,7 +3312,9 @@ textview.editor-view window.popup separator {{
             self._show_note(moved)
             return
 
-        selected_path = self.current_note.path if self.current_note is not None else None
+        selected_path = (
+            self.current_note.path if self.current_note is not None else None
+        )
         self._refresh_notes(selected_path=selected_path)
 
     def _flush_pending_save(self) -> None:
@@ -3000,22 +3402,32 @@ textview.editor-view window.popup separator {{
                 search_from = end_iter if forward else start_iter
 
         if forward:
-            found, match_start, match_end, _wrapped = self._search_context.forward(search_from)
+            found, match_start, match_end, _wrapped = self._search_context.forward(
+                search_from
+            )
         else:
-            found, match_start, match_end, _wrapped = self._search_context.backward(search_from)
+            found, match_start, match_end, _wrapped = self._search_context.backward(
+                search_from
+            )
 
         if not found:
             wrap_from = buffer.get_start_iter() if forward else buffer.get_end_iter()
             if forward:
-                found, match_start, match_end, _wrapped = self._search_context.forward(wrap_from)
+                found, match_start, match_end, _wrapped = self._search_context.forward(
+                    wrap_from
+                )
             else:
-                found, match_start, match_end, _wrapped = self._search_context.backward(wrap_from)
+                found, match_start, match_end, _wrapped = self._search_context.backward(
+                    wrap_from
+                )
             if not found:
                 return None
 
         return match_start, match_end
 
-    def _select_search_match(self, match_start: Gtk.TextIter, match_end: Gtk.TextIter) -> None:
+    def _select_search_match(
+        self, match_start: Gtk.TextIter, match_end: Gtk.TextIter
+    ) -> None:
         buffer = self.editor_view.get_buffer()
         buffer.select_range(match_start, match_end)
         self.editor_view.scroll_to_iter(match_start, 0.25, False, 0.0, 0.0)
@@ -3091,19 +3503,22 @@ textview.editor-view window.popup separator {{
             self.editor_search_status_label.set_text("No matches")
             return
 
-        buffer = self.editor_view.get_buffer()
         position = 0
         current_match = self._get_selected_search_match()
         if current_match is not None:
             match_start, match_end = current_match
-            position = self._search_context.get_occurrence_position(match_start, match_end)
+            position = self._search_context.get_occurrence_position(
+                match_start, match_end
+            )
 
         if select_first and position <= 0:
             match = self._find_match(forward=True, from_start=True)
             if match is not None:
                 match_start, match_end = match
                 self._select_search_match(match_start, match_end)
-                position = self._search_context.get_occurrence_position(match_start, match_end)
+                position = self._search_context.get_occurrence_position(
+                    match_start, match_end
+                )
 
         if position > 0:
             self.editor_search_status_label.set_text(f"{position} of {count} matches")

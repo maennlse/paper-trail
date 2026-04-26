@@ -1,27 +1,79 @@
 window {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--view-bg-color) 92%, var(--window-bg-color)) 0%, var(--window-bg-color) 100%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--view-bg-color) 92%, var(--window-bg-color)) 0%,
+    var(--window-bg-color) 100%
+  );
 }
 
 .papertrail-window {
   --papertrail-shell-bg: var(--window-bg-color);
-  --papertrail-panel-bg: color-mix(in srgb, var(--sidebar-backdrop-color) 70%, var(--window-bg-color));
-  --papertrail-sidebar-surface: color-mix(in srgb, var(--sidebar-bg-color) 86%, var(--window-bg-color));
-  --papertrail-sidebar-hover: color-mix(in srgb, var(--papertrail-sidebar-surface) 86%, var(--window-fg-color) 8%);
+  --papertrail-panel-bg: color-mix(
+    in srgb,
+    var(--sidebar-backdrop-color) 70%,
+    var(--window-bg-color)
+  );
+  --papertrail-sidebar-surface: color-mix(
+    in srgb,
+    var(--sidebar-bg-color) 86%,
+    var(--window-bg-color)
+  );
+  --papertrail-sidebar-hover: color-mix(
+    in srgb,
+    var(--papertrail-sidebar-surface) 86%,
+    var(--window-fg-color) 8%
+  );
   --papertrail-note-active-bg: var(--accent-bg-color);
   --papertrail-note-fg: var(--window-fg-color);
-  --papertrail-note-dim-fg: color-mix(in srgb, var(--window-fg-color) 70%, transparent);
+  --papertrail-note-dim-fg: color-mix(
+    in srgb,
+    var(--window-fg-color) 70%,
+    transparent
+  );
   --papertrail-note-active-fg: var(--accent-fg-color);
-  --papertrail-note-pill-bg: color-mix(in srgb, var(--window-fg-color) 8%, transparent);
-  --papertrail-note-pill-fg: color-mix(in srgb, var(--window-fg-color) 72%, transparent);
-  --papertrail-note-pill-border: color-mix(in srgb, var(--window-fg-color) 14%, transparent);
-  --papertrail-note-pill-active-bg: color-mix(in srgb, var(--accent-fg-color) 18%, var(--accent-bg-color));
+  --papertrail-note-pill-bg: color-mix(
+    in srgb,
+    var(--window-fg-color) 8%,
+    transparent
+  );
+  --papertrail-note-pill-fg: color-mix(
+    in srgb,
+    var(--window-fg-color) 72%,
+    transparent
+  );
+  --papertrail-note-pill-border: color-mix(
+    in srgb,
+    var(--window-fg-color) 14%,
+    transparent
+  );
+  --papertrail-note-pill-active-bg: color-mix(
+    in srgb,
+    var(--accent-fg-color) 18%,
+    var(--accent-bg-color)
+  );
   --papertrail-note-pill-active-fg: var(--accent-fg-color);
-  --papertrail-note-pill-active-border: color-mix(in srgb, var(--accent-fg-color) 32%, var(--accent-bg-color));
+  --papertrail-note-pill-active-border: color-mix(
+    in srgb,
+    var(--accent-fg-color) 32%,
+    var(--accent-bg-color)
+  );
   --papertrail-scheme-check-bg: var(--accent-bg-color);
   --papertrail-scheme-check-fg: var(--accent-fg-color);
-  --papertrail-menu-surface: color-mix(in srgb, var(--headerbar-bg-color) 88%, var(--window-bg-color));
-  --papertrail-popover-surface: color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color));
-  --papertrail-input-surface: color-mix(in srgb, var(--view-bg-color) 78%, var(--window-bg-color));
+  --papertrail-menu-surface: color-mix(
+    in srgb,
+    var(--headerbar-bg-color) 88%,
+    var(--window-bg-color)
+  );
+  --papertrail-popover-surface: color-mix(
+    in srgb,
+    var(--headerbar-bg-color) 90%,
+    var(--window-bg-color)
+  );
+  --papertrail-input-surface: color-mix(
+    in srgb,
+    var(--view-bg-color) 78%,
+    var(--window-bg-color)
+  );
 }
 
 .papertrail-dialog,
@@ -31,17 +83,45 @@ popover.context-menu {
   --papertrail-panel-bg: var(--window-bg-color);
   --papertrail-note-active-bg: var(--accent-bg-color);
   --papertrail-note-fg: var(--window-fg-color);
-  --papertrail-note-dim-fg: color-mix(in srgb, var(--window-fg-color) 70%, transparent);
+  --papertrail-note-dim-fg: color-mix(
+    in srgb,
+    var(--window-fg-color) 70%,
+    transparent
+  );
   --papertrail-note-active-fg: var(--accent-fg-color);
-  --papertrail-note-pill-border: color-mix(in srgb, var(--window-fg-color) 14%, transparent);
-  --papertrail-note-pill-active-bg: color-mix(in srgb, var(--accent-fg-color) 18%, var(--accent-bg-color));
+  --papertrail-note-pill-border: color-mix(
+    in srgb,
+    var(--window-fg-color) 14%,
+    transparent
+  );
+  --papertrail-note-pill-active-bg: color-mix(
+    in srgb,
+    var(--accent-fg-color) 18%,
+    var(--accent-bg-color)
+  );
   --papertrail-note-pill-active-fg: var(--accent-fg-color);
-  --papertrail-note-pill-active-border: color-mix(in srgb, var(--accent-fg-color) 32%, var(--accent-bg-color));
+  --papertrail-note-pill-active-border: color-mix(
+    in srgb,
+    var(--accent-fg-color) 32%,
+    var(--accent-bg-color)
+  );
   --papertrail-scheme-check-bg: var(--accent-bg-color);
   --papertrail-scheme-check-fg: var(--accent-fg-color);
-  --papertrail-menu-surface: color-mix(in srgb, var(--headerbar-bg-color) 88%, var(--window-bg-color));
-  --papertrail-popover-surface: color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color));
-  --papertrail-input-surface: color-mix(in srgb, var(--view-bg-color) 78%, var(--window-bg-color));
+  --papertrail-menu-surface: color-mix(
+    in srgb,
+    var(--headerbar-bg-color) 88%,
+    var(--window-bg-color)
+  );
+  --papertrail-popover-surface: color-mix(
+    in srgb,
+    var(--headerbar-bg-color) 90%,
+    var(--window-bg-color)
+  );
+  --papertrail-input-surface: color-mix(
+    in srgb,
+    var(--view-bg-color) 78%,
+    var(--window-bg-color)
+  );
 }
 
 .sidebar-divider {
@@ -83,13 +163,25 @@ popover.context-menu {
 
 .sidebar-search-entry {
   box-shadow: none;
-  background-color: color-mix(in srgb, var(--papertrail-sidebar-surface) 72%, var(--window-fg-color) 6%);
+  background-color: color-mix(
+    in srgb,
+    var(--papertrail-sidebar-surface) 72%,
+    var(--window-fg-color) 6%
+  );
 }
 
 .sidebar-folders-column,
 .sidebar-folders-column {
-  background: color-mix(in srgb, var(--papertrail-sidebar-surface) 88%, black 6%);
-  background-color: color-mix(in srgb, var(--papertrail-sidebar-surface) 88%, black 6%);
+  background: color-mix(
+    in srgb,
+    var(--papertrail-sidebar-surface) 88%,
+    black 6%
+  );
+  background-color: color-mix(
+    in srgb,
+    var(--papertrail-sidebar-surface) 88%,
+    black 6%
+  );
 }
 
 .sidebar-folders-scroller,
@@ -246,7 +338,11 @@ popover.context-menu {
 
 .recent-note-tile {
   border-radius: 18px;
-  background: color-mix(in srgb, var(--papertrail-panel-bg) 84%, var(--window-bg-color));
+  background: color-mix(
+    in srgb,
+    var(--papertrail-panel-bg) 84%,
+    var(--window-bg-color)
+  );
   min-height: 210px;
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--window-fg-color) 8%, transparent),
@@ -254,7 +350,11 @@ popover.context-menu {
 }
 
 .recent-note-tile:hover {
-  background: color-mix(in srgb, var(--accent-bg-color) 12%, var(--papertrail-panel-bg));
+  background: color-mix(
+    in srgb,
+    var(--accent-bg-color) 12%,
+    var(--papertrail-panel-bg)
+  );
 }
 
 .recent-note-title {
@@ -285,11 +385,19 @@ popover.context-menu {
 }
 
 .empty-folder-button:hover {
-  background-color: color-mix(in srgb, var(--accent-bg-color) 88%, var(--window-fg-color));
+  background-color: color-mix(
+    in srgb,
+    var(--accent-bg-color) 88%,
+    var(--window-fg-color)
+  );
 }
 
 .empty-folder-button:active {
-  background-color: color-mix(in srgb, var(--accent-bg-color) 78%, var(--window-fg-color));
+  background-color: color-mix(
+    in srgb,
+    var(--accent-bg-color) 78%,
+    var(--window-fg-color)
+  );
 }
 
 .note-row {
@@ -396,22 +504,34 @@ popover.context-menu {
 .papertrail-menu-surface,
 .papertrail-popover contents,
 .papertrail-popover > contents {
-  background-color: var(--papertrail-menu-surface, color-mix(in srgb, var(--headerbar-bg-color) 88%, var(--window-bg-color)));
+  background-color: var(
+    --papertrail-menu-surface,
+    color-mix(in srgb, var(--headerbar-bg-color) 88%, var(--window-bg-color))
+  );
 }
 
 .papertrail-popover contents,
 .papertrail-popover > contents {
-  background-color: var(--papertrail-popover-surface, color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color)));
+  background-color: var(
+    --papertrail-popover-surface,
+    color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color))
+  );
 }
 
 .papertrail-menu-popover > arrow,
 .papertrail-menu-popover > arrow > border {
-  background-color: var(--papertrail-menu-surface, color-mix(in srgb, var(--headerbar-bg-color) 88%, var(--window-bg-color)));
+  background-color: var(
+    --papertrail-menu-surface,
+    color-mix(in srgb, var(--headerbar-bg-color) 88%, var(--window-bg-color))
+  );
 }
 
 .papertrail-popover > arrow,
 .papertrail-popover > arrow > border {
-  background-color: var(--papertrail-popover-surface, color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color)));
+  background-color: var(
+    --papertrail-popover-surface,
+    color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color))
+  );
 }
 
 .papertrail-emoji-chooser,
@@ -421,13 +541,19 @@ popover.context-menu {
 .papertrail-emoji-chooser viewport,
 .papertrail-emoji-chooser flowbox,
 .papertrail-emoji-chooser flowboxchild {
-  background-color: var(--papertrail-popover-surface, color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color)));
+  background-color: var(
+    --papertrail-popover-surface,
+    color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color))
+  );
   background-image: none;
 }
 
 .papertrail-emoji-chooser .emoji-searchbar,
 .papertrail-emoji-chooser .emoji-toolbar {
-  background-color: var(--papertrail-popover-surface, color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color)));
+  background-color: var(
+    --papertrail-popover-surface,
+    color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color))
+  );
 }
 
 .papertrail-emoji-chooser label,
@@ -478,7 +604,10 @@ textview.editor-view window.popup,
 textview.editor-view window.popup popover.menu > contents,
 textview.editor-view window.popup popover.menu > arrow,
 textview.editor-view window.popup popover.menu > arrow > border {
-  background-color: var(--papertrail-popover-surface, color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color)));
+  background-color: var(
+    --papertrail-popover-surface,
+    color-mix(in srgb, var(--headerbar-bg-color) 90%, var(--window-bg-color))
+  );
 }
 
 popover.context-menu separator,
@@ -513,7 +642,14 @@ textview.editor-view window.popup radio {
 }
 
 window.papertrail-dialog {
-  background-color: var(--papertrail-panel-bg, color-mix(in srgb, var(--sidebar-backdrop-color) 70%, var(--window-bg-color)));
+  background-color: var(
+    --papertrail-panel-bg,
+    color-mix(
+      in srgb,
+      var(--sidebar-backdrop-color) 70%,
+      var(--window-bg-color)
+    )
+  );
   background-image: none;
 }
 
@@ -523,14 +659,31 @@ window.papertrail-dialog preferencespage > scrolledwindow > viewport,
 dialog.papertrail-dialog preferencespage,
 dialog.papertrail-dialog preferencespage > scrolledwindow,
 dialog.papertrail-dialog preferencespage > scrolledwindow > viewport {
-  background-color: var(--papertrail-panel-bg, color-mix(in srgb, var(--sidebar-backdrop-color) 70%, var(--window-bg-color)));
+  background-color: var(
+    --papertrail-panel-bg,
+    color-mix(
+      in srgb,
+      var(--sidebar-backdrop-color) 70%,
+      var(--window-bg-color)
+    )
+  );
   background-image: none;
 }
 
 .papertrail-preferences .papertrail-preferences-page,
 .papertrail-preferences .papertrail-preferences-page > scrolledwindow,
-.papertrail-preferences .papertrail-preferences-page > scrolledwindow > viewport {
-  background-color: var(--papertrail-panel-bg, color-mix(in srgb, var(--sidebar-backdrop-color) 70%, var(--window-bg-color)));
+.papertrail-preferences
+  .papertrail-preferences-page
+  > scrolledwindow
+  > viewport {
+  background-color: var(
+    --papertrail-panel-bg,
+    color-mix(
+      in srgb,
+      var(--sidebar-backdrop-color) 70%,
+      var(--window-bg-color)
+    )
+  );
   background-image: none;
 }
 
@@ -553,7 +706,11 @@ dialog.papertrail-dialog preferencespage > scrolledwindow > viewport {
 }
 
 .theme-selector > checkbutton.theme-selector-button.follow {
-  background-image: linear-gradient(to bottom right, #fff 49.99%, #202020 50.01%);
+  background-image: linear-gradient(
+    to bottom right,
+    #fff 49.99%,
+    #202020 50.01%
+  );
 }
 
 .theme-selector > checkbutton.theme-selector-button.light {
@@ -608,7 +765,8 @@ dialog.papertrail-dialog preferencespage > scrolledwindow > viewport {
   padding: 1px;
   min-width: 10px;
   min-height: 10px;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--window-fg-color) 20%, transparent);
+  box-shadow: 0 1px 2px
+    color-mix(in srgb, var(--window-fg-color) 20%, transparent);
 }
 
 .note-row-title {
@@ -663,8 +821,13 @@ dialog.papertrail-dialog preferencespage > scrolledwindow > viewport {
 }
 
 .info-panel {
-  background-color: color-mix(in srgb, var(--sidebar-backdrop-color) 70%, var(--window-bg-color));
-  box-shadow: inset 1px 0 color-mix(in srgb, var(--border-color) 70%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--sidebar-backdrop-color) 70%,
+    var(--window-bg-color)
+  );
+  box-shadow: inset 1px 0
+    color-mix(in srgb, var(--border-color) 70%, transparent);
 }
 
 .title-entry {
@@ -687,5 +850,9 @@ dialog.papertrail-dialog preferencespage > scrolledwindow > viewport {
 }
 
 headerbar {
-  background-color: color-mix(in srgb, var(--window-bg-color) 86%, var(--view-bg-color));
+  background-color: color-mix(
+    in srgb,
+    var(--window-bg-color) 86%,
+    var(--view-bg-color)
+  );
 }

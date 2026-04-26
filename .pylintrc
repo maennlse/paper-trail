@@ -1,0 +1,5 @@
+[MAIN]
+ignore=_build,builddir,.flatpak-builder,flatpak-build,repo
+
+[BASIC]
+good-names=Adw,Gdk,Gio,GLib,Gtk,GtkSource,Pango
