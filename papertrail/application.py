@@ -132,7 +132,7 @@ class PaperTrailApplication(Adw.Application):
         about.add_css_class("papertrail-dialog")
         about.set_presentation_mode(Adw.DialogPresentationMode.FLOATING)
         about.set_comments(
-            "Local plain-text notes with an Iotas-like shell and a GtkSourceView editor."
+            "Local plain-text notes with a focused sidebar shell and a GtkSourceView editor."
         )
         about.present(self._window)
 

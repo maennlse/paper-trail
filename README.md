@@ -2,13 +2,15 @@
 
 Paper Trail is a local plain-text note app built as a fresh GNOME application.
 
+It is completely vibe coded and a shameless copy of Folio, GNOME Text Editor, and Iotas.
+
 It is intentionally narrow in scope:
 
 - local `.txt` files only
 - no Markdown
 - no SQLite
 - no sync
-- a note list and shell inspired by Iotas
+- a compact note list and GNOME-style shell
 - a `GtkSourceView` editor configured for plain text, borrowing the editor direction from GNOME Text Editor
 
 ## Run
@@ -74,5 +76,6 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5
 
 ## Upstream references
 
+- Folio: <https://gitlab.gnome.org/World/folio>
 - Iotas: <https://gitlab.gnome.org/World/iotas>
 - GNOME Text Editor: <https://gitlab.gnome.org/GNOME/gnome-text-editor>
