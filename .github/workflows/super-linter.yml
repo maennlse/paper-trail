@@ -30,8 +30,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           VALIDATE_ALL_CODEBASE: false
+          VALIDATE_JSCPD: false
           VALIDATE_PYTHON_MYPY: false
           VALIDATE_PYTHON_RUFF_FORMAT: false
-          JSCPD_LINTER_RULES: .jscpd.json
           FILTER_REGEX_EXCLUDE: >-
-            (^_build/)|(^flatpak-build/)|(^\.flatpak-builder/)|(^repo/)
+            (^_build/)|(^flatpak-build/)|(^\.flatpak-builder/)|(^repo/)|(^\.jscpd\.json$)

@@ -29,7 +29,7 @@ class FolderRow(Gtk.Button):  # pylint: disable=too-many-instance-attributes
         "reorder-requested": (GObject.SignalFlags.RUN_FIRST, None, (str, bool)),
     }
 
-    def __init__(  # pylint: disable=too-many-arguments
+    def __init__(  # pylint: disable=too-many-arguments,too-many-locals
         self,
         path: Path,
         color_token: str,

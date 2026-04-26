@@ -1,3 +1,5 @@
+"""Tests for folder color helper functions."""
+
 from __future__ import annotations
 
 import unittest
@@ -13,18 +15,28 @@ from papertrail.folder_colors import (
 
 
 class FolderColorsTest(unittest.TestCase):
+    """Covers normalization and presentation of folder colors."""
+
     def test_normalize_folder_color_clamps_preset_indices(self) -> None:
+        """Out-of-range preset indices should clamp to supported values."""
+
         self.assertEqual(normalize_folder_color(-1), "preset-0")
         self.assertEqual(normalize_folder_color(999), "preset-11")
 
     def test_normalize_folder_color_expands_short_hex(self) -> None:
+        """Three-digit hex colors should normalize to six digits."""
+
         self.assertEqual(normalize_folder_color(" #AbC "), "#aabbcc")
 
     def test_normalize_folder_color_rejects_invalid_values(self) -> None:
+        """Invalid color values should fall back to the default preset."""
+
         self.assertEqual(normalize_folder_color("preset-nope"), DEFAULT_FOLDER_COLOR)
         self.assertEqual(normalize_folder_color("not-a-color"), DEFAULT_FOLDER_COLOR)
 
     def test_custom_color_helpers(self) -> None:
+        """Custom color helpers should distinguish presets and custom hex."""
+
         self.assertTrue(is_custom_folder_color("#123456"))
         self.assertFalse(is_custom_folder_color("preset-3"))
         self.assertEqual(
@@ -34,12 +46,16 @@ class FolderColorsTest(unittest.TestCase):
         self.assertEqual(folder_color_css_class("preset-3"), "folder-color-3")
 
     def test_folder_badge_text_prefers_two_words(self) -> None:
+        """Badge text should use initials first and sensible fallbacks next."""
+
         self.assertEqual(folder_badge_text("Paper Trail"), "PT")
         self.assertEqual(folder_badge_text("project_notes"), "PN")
         self.assertEqual(folder_badge_text("42"), "42")
         self.assertEqual(folder_badge_text("---"), "F")
 
     def test_custom_folder_colors_returns_only_hex_values(self) -> None:
+        """Only normalized custom hex colors should be collected."""
+
         colors = custom_folder_colors(["preset-1", "#abcdef", "#ABCDEF", "invalid"])
         self.assertEqual(colors, {"#abcdef"})
 

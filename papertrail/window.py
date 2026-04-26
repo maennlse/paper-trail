@@ -972,62 +972,10 @@ class PaperTrailWindow(
             child = next_child
 
         for note in visible_notes:
-            row = row_by_path.get(note.path)
-            if row is None:
-                row = NoteRow(note)
-                row.connect("activated", self._on_row_activated)
-                row.connect("rename-submitted", self._on_sidebar_row_rename_submitted)
-                row.connect("pin-toggled", self._on_sidebar_row_pin_toggled)
-                row.connect(
-                    "open-folder-requested", self._on_sidebar_row_open_folder_requested
-                )
-                row.connect(
-                    "move-to-folder-requested",
-                    self._on_sidebar_row_move_to_folder_requested,
-                )
-                row.connect("delete-requested", self._on_sidebar_row_delete_requested)
-            row.update(note)
-            row.set_language_label(self._get_note_language_label(note))
-            row.set_pinned(self.settings.is_note_pinned(note.path))
-            row.set_folder_color_token(self.settings.get_folder_color(note.path.parent))
-            row.set_folder_colorized(self._show_all_folders or bool(query))
-            row.set_move_targets(
-                [
-                    (str(folder), self.settings.get_folder_color(folder))
-                    for folder in self.settings.note_folders
-                    if folder != note.path.parent
-                ]
-            )
+            row = self._build_note_row(row_by_path.get(note.path), note, query)
             self.note_list.append(row)
 
-        folder_name = (
-            "All"
-            if self._show_all_folders
-            else (self.repository.notes_dir.name or str(self.repository.notes_dir))
-        )
-        note_count = (
-            f"{len(self._notes)} note"
-            if len(self._notes) == 1
-            else f"{len(self._notes)} notes"
-        )
-        if query:
-            self.sidebar_title_label.set_text(folder_name)
-            match_count = (
-                f"{len(visible_notes)} match"
-                if len(visible_notes) == 1
-                else f"{len(visible_notes)} matches"
-            )
-            self.sidebar_subtitle_label.set_text(match_count)
-        else:
-            self.sidebar_title_label.set_text(folder_name)
-            count_label = (
-                f"{len(visible_notes)} note"
-                if len(visible_notes) == 1
-                else f"{len(visible_notes)} notes"
-            )
-            self.sidebar_subtitle_label.set_text(
-                count_label if self._show_all_folders else note_count
-            )
+        self._update_sidebar_note_counts(visible_notes, query)
 
         if self.current_note and not self.current_note.path.exists():
             self.current_note = None
@@ -1048,6 +996,68 @@ class PaperTrailWindow(
 
         if selected_path is not None:
             self._select_row(None)
+
+    def _build_note_row(
+        self, row: NoteRow | None, note: NoteRecord, query: str
+    ) -> NoteRow:
+        if row is None:
+            row = NoteRow(note)
+            row.connect("activated", self._on_row_activated)
+            row.connect("rename-submitted", self._on_sidebar_row_rename_submitted)
+            row.connect("pin-toggled", self._on_sidebar_row_pin_toggled)
+            row.connect(
+                "open-folder-requested", self._on_sidebar_row_open_folder_requested
+            )
+            row.connect(
+                "move-to-folder-requested",
+                self._on_sidebar_row_move_to_folder_requested,
+            )
+            row.connect("delete-requested", self._on_sidebar_row_delete_requested)
+
+        row.update(note)
+        row.set_language_label(self._get_note_language_label(note))
+        row.set_pinned(self.settings.is_note_pinned(note.path))
+        row.set_folder_color_token(self.settings.get_folder_color(note.path.parent))
+        row.set_folder_colorized(self._show_all_folders or bool(query))
+        row.set_move_targets(
+            [
+                (str(folder), self.settings.get_folder_color(folder))
+                for folder in self.settings.note_folders
+                if folder != note.path.parent
+            ]
+        )
+        return row
+
+    def _update_sidebar_note_counts(
+        self, visible_notes: list[NoteRecord], query: str
+    ) -> None:
+        folder_name = (
+            "All"
+            if self._show_all_folders
+            else (self.repository.notes_dir.name or str(self.repository.notes_dir))
+        )
+        note_count = (
+            f"{len(self._notes)} note"
+            if len(self._notes) == 1
+            else f"{len(self._notes)} notes"
+        )
+        count_label = (
+            f"{len(visible_notes)} match"
+            if len(visible_notes) == 1 and query
+            else (
+                f"{len(visible_notes)} matches"
+                if query
+                else (
+                    f"{len(visible_notes)} note"
+                    if len(visible_notes) == 1
+                    else f"{len(visible_notes)} notes"
+                )
+            )
+        )
+        self.sidebar_title_label.set_text(folder_name)
+        self.sidebar_subtitle_label.set_text(
+            count_label if query or self._show_all_folders else note_count
+        )
 
     def _matches_note_query(self, note: NoteRecord, query: str) -> bool:
         return (
@@ -2390,10 +2400,7 @@ class PaperTrailWindow(
         offset_x: float,
         offset_y: float,
     ) -> None:
-        if math.hypot(offset_x, offset_y) < 6:
-            return
-
-        if self._sidebar_top_drag_widget is None:
+        if math.hypot(offset_x, offset_y) < 6 or self._sidebar_top_drag_widget is None:
             return
 
         native = self._sidebar_top_drag_widget.get_native()
@@ -2405,17 +2412,12 @@ class PaperTrailWindow(
             return
 
         start_x, start_y = self._sidebar_top_drag_start
-        translated_coords = self._sidebar_top_drag_widget.translate_coordinates(
-            self, start_x + offset_x, start_y + offset_y
+        coords = self._translate_sidebar_drag_coordinates(
+            start_x, start_y, offset_x, offset_y
         )
-        if len(translated_coords) == 3:
-            translated, surface_x, surface_y = translated_coords
-            if not translated:
-                return
-        elif len(translated_coords) == 2:
-            surface_x, surface_y = translated_coords
-        else:
+        if coords is None:
             return
+        surface_x, surface_y = coords
 
         device = gesture.get_current_event_device()
         if device is None:
@@ -2429,6 +2431,23 @@ class PaperTrailWindow(
             surface_y,
             gesture.get_current_event_time(),
         )
+
+    def _translate_sidebar_drag_coordinates(
+        self, start_x: float, start_y: float, offset_x: float, offset_y: float
+    ) -> tuple[float, float] | None:
+        if self._sidebar_top_drag_widget is None:
+            return None
+
+        translated_coords = self._sidebar_top_drag_widget.translate_coordinates(
+            self, start_x + offset_x, start_y + offset_y
+        )
+        if len(translated_coords) == 3:
+            translated, surface_x, surface_y = translated_coords
+            return (surface_x, surface_y) if translated else None
+        if len(translated_coords) == 2:
+            surface_x, surface_y = translated_coords
+            return surface_x, surface_y
+        return None
 
     def _toggle_sidebar_search(self) -> None:
         reveal = not self.sidebar_search_revealer.get_reveal_child()
