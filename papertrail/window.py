@@ -90,6 +90,7 @@ class PaperTrailWindow(
 
     main_paned = Gtk.Template.Child()
     sidebar_panel = Gtk.Template.Child()
+    sidebar_folders_header_spacer = Gtk.Template.Child()
     sidebar_divider = Gtk.Template.Child()
     sidebar_search_button = Gtk.Template.Child()
     sidebar_search_revealer = Gtk.Template.Child()
@@ -102,6 +103,7 @@ class PaperTrailWindow(
     folder_list = Gtk.Template.Child()
     note_list = Gtk.Template.Child()
     sidebar_search_entry = Gtk.Template.Child()
+    sidebar_header_wrap = Gtk.Template.Child()
     sidebar_title_label = Gtk.Template.Child()
     sidebar_subtitle_label = Gtk.Template.Child()
     editor_stack = Gtk.Template.Child()
@@ -175,6 +177,8 @@ class PaperTrailWindow(
         self._folder_edit_window: Adw.Window | None = None
         self._folder_add_visibility_source_id: int | None = None
         self._preferences_size_sync_source_id: int | None = None
+        self._sidebar_top_drag_start = (0.0, 0.0)
+        self._sidebar_top_drag_widget: Gtk.Widget | None = None
 
         self._install_css()
         self._refresh_folder_color_css()
@@ -187,7 +191,25 @@ class PaperTrailWindow(
         self.sidebar_panel.set_size_request(FIXED_SIDEBAR_WIDTH, -1)
         self.sidebar_panel.set_hexpand(False)
         self.sidebar_panel.set_halign(Gtk.Align.START)
-        self.sidebar_title_label.set_text("Paper Trail")
+        sidebar_folders_drag = Gtk.GestureDrag(button=Gdk.BUTTON_PRIMARY)
+        sidebar_folders_drag.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        sidebar_folders_drag.connect(
+            "drag-begin",
+            self._on_sidebar_top_drag_begin,
+            self.sidebar_folders_header_spacer,
+        )
+        sidebar_folders_drag.connect("drag-update", self._on_sidebar_top_drag_update)
+        self.sidebar_folders_header_spacer.add_controller(sidebar_folders_drag)
+        sidebar_notes_drag = Gtk.GestureDrag(button=Gdk.BUTTON_PRIMARY)
+        sidebar_notes_drag.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        sidebar_notes_drag.connect(
+            "drag-begin", self._on_sidebar_top_drag_begin, self.sidebar_header_wrap
+        )
+        sidebar_notes_drag.connect("drag-update", self._on_sidebar_top_drag_update)
+        self.sidebar_header_wrap.add_controller(sidebar_notes_drag)
+        self.sidebar_title_label.set_text(
+            self.repository.notes_dir.name or str(self.repository.notes_dir)
+        )
         self.sidebar_search_button.connect(
             "clicked", self._on_sidebar_search_button_clicked
         )
@@ -283,6 +305,9 @@ class PaperTrailWindow(
     def _bind_template_children(self) -> None:
         self.main_paned = cast(Gtk.Box, self.main_paned)
         self.sidebar_panel = cast(Gtk.Box, self.sidebar_panel)
+        self.sidebar_folders_header_spacer = cast(
+            Gtk.Widget, self.sidebar_folders_header_spacer
+        )
         self.sidebar_divider = cast(Gtk.Separator, self.sidebar_divider)
         self.sidebar_search_button = cast(Gtk.Button, self.sidebar_search_button)
         self.sidebar_search_revealer = cast(Gtk.Revealer, self.sidebar_search_revealer)
@@ -303,6 +328,7 @@ class PaperTrailWindow(
         self.folder_list = cast(Gtk.Box, self.folder_list)
         self.note_list = cast(Gtk.Box, self.note_list)
         self.sidebar_search_entry = cast(Gtk.SearchEntry, self.sidebar_search_entry)
+        self.sidebar_header_wrap = cast(Gtk.Widget, self.sidebar_header_wrap)
         self.sidebar_title_label = cast(Gtk.Label, self.sidebar_title_label)
         self.sidebar_subtitle_label = cast(Gtk.Label, self.sidebar_subtitle_label)
         self.editor_stack = cast(Gtk.Stack, self.editor_stack)
@@ -401,6 +427,12 @@ class PaperTrailWindow(
         )
 
     def _add_entry_key_bindings(self) -> None:
+        sidebar_search_keys = Gtk.EventControllerKey()
+        sidebar_search_keys.connect(
+            "key-pressed", self._on_sidebar_search_entry_key_pressed
+        )
+        self.sidebar_search_entry.add_controller(sidebar_search_keys)
+
         search_keys = Gtk.EventControllerKey()
         search_keys.connect("key-pressed", self._on_search_entry_key_pressed)
         self.editor_search_entry.add_controller(search_keys)
@@ -415,6 +447,12 @@ class PaperTrailWindow(
             Gtk.Shortcut.new(
                 Gtk.KeyvalTrigger.new(Gdk.KEY_Escape, 0),
                 Gtk.CallbackAction.new(self._on_window_escape_shortcut),
+            )
+        )
+        window_shortcuts.add_shortcut(
+            Gtk.Shortcut.new(
+                Gtk.KeyvalTrigger.new(Gdk.KEY_k, Gdk.ModifierType.CONTROL_MASK),
+                Gtk.CallbackAction.new(self._on_window_sidebar_search_shortcut),
             )
         )
         self.add_controller(window_shortcuts)
@@ -972,20 +1010,22 @@ class PaperTrailWindow(
             else f"{len(self._notes)} notes"
         )
         if query:
+            self.sidebar_title_label.set_text(folder_name)
             match_count = (
                 f"{len(visible_notes)} match"
                 if len(visible_notes) == 1
                 else f"{len(visible_notes)} matches"
             )
-            self.sidebar_subtitle_label.set_text(f"{folder_name} - {match_count}")
+            self.sidebar_subtitle_label.set_text(match_count)
         else:
+            self.sidebar_title_label.set_text(folder_name)
             count_label = (
                 f"{len(visible_notes)} note"
                 if len(visible_notes) == 1
                 else f"{len(visible_notes)} notes"
             )
             self.sidebar_subtitle_label.set_text(
-                f"{folder_name} - {count_label if self._show_all_folders else note_count}"
+                count_label if self._show_all_folders else note_count
             )
 
         if self.current_note and not self.current_note.path.exists():
@@ -2333,12 +2373,71 @@ class PaperTrailWindow(
         selected = self.current_note.path if self.current_note else None
         self._refresh_notes(selected_path=selected)
 
-    def _on_sidebar_search_button_clicked(self, *_args) -> None:
+    def _on_sidebar_top_drag_begin(
+        self,
+        _gesture: Gtk.GestureDrag,
+        start_x: float,
+        start_y: float,
+        widget: Gtk.Widget,
+    ) -> None:
+        self._sidebar_top_drag_start = (start_x, start_y)
+        self._sidebar_top_drag_widget = widget
+
+    def _on_sidebar_top_drag_update(
+        self,
+        gesture: Gtk.GestureDrag,
+        offset_x: float,
+        offset_y: float,
+    ) -> None:
+        if math.hypot(offset_x, offset_y) < 6:
+            return
+
+        if self._sidebar_top_drag_widget is None:
+            return
+
+        native = self._sidebar_top_drag_widget.get_native()
+        if native is None:
+            return
+
+        surface = native.get_surface()
+        if surface is None or not hasattr(surface, "begin_move"):
+            return
+
+        start_x, start_y = self._sidebar_top_drag_start
+        translated_coords = self._sidebar_top_drag_widget.translate_coordinates(
+            self, start_x + offset_x, start_y + offset_y
+        )
+        if len(translated_coords) == 3:
+            translated, surface_x, surface_y = translated_coords
+            if not translated:
+                return
+        elif len(translated_coords) == 2:
+            surface_x, surface_y = translated_coords
+        else:
+            return
+
+        device = gesture.get_current_event_device()
+        if device is None:
+            return
+
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        surface.begin_move(
+            device,
+            gesture.get_current_button() or Gdk.BUTTON_PRIMARY,
+            surface_x,
+            surface_y,
+            gesture.get_current_event_time(),
+        )
+
+    def _toggle_sidebar_search(self) -> None:
         reveal = not self.sidebar_search_revealer.get_reveal_child()
         self.sidebar_search_revealer.set_reveal_child(reveal)
         if reveal:
             self.sidebar_search_entry.grab_focus()
             self.sidebar_search_entry.select_region(0, -1)
+
+    def _on_sidebar_search_button_clicked(self, *_args) -> None:
+        self._toggle_sidebar_search()
 
     def _on_sidebar_search_stop(self, *_args) -> None:
         self._close_sidebar_search()
@@ -2354,6 +2453,10 @@ class PaperTrailWindow(
             self._close_sidebar_search()
             return True
         return False
+
+    def _on_window_sidebar_search_shortcut(self, *_args) -> bool:
+        self._toggle_sidebar_search()
+        return True
 
     def _on_window_key_pressed(
         self,
@@ -3347,6 +3450,18 @@ textview.editor-view window.popup separator {{
                 self._find_previous()
             else:
                 self._find_next()
+            return True
+        return False
+
+    def _on_sidebar_search_entry_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        state: Gdk.ModifierType,
+    ) -> bool:
+        if keyval == Gdk.KEY_k and state & Gdk.ModifierType.CONTROL_MASK:
+            self._toggle_sidebar_search()
             return True
         return False
 

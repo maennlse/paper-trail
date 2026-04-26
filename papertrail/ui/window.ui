@@ -21,66 +21,6 @@
             <property name="css-classes">sidebar-panel sidebar-root</property>
 
             <child>
-              <object class="AdwHeaderBar">
-                <property name="show-start-title-buttons">False</property>
-                <property name="show-end-title-buttons">False</property>
-                <property name="css-classes">sidebar-surface sidebar-header</property>
-                <child type="title">
-                  <object class="GtkBox">
-                    <property name="orientation">vertical</property>
-                    <property name="spacing">2</property>
-                    <child>
-                      <object class="GtkLabel" id="sidebar_title_label">
-                        <property name="xalign">0.5</property>
-                        <style>
-                          <class name="title"/>
-                        </style>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkLabel" id="sidebar_subtitle_label">
-                        <property name="xalign">0.5</property>
-                        <style>
-                          <class name="caption"/>
-                          <class name="dim-label"/>
-                        </style>
-                      </object>
-                    </child>
-                  </object>
-                </child>
-                <child type="end">
-                  <object class="GtkButton" id="sidebar_search_button">
-                    <property name="icon-name">system-search-symbolic</property>
-                    <property name="tooltip-text">Search Notes</property>
-                    <property name="css-classes">flat</property>
-                  </object>
-                </child>
-              </object>
-            </child>
-
-            <child>
-              <object class="GtkRevealer" id="sidebar_search_revealer">
-                <property name="transition-type">slide-down</property>
-                <property name="child">
-                  <object class="GtkBox" id="sidebar_search_box">
-                    <property name="css-classes">sidebar-surface sidebar-search-box</property>
-                    <property name="margin-top">8</property>
-                    <property name="margin-bottom">8</property>
-                    <property name="margin-start">12</property>
-                    <property name="margin-end">12</property>
-                    <child>
-                      <object class="GtkSearchEntry" id="sidebar_search_entry">
-                        <property name="hexpand">True</property>
-                        <property name="css-classes">sidebar-search-entry</property>
-                        <property name="placeholder-text">Search notes</property>
-                      </object>
-                    </child>
-                  </object>
-                </property>
-              </object>
-            </child>
-
-            <child>
               <object class="GtkBox" id="sidebar_body">
                 <property name="orientation">horizontal</property>
                 <property name="vexpand">True</property>
@@ -92,6 +32,25 @@
                     <property name="hexpand">False</property>
                     <property name="vexpand">True</property>
                     <property name="css-classes">sidebar-surface sidebar-folders-column</property>
+                    <child>
+                      <object class="GtkCenterBox" id="sidebar_folders_header_spacer">
+                        <property name="height-request">50</property>
+                        <property name="width-request">52</property>
+                        <property name="hexpand">False</property>
+                        <property name="css-classes">sidebar-surface sidebar-folders-column sidebar-folders-header-spacer</property>
+                        <property name="center-widget">
+                          <object class="GtkButton" id="sidebar_search_button">
+                            <property name="icon-name">system-search-symbolic</property>
+                            <property name="tooltip-text">Search Notes</property>
+                            <property name="css-classes">flat</property>
+                            <property name="halign">center</property>
+                            <property name="valign">center</property>
+                            <property name="hexpand">False</property>
+                            <property name="vexpand">False</property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
                     <child>
                       <object class="GtkScrolledWindow" id="sidebar_folders_scroller">
                         <property name="width-request">52</property>
@@ -168,18 +127,105 @@
                   </object>
                 </child>
                 <child>
-                  <object class="GtkScrolledWindow" id="sidebar_notes_scroller">
+                  <object class="GtkBox" id="sidebar_notes_column">
+                    <property name="orientation">vertical</property>
+                    <property name="hexpand">True</property>
                     <property name="vexpand">True</property>
-                    <property name="has-frame">False</property>
-                    <property name="hscrollbar-policy">never</property>
-                    <property name="css-classes">sidebar-surface sidebar-scroll sidebar-notes-scroller</property>
+                    <property name="css-classes">sidebar-surface sidebar-notes-column</property>
                     <child>
-                      <object class="GtkViewport" id="sidebar_notes_viewport">
-                        <property name="css-classes">sidebar-surface sidebar-notes-viewport</property>
+                      <object class="GtkBox" id="sidebar_notes_header_column">
+                        <property name="orientation">vertical</property>
+                        <property name="hexpand">True</property>
+                        <property name="css-classes">sidebar-notes-header-column</property>
                         <child>
-                          <object class="GtkBox" id="note_list">
+                          <object class="GtkBox" id="sidebar_header_wrap">
                             <property name="orientation">vertical</property>
-                            <property name="css-classes">sidebar-note-list</property>
+                            <property name="height-request">50</property>
+                            <property name="css-classes">sidebar-header-wrap</property>
+                            <child>
+                              <object class="GtkCenterBox" id="sidebar_header_bar">
+                                <property name="css-classes">sidebar-header-bar</property>
+                                <property name="start-widget">
+                                  <object class="GtkBox">
+                                    <property name="width-request">34</property>
+                                    <property name="hexpand">False</property>
+                                  </object>
+                                </property>
+                                <property name="center-widget">
+                                  <object class="GtkBox" id="sidebar_header_title_box">
+                                    <property name="orientation">vertical</property>
+                                    <property name="spacing">2</property>
+                                    <property name="halign">center</property>
+                                    <property name="valign">center</property>
+                                    <property name="margin-top">6</property>
+                                    <child>
+                                      <object class="GtkLabel" id="sidebar_title_label">
+                                        <property name="xalign">0.5</property>
+                                        <style>
+                                          <class name="title"/>
+                                          <class name="sidebar-title-label"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkLabel" id="sidebar_subtitle_label">
+                                        <property name="xalign">0.5</property>
+                                        <style>
+                                          <class name="caption"/>
+                                          <class name="dim-label"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </property>
+                                <property name="end-widget">
+                                  <object class="GtkBox">
+                                    <property name="width-request">34</property>
+                                    <property name="hexpand">False</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkRevealer" id="sidebar_search_revealer">
+                        <property name="transition-type">slide-down</property>
+                        <property name="child">
+                          <object class="GtkBox" id="sidebar_search_box">
+                            <property name="css-classes">sidebar-surface sidebar-search-box</property>
+                            <property name="margin-top">8</property>
+                            <property name="margin-bottom">8</property>
+                            <property name="margin-start">12</property>
+                            <property name="margin-end">12</property>
+                            <child>
+                              <object class="GtkSearchEntry" id="sidebar_search_entry">
+                                <property name="hexpand">True</property>
+                                <property name="css-classes">sidebar-search-entry</property>
+                                <property name="placeholder-text">Search notes</property>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkScrolledWindow" id="sidebar_notes_scroller">
+                        <property name="vexpand">True</property>
+                        <property name="has-frame">False</property>
+                        <property name="hscrollbar-policy">never</property>
+                        <property name="css-classes">sidebar-surface sidebar-scroll sidebar-notes-scroller</property>
+                        <child>
+                          <object class="GtkViewport" id="sidebar_notes_viewport">
+                            <property name="css-classes">sidebar-surface sidebar-notes-viewport</property>
+                            <child>
+                              <object class="GtkBox" id="note_list">
+                                <property name="orientation">vertical</property>
+                                <property name="css-classes">sidebar-note-list</property>
+                              </object>
+                            </child>
                           </object>
                         </child>
                       </object>
