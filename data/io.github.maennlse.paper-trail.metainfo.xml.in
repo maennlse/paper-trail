@@ -3,6 +3,11 @@
   <id>@APP_ID@</id>
   <name>@APP_NAME@</name>
   <summary>Local plain-text note taking with a focused GNOME layout</summary>
+  <icon type="stock">@APP_ID@</icon>
+  <categories>
+    <category>Utility</category>
+    <category>TextEditor</category>
+  </categories>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <description>
@@ -29,6 +34,6 @@
   <url type="vcs-browser">https://github.com/maennlse/paper-trail</url>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="@APP_VERSION@" date="2026-04-19"/>
+    <release version="@APP_VERSION@" date="2026-07-24"/>
   </releases>
 </component>

@@ -4,8 +4,10 @@ python_sources = files(
   'application.py',
   'folder_colors.py',
   'folder_row.py',
+  'gi_helpers.py',
   'note_repository.py',
   'note_row.py',
+  'popover_helpers.py',
   'settings.py',
   'window.py',
 )

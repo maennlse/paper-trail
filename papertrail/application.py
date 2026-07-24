@@ -27,21 +27,27 @@ Gio = _GTK_MODULES[2]
 Gtk = _GTK_MODULES[3]
 
 ICON_SEARCH_PATH = Path(__file__).resolve().parent.parent / "data" / "icons"
-DEV_APP_ID = f"{APP_ID}.Devel"
 
 
-def _application_id() -> str:
-    """Return the runtime application ID.
+def _is_source_checkout() -> bool:
+    """Return whether the application is being run from a source checkout."""
 
-    Source checkouts use a separate ID so they do not remote-activate an
-    installed Flatpak instance with the release application ID.
+    return (Path(__file__).resolve().parent.parent / ".git").exists()
+
+
+def _application_flags() -> Gio.ApplicationFlags:
+    """Keep source runs independent without changing their shell identity.
+
+    GNOME Shell uses the Wayland application ID to associate a running window
+    with its desktop entry and icon.  Using a separate ``.Devel`` ID for a
+    source run therefore made Overview fall back to a generic icon.  A
+    non-unique application keeps a source run from remote-activating an
+    installed instance while retaining the release ID for that association.
     """
 
-    if os.environ.get("FLATPAK_ID"):
-        return APP_ID
-    if (Path(__file__).resolve().parent.parent / ".git").exists():
-        return DEV_APP_ID
-    return APP_ID
+    if _is_source_checkout() and not os.environ.get("FLATPAK_ID"):
+        return Gio.ApplicationFlags.NON_UNIQUE
+    return Gio.ApplicationFlags(0)
 
 
 class PaperTrailApplication(Adw.Application):
@@ -49,7 +55,7 @@ class PaperTrailApplication(Adw.Application):
 
     def __init__(self) -> None:
         super().__init__(
-            application_id=_application_id(), flags=Gio.ApplicationFlags(0)
+            application_id=APP_ID, flags=_application_flags()
         )
         self._window: PaperTrailWindow | None = None
 
@@ -124,7 +130,7 @@ class PaperTrailApplication(Adw.Application):
             application_name="Paper Trail",
             application_icon=APP_ID,
             developer_name="sm",
-            version="0.1.0",
+            version="0.1.1",
             website="https://github.com/maennlse/paper-trail",
             issue_url="https://github.com/maennlse/paper-trail/issues",
             license_type=Gtk.License.GPL_3_0,

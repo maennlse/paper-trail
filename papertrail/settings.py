@@ -19,6 +19,12 @@ from .gi_helpers import call_nullary, load_modules
 
 _GI_MODULES = cast(tuple[object], load_modules(("GLib", "2.0")))
 GLib = _GI_MODULES[0]
+MIN_WINDOW_WIDTH = 480
+MAX_WINDOW_WIDTH = 7680
+MIN_WINDOW_HEIGHT = 320
+MAX_WINDOW_HEIGHT = 4320
+MIN_SIDEBAR_WIDTH = 180
+MAX_SIDEBAR_WIDTH = 600
 
 
 def _default_notes_dir() -> Path:
@@ -31,6 +37,24 @@ def _default_notes_dir() -> Path:
     )
     base = Path(documents) if documents else Path.home() / "Documents"
     return base / "Paper Trail"
+
+
+def _normalise_bool(value: object, default: bool) -> bool:
+    """Return a persisted boolean, falling back for invalid values."""
+
+    return value if isinstance(value, bool) else default
+
+
+def _normalise_int(value: object, default: int, minimum: int, maximum: int) -> int:
+    """Return a persisted integer clamped to a safe range."""
+
+    if isinstance(value, bool):
+        return default
+    try:
+        normalised = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, normalised))
 
 
 @dataclass(slots=True)
@@ -65,7 +89,9 @@ class Settings:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self.data = self._load()
 
-    def _load(self) -> SettingsData:  # pylint: disable=too-many-branches
+    def _load(  # pylint: disable=too-many-branches,too-many-statements
+        self,
+    ) -> SettingsData:
         """Load settings from disk and normalize persisted values."""
 
         default_dir = str(_default_notes_dir())
@@ -82,6 +108,14 @@ class Settings:
         if isinstance(raw, dict):
             merged.update({key: value for key, value in raw.items() if key in merged})
         data = SettingsData(**merged)
+        if not isinstance(data.notes_dir, str) or not data.notes_dir.strip():
+            data.notes_dir = defaults.notes_dir
+        if not isinstance(data.note_folders, list):
+            data.note_folders = [data.notes_dir]
+        else:
+            data.note_folders = [
+                folder for folder in data.note_folders if isinstance(folder, str)
+            ]
         folders = self._normalise_folders(data.note_folders, defaults.notes_dir)
         active_dir = str(Path(data.notes_dir).expanduser())
         if active_dir not in folders:
@@ -118,10 +152,31 @@ class Settings:
         except (TypeError, ValueError):
             data.font_scale = defaults.font_scale
         data.font_scale = max(0.7, min(2.5, data.font_scale))
-        data.use_custom_font = bool(data.use_custom_font)
+        data.show_line_numbers = _normalise_bool(
+            data.show_line_numbers, defaults.show_line_numbers
+        )
+        data.wrap_text = _normalise_bool(data.wrap_text, defaults.wrap_text)
+        data.use_monospace = _normalise_bool(
+            data.use_monospace, defaults.use_monospace
+        )
+        data.use_custom_font = _normalise_bool(
+            data.use_custom_font, defaults.use_custom_font
+        )
         if not isinstance(data.custom_font, str) or not data.custom_font.strip():
             data.custom_font = defaults.custom_font
-        data.show_ruler = bool(data.show_ruler)
+        data.show_ruler = _normalise_bool(data.show_ruler, defaults.show_ruler)
+        data.width = _normalise_int(
+            data.width, defaults.width, MIN_WINDOW_WIDTH, MAX_WINDOW_WIDTH
+        )
+        data.height = _normalise_int(
+            data.height, defaults.height, MIN_WINDOW_HEIGHT, MAX_WINDOW_HEIGHT
+        )
+        data.sidebar_width = _normalise_int(
+            data.sidebar_width,
+            defaults.sidebar_width,
+            MIN_SIDEBAR_WIDTH,
+            MAX_SIDEBAR_WIDTH,
+        )
         return data
 
     def _normalise_folders(

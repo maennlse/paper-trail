@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 from typing import cast
 
+from . import APP_ID
 from .folder_colors import (
     PRESET_FOLDER_COLORS,
     custom_folder_colors,
@@ -137,6 +138,7 @@ class PaperTrailWindow(
 
     def __init__(self, **kwargs) -> None:  # pylint: disable=too-many-statements
         super().__init__(**kwargs)
+        self.set_icon_name(APP_ID)
         self._bind_template_children()
         self.add_css_class("papertrail-window")
         self.language_popover.add_css_class("papertrail-popover")
@@ -1062,7 +1064,7 @@ class PaperTrailWindow(
     def _matches_note_query(self, note: NoteRecord, query: str) -> bool:
         return (
             query in note.title.casefold()
-            or query in note.body.casefold()
+            or query in (note.body or "").casefold()
             or query in note.path.name.casefold()
         )
 
@@ -1091,6 +1093,8 @@ class PaperTrailWindow(
                     continue
 
             for note in notes:
+                if query and note.body is None:
+                    note = self.repository.load_note(note.path)
                 if not query or self._matches_note_query(note, query):
                     matches.append(note)
 
@@ -1107,7 +1111,7 @@ class PaperTrailWindow(
             return self.current_note
         for note in self._notes:
             if note.path == path:
-                return note
+                return self.repository.load_note(path) if note.body is None else note
         if path.exists():
             return self.repository.load_note(path)
         return None
@@ -1214,6 +1218,8 @@ class PaperTrailWindow(
 
     def _show_note(self, note: NoteRecord) -> None:
         self._flush_pending_save()
+        if note.body is None:
+            note = self.repository.load_note(note.path)
         self.current_note = note
         self._loading_note = True
         buffer = self.editor_view.get_buffer()

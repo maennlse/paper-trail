@@ -28,5 +28,7 @@ install_data(
 meson.add_install_script(
   py,
   files('post_install.py'),
-  get_option('datadir'),
+  # The post-install script runs outside the install prefix.  Pass the
+  # complete data directory so it updates the cache that GNOME Shell reads.
+  join_paths(get_option('prefix'), get_option('datadir')),
 )

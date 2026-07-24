@@ -5,10 +5,14 @@
 from __future__ import annotations
 
 import itertools
+import errno
+import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+SUMMARY_READ_LIMIT = 8 * 1024
 
 
 @dataclass(slots=True)
@@ -18,7 +22,7 @@ class NoteRecord:
     path: Path
     title: str
     preview: str
-    body: str
+    body: str | None
     modified_at: datetime
 
 
@@ -46,7 +50,7 @@ class NoteRepository:
         notes: list[NoteRecord] = []
         for path in sorted(self._notes_dir.iterdir()):
             if path.is_file():
-                notes.append(self.load_note(path))
+                notes.append(self.load_note_summary(path))
 
         notes.sort(key=lambda note: note.modified_at, reverse=True)
         return notes
@@ -54,9 +58,20 @@ class NoteRepository:
     def load_note(self, path: Path) -> NoteRecord:
         """Load a note from disk and compute its metadata."""
 
-        body = (
-            path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-        )
+        body = self._read_body(path)
+        return self._record_from_body(path, body)
+
+    def load_note_summary(self, path: Path) -> NoteRecord:
+        """Load only enough text to display a note in a list."""
+
+        body = self._read_body(path, SUMMARY_READ_LIMIT)
+        record = self._record_from_body(path, body)
+        record.body = None
+        return record
+
+    def _record_from_body(self, path: Path, body: str) -> NoteRecord:
+        """Build a note record from text already read from disk."""
+
         stat = path.stat()
         title, preview = self._summarize(path, body)
         return NoteRecord(
@@ -66,6 +81,13 @@ class NoteRepository:
             body=body,
             modified_at=datetime.fromtimestamp(stat.st_mtime),
         )
+
+    @staticmethod
+    def _read_body(path: Path, limit: int | None = None) -> str:
+        """Read a note, optionally limiting text used for list metadata."""
+
+        with path.open("r", encoding="utf-8", errors="replace") as note_file:
+            return note_file.read(limit)
 
     def create_note(self) -> NoteRecord:
         """Create a new uniquely named empty note file."""
@@ -103,7 +125,12 @@ class NoteRepository:
         target_folder.mkdir(parents=True, exist_ok=True)
         target_path = self._unique_path(target_folder, path.name, path)
         if target_path != path:
-            path.rename(target_path)
+            try:
+                path.rename(target_path)
+            except OSError as error:
+                if error.errno != errno.EXDEV:
+                    raise
+                shutil.move(path, target_path)
         return self.load_note(target_path)
 
     def delete_note(self, path: Path) -> None:

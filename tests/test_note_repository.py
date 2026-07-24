@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import errno
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from papertrail.note_repository import NoteRepository
 
@@ -56,6 +58,19 @@ class NoteRepositoryTest(unittest.TestCase):
 
         self.assertEqual([note.path.name for note in notes], ["newer.txt", "older.txt"])
 
+    def test_list_notes_keeps_full_bodies_out_of_the_sidebar_cache(self) -> None:
+        """Listing notes should read only a bounded preview."""
+
+        path = self.notes_dir / "large.txt"
+        path.write_text("Title\n" + "x" * 20_000, encoding="utf-8")
+
+        listed_note = self.repository.list_notes()[0]
+        opened_note = self.repository.load_note(path)
+
+        self.assertIsNone(listed_note.body)
+        self.assertLessEqual(len(listed_note.preview), 501)
+        self.assertEqual(len(opened_note.body or ""), 20_006)
+
     def test_rename_note_sanitizes_filename_and_preserves_extensionless_name(
         self,
     ) -> None:
@@ -94,6 +109,29 @@ class NoteRepositoryTest(unittest.TestCase):
         self.assertEqual(moved.path, target_dir / "note-1.txt")
         self.assertTrue(moved.path.exists())
         self.assertFalse(source.exists())
+
+    def test_move_note_falls_back_when_folders_are_on_different_filesystems(
+        self,
+    ) -> None:
+        """Cross-device moves should not fail when rename reports EXDEV."""
+
+        source = self.notes_dir / "note.txt"
+        source.write_text("hello", encoding="utf-8")
+        target_dir = self.notes_dir / "nested"
+        target_dir.mkdir()
+
+        with (
+            patch.object(Path, "rename", side_effect=OSError(errno.EXDEV, "cross-device")),
+            patch(
+                "papertrail.note_repository.shutil.move",
+                side_effect=lambda old, new: Path(old).replace(new),
+            ) as move,
+        ):
+            moved = self.repository.move_note(source, target_dir)
+
+        self.assertEqual(moved.path, target_dir / "note.txt")
+        self.assertTrue(moved.path.exists())
+        move.assert_called_once_with(source, target_dir / "note.txt")
 
     def test_delete_note_removes_existing_file(self) -> None:
         """Deleting should remove a note file when it exists."""
