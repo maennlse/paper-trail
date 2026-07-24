@@ -121,7 +121,9 @@ class NoteRepositoryTest(unittest.TestCase):
         target_dir.mkdir()
 
         with (
-            patch.object(Path, "rename", side_effect=OSError(errno.EXDEV, "cross-device")),
+            patch.object(
+                Path, "rename", side_effect=OSError(errno.EXDEV, "cross-device")
+            ),
             patch(
                 "papertrail.note_repository.shutil.move",
                 side_effect=lambda old, new: Path(old).replace(new),

@@ -3085,9 +3085,7 @@ textview.editor-view window.popup separator {{
   background-color: {accent_bg};
   color: {accent_fg};
 }}
-""".encode(
-            "utf-8"
-        )
+""".encode("utf-8")
         self._scheme_recolor_provider.load_from_data(css)
 
     def _style_color(self, style: GtkSource.Style | None, prop: str) -> str | None:

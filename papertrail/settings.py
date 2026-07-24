@@ -156,9 +156,7 @@ class Settings:
             data.show_line_numbers, defaults.show_line_numbers
         )
         data.wrap_text = _normalise_bool(data.wrap_text, defaults.wrap_text)
-        data.use_monospace = _normalise_bool(
-            data.use_monospace, defaults.use_monospace
-        )
+        data.use_monospace = _normalise_bool(data.use_monospace, defaults.use_monospace)
         data.use_custom_font = _normalise_bool(
             data.use_custom_font, defaults.use_custom_font
         )

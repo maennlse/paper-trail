@@ -4,8 +4,8 @@
 
 from __future__ import annotations
 
-import itertools
 import errno
+import itertools
 import shutil
 import uuid
 from dataclasses import dataclass

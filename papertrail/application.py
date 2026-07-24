@@ -54,9 +54,7 @@ class PaperTrailApplication(Adw.Application):
     """Main Adwaita application object for Paper Trail."""
 
     def __init__(self) -> None:
-        super().__init__(
-            application_id=APP_ID, flags=_application_flags()
-        )
+        super().__init__(application_id=APP_ID, flags=_application_flags())
         self._window: PaperTrailWindow | None = None
 
     def do_startup(self, *args, **kwargs) -> None:
