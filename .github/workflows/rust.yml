@@ -1,0 +1,59 @@
+name: Rust
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p papertrail-core -p papertrail-storage
+      - run: cargo clippy --locked -p papertrail-core -p papertrail-storage --all-targets -- -D warnings
+
+  desktop:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - run: dnf install -y git gcc curl pkgconf-pkg-config gtk4-devel libadwaita-devel gtksourceview5-devel xorg-x11-server-Xvfb xdotool dbus-daemon meson ninja-build desktop-file-utils appstream
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: python3 build-aux/generate-flatpak-sources.py --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: dbus-run-session -- sh build-aux/test-desktop.sh
+        env:
+          GSK_RENDERER: cairo
+          GTK_A11Y: none
+          PAPERTRAIL_SCREENSHOT: ${{ github.workspace }}/desktop-smoke.png
+      - run: cargo build --release --locked --bin paper-trail
+      - run: meson setup _build && meson compile -C _build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paper-trail-linux
+          path: |
+            target/release/paper-trail
+            desktop-smoke*.png
+
+  flatpak:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: paper-trail.flatpak
+          manifest-path: io.github.maennlse.paper-trail.json
+          cache-key: flatpak-builder-${{ github.sha }}

@@ -25,10 +25,5 @@ install_data(
   install_dir: join_paths(get_option('datadir'), 'icons', 'hicolor', 'scalable', 'apps'),
 )
 
-meson.add_install_script(
-  py,
-  files('post_install.py'),
-  # The post-install script runs outside the install prefix.  Pass the
-  # complete data directory so it updates the cache that GNOME Shell reads.
-  join_paths(get_option('prefix'), get_option('datadir')),
-)
+gnome = import('gnome')
+gnome.post_install(gtk_update_icon_cache: true, update_desktop_database: true)

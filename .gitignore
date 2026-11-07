@@ -11,3 +11,4 @@ venv/
 super-linter.log
 repo/
 .mypy_cache/
+target/

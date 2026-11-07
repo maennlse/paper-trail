@@ -3,6 +3,11 @@
 	"runtime": "org.gnome.Platform",
 	"runtime-version": "50",
 	"sdk": "org.gnome.Sdk",
+	"sdk-extensions": ["org.freedesktop.Sdk.Extension.rust-stable"],
+	"build-options": {
+		"append-path": "/usr/lib/sdk/rust-stable/bin",
+		"env": {"CARGO_NET_OFFLINE": "true"}
+	},
 	"command": "paper-trail",
 	"finish-args": [
 		"--share=ipc",
@@ -24,12 +29,16 @@
 			"buildsystem": "meson",
 			"builddir": true,
 			"sources": [
+				"cargo-sources.json",
 				{
 					"type": "dir",
 					"path": ".",
 					"skip": [
 						".git",
 						"_build",
+						"target",
+						"flatpak-build",
+						"repo",
 						".flatpak-builder",
 						"dist",
 						"__pycache__",

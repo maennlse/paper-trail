@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/maennlse/paper-trail">
+    <file alias="window.ui">crates/papertrail-desktop/resources/window.ui</file>
+    <file alias="style.css">crates/papertrail-desktop/resources/style.css</file>
+    <file alias="icons/scalable/apps/io.github.maennlse.paper-trail.svg">data/icons/io.github.maennlse.paper-trail.svg</file>
+  </gresource>
+</gresources>
