@@ -19,7 +19,7 @@ adw = { package = "libadwaita", version = "0.7", features = ["v1_5"] }
 sourceview5 = { version = "0.9", features = ["v5_10"] }
 
 [build-dependencies]
-glib-build-tools = "0.20"
+glib-build-tools = "0.22"
 
 [dev-dependencies]
 tempfile = "3"
