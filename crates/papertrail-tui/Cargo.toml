@@ -17,7 +17,7 @@ serde_json.workspace = true
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache", "underline-color"] }
 crossterm = "0.29"
 tui-textarea = { package = "ratatui-textarea", version = "0.9.4", features = ["search"] }
-dirs = "6"
+dirs = "7"
 shell-words = "1"
 unicode-width = "=0.2.3"
 
