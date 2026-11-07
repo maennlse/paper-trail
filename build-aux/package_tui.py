@@ -63,6 +63,7 @@ def verify(binary: Path, target: str) -> None:
         system_dlls = {
             "advapi32.dll",
             "bcrypt.dll",
+            "bcryptprimitives.dll",
             "comdlg32.dll",
             "crypt32.dll",
             "dbghelp.dll",

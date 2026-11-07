@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from package_desktop import package
+from package_tui import verify
 from prepare_release import PACKAGES, collect, validate_tag
 
 
@@ -47,6 +48,22 @@ class ReleaseTests(unittest.TestCase):
             for wrong in ("v9.0.0", version, "v$(touch unwanted)"):
                 with self.assertRaises(ValueError):
                     validate_tag(wrong, manifest)
+
+    def test_windows_allows_system_crypto_but_rejects_dynamic_crt(self) -> None:
+        """System randomness DLLs are allowed, but the C runtime stays static."""
+        binary = self.root / "paper-trail-tui.exe"
+        with (
+            patch("package_tui.windows_imports", return_value=["bcryptprimitives.dll"]),
+            patch("package_tui.subprocess.run") as run,
+        ):
+            verify(binary, "x86_64-pc-windows-msvc")
+            self.assertEqual(run.call_count, 2)
+        for library in ("vcruntime140.dll", "msvcp140.dll", "third-party.dll"):
+            with (
+                patch("package_tui.windows_imports", return_value=[library]),
+                self.assertRaises(ValueError),
+            ):
+                verify(binary, "aarch64-pc-windows-msvc")
 
     def test_collect_only_expected_assets_and_checksum_manifest(self) -> None:
         """Debug binaries/screenshots are not accidentally published."""
