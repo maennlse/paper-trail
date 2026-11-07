@@ -64,6 +64,7 @@ def verify(binary: Path, target: str) -> None:
             "advapi32.dll",
             "bcrypt.dll",
             "bcryptprimitives.dll",
+            "combase.dll",
             "comdlg32.dll",
             "crypt32.dll",
             "dbghelp.dll",
@@ -81,13 +82,13 @@ def verify(binary: Path, target: str) -> None:
             "userenv.dll",
             "ws2_32.dll",
         }
+        print("Windows system DLL imports:", ", ".join(libraries))
         for name in libraries:
             lower = name.lower()
             if lower not in system_dlls and not lower.startswith(
                 ("api-ms-win-core-", "api-ms-win-security-", "api-ms-win-eventing-")
             ):
                 raise ValueError(f"Non-system dependency or dynamic C runtime: {name}")
-        print("Windows system DLL imports:", ", ".join(libraries))
     elif "apple" in target:
         output = subprocess.check_output(["otool", "-L", str(binary)], text=True)
         for line in output.splitlines()[1:]:

@@ -53,7 +53,10 @@ class ReleaseTests(unittest.TestCase):
         """System randomness DLLs are allowed, but the C runtime stays static."""
         binary = self.root / "paper-trail-tui.exe"
         with (
-            patch("package_tui.windows_imports", return_value=["bcryptprimitives.dll"]),
+            patch(
+                "package_tui.windows_imports",
+                return_value=["bcryptprimitives.dll", "combase.dll"],
+            ),
             patch("package_tui.subprocess.run") as run,
         ):
             verify(binary, "x86_64-pc-windows-msvc")
