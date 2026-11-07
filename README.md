@@ -2,171 +2,64 @@
 
 ![Paper Trail logo](data/icons/io.github.maennlse.paper-trail.svg)
 
-Paper Trail is a local plain-text note app for GNOME, written in Rust with GTK4,
-libadwaita, and GtkSourceView 5.
+**Your notes. Plain text. Desktop or terminal.**
+
+[![Release](https://img.shields.io/github/v/release/maennlse/paper-trail)](https://github.com/maennlse/paper-trail/releases/latest)
+[![Build](https://github.com/maennlse/paper-trail/actions/workflows/rust.yml/badge.svg)](https://github.com/maennlse/paper-trail/actions/workflows/rust.yml)
+[![Standalone TUI](https://github.com/maennlse/paper-trail/actions/workflows/tui.yml/badge.svg)](https://github.com/maennlse/paper-trail/actions/workflows/tui.yml)
+[![Lint](https://github.com/maennlse/paper-trail/actions/workflows/super-linter.yml/badge.svg)](https://github.com/maennlse/paper-trail/actions/workflows/super-linter.yml)
+[![Built with Rust](https://img.shields.io/badge/built_with-Rust-dea584?logo=rust)](https://www.rust-lang.org/)
+[![TUI platforms: Linux, Windows, macOS](https://img.shields.io/badge/TUI-Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-4c8eda)](docs/tui.md)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](https://www.gnu.org/licenses/gpl-3.0.html)
+
+Paper Trail is a local-first note app written in Rust, with a native GNOME desktop
+app and a portable terminal client. Your notes stay in ordinary text files—no
+database, no sync service, no special format.
 
 > [!IMPORTANT]
 > This project is completely vibe coded.
-> It is also a shameless copy of Folio, GNOME Text Editor, and Iotas.
 
-It is intentionally narrow in scope:
+## Make room for your thoughts
 
-- local `.txt` files only
-- no Markdown
-- no SQLite
-- no sync
-- a compact note list and GNOME-style shell
-- a `GtkSourceView` editor configured for plain text, borrowing the editor direction from GNOME Text Editor
+- **Keep it simple.** Create, search, edit, and autosave plain-text notes.
+- **Stay organized.** Multiple folders, pinned notes, folder colors, and search
+  across folders.
+- **Keep control.** Safe renames and moves, atomic saves, and conflict detection
+  when desktop and terminal share notes.
+- **Feel at home.** Native desktop dialogs, light/dark appearance, fonts, zoom,
+  find/replace, and printing.
+- **Work from the terminal.** Vim-style editing, your external editor, instant
+  previews, mouse navigation, and command completion—without GTK.
 
-## Run
+## Get Paper Trail
 
-```bash
-cargo run --locked --bin paper-trail
-```
+[**Download the latest release →**](https://github.com/maennlse/paper-trail/releases/latest)
 
-## Flatpak
+| Experience            | Platforms                              | Download               |
+| --------------------- | -------------------------------------- | ---------------------- |
+| Desktop · recommended | Linux x86_64                           | Flatpak bundle         |
+| Desktop · native      | Linux x86_64                           | GTK executable archive |
+| Terminal              | Linux, Windows, macOS · x86_64 & ARM64 | Standalone archive     |
 
-Build the app as a Flatpak from this checkout with:
+Every release includes documentation and SHA-256 checksums. Native GTK downloads
+need compatible system libraries; Flatpak installs its separate GNOME runtime as
+needed. TUI downloads need no GTK, Python, or Rust installation.
 
-```bash
-flatpak-builder --user --install --force-clean flatpak-build io.github.maennlse.paper-trail.json
-```
+[Desktop installation guide](docs/desktop-release.md) ·
+[Terminal guide & keybindings](docs/tui.md)
 
-Then run it with:
+## Plain files, lasting notes
 
-```bash
-flatpak run io.github.maennlse.paper-trail
-```
+New notes are UTF-8 `.txt` files, stored in `~/Documents/Paper Trail` by default.
+Choose another local folder whenever you like. Existing regular files, including
+extensionless notes, work too; existing notes and settings need no conversion.
 
-The Flatpak manifest is [io.github.maennlse.paper-trail.json](io.github.maennlse.paper-trail.json).
-It uses the GNOME runtime, stores notes inside the app sandbox by default, and
-relies on the file chooser portal for user-selected folders outside the sandbox.
-Cargo dependencies are checksum-pinned in `cargo-sources.json` and builds work
-offline inside the sandbox. After changing `Cargo.lock`, regenerate sources with
-`python3 build-aux/generate_flatpak_sources.py` (build tooling only).
+If a saved folder becomes unavailable, Paper Trail retains its bookmark and
+metadata and lets you restore access. It does not move or delete your notes.
 
-## Release downloads
+## Explore further
 
-Version-tagged releases include six standalone TUI builds (Linux, Windows, macOS;
-x86_64 and ARM64), a GTK Flatpak bundle, and the native GTK Linux x86_64 executable.
-Archives include documentation; SHA-256 checksums accompany all packages.
-See [desktop download requirements](docs/desktop-release.md) and
-[tagged-release automation](docs/releases.md). Native GTK builds require system
-GNOME libraries; Flatpak downloads its separate GNOME runtime as needed.
-
-## Build
-
-```bash
-cargo build --release --locked --bin paper-trail
-```
-
-The executable is `target/release/paper-trail`. Its UI, CSS, and application icon
-are embedded: it can run outside the checkout without Python or loose app assets.
-It dynamically links GNOME libraries; it is **not** a fully static executable.
-Use Flatpak for a self-contained Linux distribution with the required runtime.
-
-For installation with desktop entry, shell icon, and AppStream metadata:
-
-```bash
-meson setup _build
-meson compile -C _build
-meson install -C _build
-```
-
-Meson delegates compilation to Cargo and installs the binary and desktop metadata.
-
-## Tests
-
-Run the test suite from the repository root with:
-
-```bash
-cargo test --locked -p papertrail-core -p papertrail-storage
-cargo test --locked -p papertrail-desktop -- --test-threads=1
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-```
-
-GTK tests require a display and use isolated temporary notes/settings. On a
-headless Linux machine with Xvfb and xdotool installed, run
-`dbus-run-session -- sh build-aux/test-desktop.sh`. This also tests real search-button
-clicks and shortcuts-dialog dismissal through X11 input events. Set `PAPERTRAIL_SCREENSHOT`
-to a PNG path for an optional rendered UI capture. Core/storage tests need no
-display or GNOME libraries and also run on Windows/macOS in CI.
-
-The legacy Python app and its tests have been retired after user acceptance.
-Compatibility fixtures remain to protect existing notes and settings. Python is
-only used by build helpers for Flatpak dependencies and standalone packaging.
-
-## Runtime dependencies
-
-Build requirements: Rust 1.88+, Cargo, a C linker, pkg-config, GLib resource
-compiler, and development headers for these libraries. Runtime requirements:
-
-- GTK 4.16+ (the existing CSS uses custom properties)
-- libadwaita 1.5+
-- GtkSourceView 5.10+
-
-On Fedora:
-
-```bash
-sudo dnf install rust cargo gcc pkgconf-pkg-config gtk4-devel libadwaita-devel gtksourceview5-devel
-```
-
-On Debian/Ubuntu:
-
-```bash
-sudo apt install cargo rustc build-essential pkg-config libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev
-```
-
-Use a distribution release providing the minimum library versions above, or the
-GNOME Flatpak SDK. Older releases such as Ubuntu 24.04 have an older GTK version.
-
-## Current behavior
-
-- stores notes as UTF-8 `.txt` files in `~/Documents/Paper Trail` by default
-- lets you switch to another local folder from the window menu
-- creates, opens, searches, edits, autosaves, and deletes notes
-- renames and moves notes without overwriting existing files, including across filesystems
-- supports multiple folders, folder colors/reordering, pinning, and cross-folder search
-- provides syntax detection/overrides, find/replace, undo/redo, current-line highlighting, custom fonts, zoom, and printing
-- keeps preferences in the existing JSON config under `~/.config/paper-trail/`
-- follows Adwaita light/dark/system appearance; legacy custom editor schemes are ignored
-
-New notes use `.txt`; existing regular files are also listed, including
-extensionless notes. Existing notes and Python settings need no conversion.
-
-If a saved folder is unavailable (for example, a stale Flatpak document-portal
-bookmark), startup uses the default notes folder and offers **Choose Folder…**
-to restore access. The original bookmark, colors, pins, and language overrides
-are retained; no notes are moved or deleted. Unavailable folders are skipped in
-cross-folder views and identified in their sidebar tooltips.
-
-## Terminal frontend
-
-Run `cargo run --locked --bin paper-trail-tui`, or use a standalone CI artifact.
-The Ratatui frontend provides Vim-style built-in editing, external-editor support,
-multiple folders, pins/colors, cross-folder search, find/replace, and autosave.
-It shares notes and metadata safely with the desktop app and requires no GTK.
-See [TUI usage, keybindings, and standalone builds](docs/tui.md).
-
-## Architecture
-
-- `papertrail-core`: portable models, normalization, search, organization, and
-  dirty editing-session behavior; no GTK/GLib dependency.
-- `papertrail-storage`: local filesystem and JSON adapter with atomic writes and
-  no-clobber moves; paths are supplied by the caller.
-- `papertrail-desktop`: Linux GTK shell, editor, sidebar, actions, dialogs, and
-  native integration. UI/CSS in `crates/papertrail-desktop/resources/` are embedded at build time.
-
-- `papertrail-tui`: portable Ratatui terminal client with no GTK dependencies.
-
-Future native desktop or
-mobile applications can reuse core behavior and provide their own storage and
-platform integrations; GTK widgets themselves are not a mobile abstraction.
-Windows/macOS desktop applications and iOS/Android are not currently supported.
-
-## Upstream references
-
-- Folio: <https://gitlab.gnome.org/World/folio>
-- Iotas: <https://gitlab.gnome.org/World/iotas>
-- GNOME Text Editor: <https://gitlab.gnome.org/GNOME/gnome-text-editor>
+- [Build, run, and test from source](docs/building.md)
+- [Terminal usage and standalone targets](docs/tui.md)
+- [Release process](docs/releases.md)
+- [Report an issue](https://github.com/maennlse/paper-trail/issues)

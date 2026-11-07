@@ -12,9 +12,9 @@
   <project_license>GPL-3.0-or-later</project_license>
   <description>
     <p>
-      Paper Trail is a local-first note taking app for plain text files. It keeps the
-      note-list-and-editor workflow of Iotas while using a GtkSourceView-based editor
-      tuned for unformatted text instead of markdown.
+      Paper Trail is a local-first note taking app for plain text files. Organize
+      notes across folders and write in a focused native editor with autosave,
+      search, and find and replace.
     </p>
     <p>
       Notes are stored as regular UTF-8 <code>.txt</code> files in a folder you choose.
