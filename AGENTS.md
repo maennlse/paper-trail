@@ -45,7 +45,7 @@ settings must be isolated from real user data. Manually check portals, printing,
 Wayland drag behavior, and visual parity for native integration changes.
 Run `meson compile -C _build` for packaging regressions. Regenerate
 `cargo-sources.json` after lockfile changes using
-`python3 build-aux/generate-flatpak-sources.py`.
+`python3 build-aux/generate_flatpak_sources.py`.
 
 ## Commit & Pull Request Guidelines
 

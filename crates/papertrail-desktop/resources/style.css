@@ -127,7 +127,11 @@ popover.context-menu {
 .sidebar-divider {
   min-width: 1px;
   min-height: 1px;
-  background: color-mix(in srgb, var(--border-color) 92%, var(--window-bg-color));
+  background: color-mix(
+    in srgb,
+    var(--border-color) 92%,
+    var(--window-bg-color)
+  );
   background-image: none;
   box-shadow: none;
   border: none;
@@ -141,7 +145,6 @@ popover.context-menu {
 .sidebar-search-box,
 .sidebar-notes-column {
   background: var(--papertrail-sidebar-surface);
-  background-color: var(--papertrail-sidebar-surface);
   background-image: none;
   box-shadow: none;
   border: none;
@@ -149,7 +152,6 @@ popover.context-menu {
 
 .sidebar-top-row {
   background: transparent;
-  background-color: transparent;
   background-image: none;
   box-shadow: none;
   border: none;
@@ -172,14 +174,8 @@ popover.context-menu {
 }
 
 .sidebar-folders-column,
-.sidebar-folders-header-spacer,
-.sidebar-folders-column {
+.sidebar-folders-header-spacer {
   background: color-mix(
-    in srgb,
-    var(--papertrail-sidebar-surface) 88%,
-    black 6%
-  );
-  background-color: color-mix(
     in srgb,
     var(--papertrail-sidebar-surface) 88%,
     black 6%
@@ -189,7 +185,6 @@ popover.context-menu {
 .sidebar-header-wrap,
 .sidebar-header-bar {
   background: var(--papertrail-sidebar-surface);
-  background-color: var(--papertrail-sidebar-surface);
   border: none;
   box-shadow: none;
   background-image: none;
@@ -200,7 +195,6 @@ popover.context-menu {
 .sidebar-notes-viewport,
 .sidebar-note-list {
   background: var(--papertrail-sidebar-surface);
-  background-color: var(--papertrail-sidebar-surface);
   background-image: none;
   box-shadow: none;
   border: none;
@@ -229,7 +223,6 @@ popover.context-menu {
 .sidebar-folder-list,
 .sidebar-folder-add-box {
   background: transparent;
-  background-color: transparent;
   background-image: none;
 }
 
@@ -240,7 +233,6 @@ popover.context-menu {
 
 .folder-row {
   background: transparent;
-  background-color: transparent;
   border: none;
   border-radius: 0;
   box-shadow: none;
@@ -250,7 +242,6 @@ popover.context-menu {
 
 .folder-row-card {
   background: transparent;
-  background-color: transparent;
   border-radius: 0;
   box-shadow: none;
   padding: 10px 0;
@@ -283,7 +274,7 @@ popover.context-menu {
 .folder-row:hover.active .folder-row-card,
 .folder-row-card.active,
 .folder-row:hover .folder-row-card.active {
-  background-color: color-mix(in srgb, currentColor 40%, transparent);
+  background-color: color-mix(in srgb, currentcolor 40%, transparent);
 }
 
 .folder-row-active-indicator {
@@ -291,7 +282,7 @@ popover.context-menu {
   min-height: 24px;
   margin-left: 2px;
   border-radius: 999px;
-  background-color: currentColor;
+  background-color: currentcolor;
   opacity: 0;
 }
 
@@ -315,18 +306,18 @@ popover.context-menu {
 
 .folder-color-picker {
   border-radius: 999px;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 28%, transparent);
-  background: color-mix(in srgb, currentColor 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentcolor 28%, transparent);
+  background: color-mix(in srgb, currentcolor 18%, transparent);
 }
 
 .folder-color-picker:checked {
-  box-shadow: inset 0 0 0 2px currentColor;
-  background: color-mix(in srgb, currentColor 28%, transparent);
+  box-shadow: inset 0 0 0 2px currentcolor;
+  background: color-mix(in srgb, currentcolor 28%, transparent);
 }
 
 .folder-color-picker.selected {
-  box-shadow: inset 0 0 0 2px currentColor;
-  background: color-mix(in srgb, currentColor 28%, transparent);
+  box-shadow: inset 0 0 0 2px currentcolor;
+  background: color-mix(in srgb, currentcolor 28%, transparent);
 }
 
 .folder-color-0 {
@@ -380,7 +371,6 @@ popover.context-menu {
 .recent-notes-grid,
 .recent-notes-grid flowboxchild {
   background: transparent;
-  background-color: transparent;
   border: none;
   box-shadow: none;
 }
@@ -389,7 +379,6 @@ popover.context-menu {
 .recent-notes-grid flowboxchild:selected,
 .recent-notes-grid flowboxchild:focus {
   background: transparent;
-  background-color: transparent;
   box-shadow: none;
 }
 
@@ -422,7 +411,6 @@ popover.context-menu {
 .recent-note-preview text {
   color: var(--papertrail-note-dim-fg);
   background: transparent;
-  background-color: transparent;
   line-height: 1.35;
 }
 
@@ -459,19 +447,16 @@ popover.context-menu {
 
 .note-row {
   background: transparent;
-  background-color: transparent;
 }
 
 .note-row-outer {
   background: transparent;
-  background-color: transparent;
   border: none;
 }
 
 .note-row-card {
   border-radius: 14px;
   background: transparent;
-  background-color: transparent;
   border: none;
   box-shadow: none;
   margin: 0;
@@ -480,7 +465,7 @@ popover.context-menu {
 }
 
 .note-row-card.folder-colored {
-  background-color: color-mix(in srgb, currentColor 18%, transparent);
+  background-color: color-mix(in srgb, currentcolor 18%, transparent);
 }
 
 .note-row-card-content {
@@ -491,7 +476,7 @@ popover.context-menu {
 .note-row-folder-indicator {
   min-width: 4px;
   border-radius: 999px;
-  background-color: currentColor;
+  background-color: currentcolor;
 }
 
 .note-row:hover .note-row-card {
@@ -500,7 +485,7 @@ popover.context-menu {
 
 .note-row-card.active,
 .note-row:hover .note-row-card.active {
-  background-color: color-mix(in srgb, currentColor 18%, transparent);
+  background-color: color-mix(in srgb, currentcolor 18%, transparent);
 }
 
 .note-row-title,
@@ -562,10 +547,7 @@ popover.context-menu {
 
 .menu-zoom-row {
   min-width: 180px;
-  margin-left: 9px;
-  margin-right: 9px;
-  margin-top: 9px;
-  margin-bottom: 9px;
+  margin: 9px;
 }
 
 .papertrail-menu-popover contents,
@@ -858,12 +840,6 @@ dialog.papertrail-dialog preferencespage > scrolledwindow > viewport {
   padding: 2px 10px;
   margin-top: 2px;
   min-height: 1.6em;
-}
-
-.note-row-card.active .note-row-language {
-  color: var(--papertrail-note-pill-fg);
-  background-color: var(--papertrail-note-pill-bg);
-  box-shadow: inset 0 0 0 1px var(--papertrail-note-pill-border);
 }
 
 .note-row-card.active .note-row-language {

@@ -41,7 +41,7 @@ It uses the GNOME runtime, stores notes inside the app sandbox by default, and
 relies on the file chooser portal for user-selected folders outside the sandbox.
 Cargo dependencies are checksum-pinned in `cargo-sources.json` and builds work
 offline inside the sandbox. After changing `Cargo.lock`, regenerate sources with
-`python3 build-aux/generate-flatpak-sources.py` (build tooling only).
+`python3 build-aux/generate_flatpak_sources.py` (build tooling only).
 
 ## Build
 

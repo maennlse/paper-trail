@@ -33,5 +33,16 @@ jobs:
           VALIDATE_JSCPD: false
           VALIDATE_PYTHON_MYPY: false
           VALIDATE_PYTHON_RUFF_FORMAT: false
+          # Prettier owns JSON formatting; Biome still checks JSON lint rules.
+          VALIDATE_BIOME_FORMAT: false
+          # Cargo's edition-aware formatter and Clippy run in rust.yml with
+          # the GNOME development libraries, absent from this lint container.
+          VALIDATE_RUST_2015: false
+          VALIDATE_RUST_2018: false
+          VALIDATE_RUST_2021: false
+          VALIDATE_RUST_2024: false
+          VALIDATE_RUST_CLIPPY: false
+          # Status checks are sufficient; do not request PR-comment permissions.
+          ENABLE_GITHUB_PULL_REQUEST_SUMMARY_COMMENT: false
           FILTER_REGEX_EXCLUDE: >-
             (^_build/)|(^flatpak-build/)|(^\.flatpak-builder/)|(^repo/)|(^\.jscpd\.json$)

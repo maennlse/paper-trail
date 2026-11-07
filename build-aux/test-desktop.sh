@@ -9,8 +9,8 @@ export GDK_BACKEND=x11
 export GTK_IM_MODULE=gtk-im-context-simple
 export PAPERTRAIL_INPUT_TESTS=1
 # Xvfb needs to publish its display socket before GTK initializes.
-for attempt in 1 2 3 4 5; do
-  if [ -S /tmp/.X11-unix/X99 ]; then break; fi
-  sleep 1
+for _ in 1 2 3 4 5; do
+	if [ -S /tmp/.X11-unix/X99 ]; then break; fi
+	sleep 1
 done
 cargo test --workspace --locked -- --test-threads=1

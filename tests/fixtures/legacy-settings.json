@@ -1,9 +1,9 @@
 {
   "notes_dir": "/notes",
   "note_folders": ["/notes", "/archive"],
-  "folder_colors": {"/notes": "preset-2", "/archive": "#AbC"},
+  "folder_colors": { "/notes": "preset-2", "/archive": "#AbC" },
   "pinned_notes": ["/notes/first.txt"],
-  "note_language_overrides": {"/notes/first.txt": "rust"},
+  "note_language_overrides": { "/notes/first.txt": "rust" },
   "theme_mode": "dark",
   "editor_style_scheme": "peninsula",
   "width": 1320,

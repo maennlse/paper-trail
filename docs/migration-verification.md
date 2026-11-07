@@ -27,7 +27,7 @@ The runner uses GTK's simple input context so the isolated X server does not
 connect to the host IBus service.
 
 Editor inset tests check the native 8 px left margin with line numbers both on
-and off. Filetype tests cover opening common extensions, uppercase extensions,
+and off. File type tests cover opening common extensions, uppercase extensions,
 unknown/extensionless filenames, immediate re-detection after renaming, and
 preserving/clearing explicit language overrides. Native filename matches retain
 priority (for example, `.C` remains C++ rather than being forced to C).
