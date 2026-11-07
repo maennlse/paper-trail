@@ -9,6 +9,9 @@ use std::{
 pub trait Store {
     fn load(&self, path: &Path) -> io::Result<Note>;
     fn save(&self, path: &Path, text: &str) -> io::Result<Note>;
+    fn save_if_unchanged(&self, path: &Path, text: &str, _original: &Note) -> io::Result<Note> {
+        self.save(path, text)
+    }
 }
 
 /// Owns unsaved text independently of a widget and never drops it after a failed write.
@@ -37,7 +40,7 @@ impl Session {
     pub fn flush(&mut self, store: &impl Store) -> io::Result<()> {
         if self.is_dirty() {
             if let Some(note) = &self.current {
-                self.current = Some(store.save(&note.path, &self.text)?);
+                self.current = Some(store.save_if_unchanged(&note.path, &self.text, note)?);
             }
             self.dirty_since = None;
         }
