@@ -33,8 +33,8 @@ the publish job has `contents: write`; build jobs use read-only permissions.
 3. Create and push the matching version tag. For the current Cargo version:
 
    ```sh
-   git tag -a v0.3.0 -m "Release 0.3.0"
-   git push origin v0.3.0
+   git tag -a v0.3.1 -m "Release 0.3.1"
+   git push origin v0.3.1
    ```
 
 4. Watch the **Release** workflow. Inspect the resulting downloads and release notes.
@@ -53,7 +53,7 @@ releases are not silently overwritten.
 
 ```sh
 python3 -m unittest discover -s build-aux -p test_release.py
-python3 build-aux/prepare_release.py validate-tag v0.3.0
+python3 build-aux/prepare_release.py validate-tag v0.3.1
 python3 build-aux/package_desktop.py
 ```
 
