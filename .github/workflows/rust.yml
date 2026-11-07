@@ -15,7 +15,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up Rust
@@ -38,7 +38,7 @@ jobs:
           dnf install -y git gcc curl pkgconf-pkg-config gtk4-devel
           libadwaita-devel gtksourceview5-devel xorg-x11-server-Xvfb
           xdotool dbus-daemon meson ninja-build desktop-file-utils appstream
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Unlike hosted runners, the Fedora container has no preinstalled rustup.
@@ -59,7 +59,7 @@ jobs:
       - run: meson setup _build && meson compile -C _build
       - name: Package native GTK executable
         run: python3 build-aux/package_desktop.py
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: paper-trail-linux
           path: |
@@ -74,7 +74,7 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       options: --privileged
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
@@ -89,7 +89,7 @@ jobs:
           cp paper-trail.flatpak dist/paper-trail-gtk-linux-x86_64.flatpak
           cd dist
           sha256sum paper-trail-gtk-linux-x86_64.flatpak > paper-trail-gtk-linux-x86_64.flatpak.sha256
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: paper-trail-gtk-flatpak-x86_64
           path: dist/*
