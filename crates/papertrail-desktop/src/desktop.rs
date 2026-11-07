@@ -31,6 +31,7 @@ pub struct Desktop {
     pub model: RefCell<Model>,
     pub repository: Repository,
     pub settings_file: SettingsFile,
+    pub persisted_settings: RefCell<Settings>,
     pub loading: Cell<bool>,
     pub timer: RefCell<Option<glib::SourceId>>,
     pub typography: gtk::CssProvider,
@@ -63,6 +64,7 @@ impl Desktop {
         mut settings: Settings,
         default_notes_dir: &Path,
     ) -> io::Result<Rc<Self>> {
+        let persisted_settings = settings.clone();
         let recovery = prepare_startup_folder(&mut settings, default_notes_dir)?;
         let mut folder_errors = BTreeMap::new();
         if let Some(recovery) = &recovery {
@@ -120,6 +122,7 @@ impl Desktop {
             }),
             repository: Repository,
             settings_file,
+            persisted_settings: RefCell::new(persisted_settings),
             loading: Cell::new(false),
             timer: RefCell::default(),
             typography: gtk::CssProvider::new(),
@@ -181,7 +184,14 @@ impl Desktop {
         dialog.present(Some(&self.window));
     }
     pub fn persist(&self) -> io::Result<()> {
-        self.settings_file.save(&self.model.borrow().settings)
+        let merged = self.settings_file.save_merged(
+            &self.model.borrow().settings,
+            &self.persisted_settings.borrow(),
+            &glib::home_dir(),
+        )?;
+        self.model.borrow_mut().settings = merged.clone();
+        *self.persisted_settings.borrow_mut() = merged;
+        Ok(())
     }
     pub fn flush(&self) -> io::Result<()> {
         if let Some(timer) = self.timer.borrow_mut().take() {

@@ -1,3 +1,5 @@
+![Paper Trail logo](data/icons/io.github.maennlse.paper-trail.svg)
+
 # Paper Trail
 
 Paper Trail is a local plain-text note app for GNOME, written in Rust with GTK4,
@@ -43,6 +45,15 @@ Cargo dependencies are checksum-pinned in `cargo-sources.json` and builds work
 offline inside the sandbox. After changing `Cargo.lock`, regenerate sources with
 `python3 build-aux/generate_flatpak_sources.py` (build tooling only).
 
+## Release downloads
+
+Version-tagged releases include six standalone TUI builds (Linux, Windows, macOS;
+x86_64 and ARM64), a GTK Flatpak bundle, and the native GTK Linux x86_64 executable.
+Archives include documentation; SHA-256 checksums accompany all packages.
+See [desktop download requirements](docs/desktop-release.md) and
+[tagged-release automation](docs/releases.md). Native GTK builds require system
+GNOME libraries; Flatpak downloads its separate GNOME runtime as needed.
+
 ## Build
 
 ```bash
@@ -84,11 +95,11 @@ display or GNOME libraries and also run on Windows/macOS in CI.
 
 The legacy Python app and its tests have been retired after user acceptance.
 Compatibility fixtures remain to protect existing notes and settings. Python is
-only used by the optional Flatpak dependency-generation helper.
+only used by build helpers for Flatpak dependencies and standalone packaging.
 
 ## Runtime dependencies
 
-Build requirements: Rust 1.85+, Cargo, a C linker, pkg-config, GLib resource
+Build requirements: Rust 1.88+, Cargo, a C linker, pkg-config, GLib resource
 compiler, and development headers for these libraries. Runtime requirements:
 
 - GTK 4.16+ (the existing CSS uses custom properties)
@@ -130,6 +141,14 @@ to restore access. The original bookmark, colors, pins, and language overrides
 are retained; no notes are moved or deleted. Unavailable folders are skipped in
 cross-folder views and identified in their sidebar tooltips.
 
+## Terminal frontend
+
+Run `cargo run --locked --bin paper-trail-tui`, or use a standalone CI artifact.
+The Ratatui frontend provides Vim-style built-in editing, external-editor support,
+multiple folders, pins/colors, cross-folder search, find/replace, and autosave.
+It shares notes and metadata safely with the desktop app and requires no GTK.
+See [TUI usage, keybindings, and standalone builds](docs/tui.md).
+
 ## Architecture
 
 - `papertrail-core`: portable models, normalization, search, organization, and
@@ -139,7 +158,9 @@ cross-folder views and identified in their sidebar tooltips.
 - `papertrail-desktop`: Linux GTK shell, editor, sidebar, actions, dialogs, and
   native integration. UI/CSS in `crates/papertrail-desktop/resources/` are embedded at build time.
 
-Future CLI/TUI clients can reuse the first two crates. Future native desktop or
+- `papertrail-tui`: portable Ratatui terminal client with no GTK dependencies.
+
+Future native desktop or
 mobile applications can reuse core behavior and provide their own storage and
 platform integrations; GTK widgets themselves are not a mobile abstraction.
 Windows/macOS desktop applications and iOS/Android are not currently supported.

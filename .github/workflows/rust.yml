@@ -1,6 +1,10 @@
 ---
 name: Rust
-on: [push, pull_request]
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_call:
 permissions:
   contents: read
 
@@ -19,10 +23,12 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - run: cargo test --locked -p papertrail-core -p papertrail-storage
+      - run: >-
+          cargo test --locked -p papertrail-core -p papertrail-storage
+          -p papertrail-tui
       - run: >-
           cargo clippy --locked -p papertrail-core -p papertrail-storage
-          --all-targets -- -D warnings
+          -p papertrail-tui --all-targets -- -D warnings
 
   desktop:
     runs-on: ubuntu-latest
@@ -42,6 +48,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --all --check
       - run: python3 build-aux/generate_flatpak_sources.py --check
+      - run: python3 -m unittest discover -s build-aux -p test_release.py
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: dbus-run-session -- sh build-aux/test-desktop.sh
         env:
@@ -50,12 +57,16 @@ jobs:
           PAPERTRAIL_SCREENSHOT: ${{ github.workspace }}/desktop-smoke.png
       - run: cargo build --release --locked --bin paper-trail
       - run: meson setup _build && meson compile -C _build
+      - name: Package native GTK executable
+        run: python3 build-aux/package_desktop.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: paper-trail-linux
           path: |
             target/release/paper-trail
             desktop-smoke*.png
+            dist/paper-trail-gtk-linux-x86_64.tar.gz
+            dist/paper-trail-gtk-linux-x86_64.tar.gz.sha256
 
   flatpak:
     runs-on: ubuntu-latest
@@ -71,3 +82,15 @@ jobs:
           bundle: paper-trail.flatpak
           manifest-path: io.github.maennlse.paper-trail.json
           cache-key: flatpak-builder-${{ github.sha }}
+          upload-artifact: false
+      - name: Package Flatpak bundle
+        run: |
+          mkdir -p dist
+          cp paper-trail.flatpak dist/paper-trail-gtk-linux-x86_64.flatpak
+          cd dist
+          sha256sum paper-trail-gtk-linux-x86_64.flatpak > paper-trail-gtk-linux-x86_64.flatpak.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: paper-trail-gtk-flatpak-x86_64
+          path: dist/*
+          if-no-files-found: error

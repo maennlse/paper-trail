@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Local filesystem adapter. No GTK, GLib, display, or global environment required.
+pub mod shared;
 pub mod startup;
 use papertrail_core::{note::normalize_filename, Note, Settings, Store};
 use std::{
@@ -25,7 +26,21 @@ impl Store for Repository {
     fn save(&self, path: &Path, text: &str) -> io::Result<Note> {
         // Match the old open/write behavior for symlinks: update the target, not the link.
         let target = fs::canonicalize(path)?;
+        let _lock = shared::lock_note(&target)?;
         // Check write access without truncating before replacing the file.
+        OpenOptions::new().write(true).open(&target)?;
+        atomic_write(&target, text.as_bytes())?;
+        self.load(path)
+    }
+    fn save_if_unchanged(&self, path: &Path, text: &str, original: &Note) -> io::Result<Note> {
+        let target = fs::canonicalize(path)?;
+        let _lock = shared::lock_note(&target)?;
+        if self.load(path)?.body != original.body {
+            return Err(io::Error::other(format!(
+                "Note changed on disk: {}. Reload it or save your edits to another file.",
+                path.display()
+            )));
+        }
         OpenOptions::new().write(true).open(&target)?;
         atomic_write(&target, text.as_bytes())?;
         self.load(path)
@@ -107,6 +122,7 @@ impl Repository {
         name: &str,
         link: impl Fn(&Path, &Path) -> io::Result<()>,
     ) -> io::Result<Note> {
+        let _lock = shared::lock_note(&fs::canonicalize(path)?)?;
         fs::create_dir_all(folder)?;
         // Atomic no-clobber publication, including EXDEV. Source is removed only after success.
         for index in 0..10_000 {
@@ -152,6 +168,18 @@ impl Repository {
     }
 
     pub fn delete(&self, path: &Path) -> io::Result<()> {
+        let target = match fs::canonicalize(path) {
+            Ok(target) => target,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // Also remove a dangling symlink, without recreating its target.
+                return match fs::remove_file(path) {
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                    result => result,
+                };
+            }
+            Err(error) => return Err(error),
+        };
+        let _lock = shared::lock_note(&target)?;
         match fs::remove_file(path) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             other => other,

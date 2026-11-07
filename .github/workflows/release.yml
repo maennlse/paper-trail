@@ -1,0 +1,73 @@
+---
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Validate tag against Cargo version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 build-aux/prepare_release.py validate-tag "$TAG"
+
+  tui:
+    needs: validate
+    uses: ./.github/workflows/tui.yml
+    permissions:
+      contents: read
+
+  gtk:
+    needs: validate
+    uses: ./.github/workflows/rust.yml
+    permissions:
+      contents: read
+
+  publish:
+    needs: [validate, tui, gtk]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: paper-trail-*
+          path: downloaded-artifacts
+          merge-multiple: false
+      - name: Validate all eight packages and collect release assets
+        run: >-
+          python3 build-aux/prepare_release.py collect
+          downloaded-artifacts dist/release
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected="$(git rev-parse HEAD)"
+          actual="$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)"
+          if [[ "$actual" != "$expected" ]]; then
+            printf '%s\n' 'Tag moved since checkout; refusing publication.' >&2
+            exit 1
+          fi
+          flags=()
+          if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" --verify-tag --draft \
+            --title "Paper Trail $TAG" --generate-notes \
+            --notes-file docs/release-notes.md "${flags[@]}"
+          gh release upload "$TAG" dist/release/*
+          gh release edit "$TAG" --draft=false
