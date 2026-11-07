@@ -1,0 +1,73 @@
+---
+name: Rust
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo test --locked -p papertrail-core -p papertrail-storage
+      - run: >-
+          cargo clippy --locked -p papertrail-core -p papertrail-storage
+          --all-targets -- -D warnings
+
+  desktop:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - run: >-
+          dnf install -y git gcc curl pkgconf-pkg-config gtk4-devel
+          libadwaita-devel gtksourceview5-devel xorg-x11-server-Xvfb
+          xdotool dbus-daemon meson ninja-build desktop-file-utils appstream
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      # Unlike hosted runners, the Fedora container has no preinstalled rustup.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # zizmor: ignore[superfluous-actions]
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo fmt --all --check
+      - run: python3 build-aux/generate_flatpak_sources.py --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: dbus-run-session -- sh build-aux/test-desktop.sh
+        env:
+          GSK_RENDERER: cairo
+          GTK_A11Y: none
+          PAPERTRAIL_SCREENSHOT: ${{ github.workspace }}/desktop-smoke.png
+      - run: cargo build --release --locked --bin paper-trail
+      - run: meson setup _build && meson compile -C _build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: paper-trail-linux
+          path: |
+            target/release/paper-trail
+            desktop-smoke*.png
+
+  flatpak:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
+        with:
+          bundle: paper-trail.flatpak
+          manifest-path: io.github.maennlse.paper-trail.json
+          cache-key: flatpak-builder-${{ github.sha }}

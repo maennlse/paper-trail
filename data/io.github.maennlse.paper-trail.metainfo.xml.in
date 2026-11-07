@@ -34,6 +34,6 @@
   <url type="vcs-browser">https://github.com/maennlse/paper-trail</url>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="@APP_VERSION@" date="2026-07-24"/>
+    <release version="@APP_VERSION@" date="2026-11-07"/>
   </releases>
 </component>

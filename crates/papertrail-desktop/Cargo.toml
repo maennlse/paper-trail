@@ -1,0 +1,25 @@
+[package]
+name = "papertrail-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "paper-trail"
+path = "src/main.rs"
+
+[dependencies]
+papertrail-core.workspace = true
+papertrail-storage.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+gtk = { package = "gtk4", version = "0.9", features = ["v4_16"] }
+adw = { package = "libadwaita", version = "0.7", features = ["v1_5"] }
+sourceview5 = { version = "0.9", features = ["v5_10"] }
+
+[build-dependencies]
+glib-build-tools = "0.20"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,19 @@
+{
+  "notes_dir": "/notes",
+  "note_folders": ["/notes", "/archive"],
+  "folder_colors": { "/notes": "preset-2", "/archive": "#AbC" },
+  "pinned_notes": ["/notes/first.txt"],
+  "note_language_overrides": { "/notes/first.txt": "rust" },
+  "theme_mode": "dark",
+  "editor_style_scheme": "peninsula",
+  "width": 1320,
+  "height": 860,
+  "sidebar_width": 260,
+  "font_scale": 1.2,
+  "custom_font": "Monospace 11",
+  "use_custom_font": true,
+  "show_line_numbers": true,
+  "wrap_text": false,
+  "show_ruler": true,
+  "use_monospace": true
+}
