@@ -2927,14 +2927,14 @@
   {
     "type": "archive",
     "archive-type": "tar-gzip",
-    "url": "https://static.crates.io/crates/unicode-width/unicode-width-0.2.0.crate",
-    "sha256": "1fc81956842c57dac11422a97c3b8195a1ff727f06e85c84ed2e8aa277c9a0fd",
-    "dest": "cargo/vendor/unicode-width-0.2.0"
+    "url": "https://static.crates.io/crates/unicode-width/unicode-width-0.2.3.crate",
+    "sha256": "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557",
+    "dest": "cargo/vendor/unicode-width-0.2.3"
   },
   {
     "type": "inline",
-    "contents": "{\"package\": \"1fc81956842c57dac11422a97c3b8195a1ff727f06e85c84ed2e8aa277c9a0fd\", \"files\": {}}",
-    "dest": "cargo/vendor/unicode-width-0.2.0",
+    "contents": "{\"package\": \"ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557\", \"files\": {}}",
+    "dest": "cargo/vendor/unicode-width-0.2.3",
     "dest-filename": ".cargo-checksum.json"
   },
   {

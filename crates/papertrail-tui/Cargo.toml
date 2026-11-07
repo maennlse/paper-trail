@@ -19,7 +19,7 @@ crossterm = "0.29"
 tui-textarea = { package = "ratatui-textarea", version = "0.9.4", features = ["search"] }
 dirs = "6"
 shell-words = "1"
-unicode-width = "=0.2.0"
+unicode-width = "=0.2.3"
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
