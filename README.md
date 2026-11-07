@@ -1,6 +1,6 @@
-![Paper Trail logo](data/icons/io.github.maennlse.paper-trail.svg)
-
 # Paper Trail
+
+![Paper Trail logo](data/icons/io.github.maennlse.paper-trail.svg)
 
 Paper Trail is a local plain-text note app for GNOME, written in Rust with GTK4,
 libadwaita, and GtkSourceView 5.

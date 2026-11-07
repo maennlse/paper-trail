@@ -126,7 +126,7 @@ impl Editor {
         let before = self.text();
         let cursor = self.area.cursor();
         self.handle_key(key);
-        self.record(&before, cursor);
+        self.record(&before, (cursor.0, cursor.1));
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
@@ -254,7 +254,7 @@ impl Editor {
         let before = self.text();
         let cursor = self.area.cursor();
         self.area.insert_str(text);
-        self.record(&before, cursor);
+        self.record(&before, (cursor.0, cursor.1));
     }
 
     pub fn replace_text(&mut self, text: &str) {
@@ -262,7 +262,7 @@ impl Editor {
         let cursor = self.area.cursor();
         self.area.select_all();
         self.area.insert_str(text);
-        self.record(&before, cursor);
+        self.record(&before, (cursor.0, cursor.1));
     }
 
     fn record(&mut self, before: &str, cursor: (usize, usize)) {
@@ -288,7 +288,7 @@ impl Editor {
             removed: before[start..before.len() - suffix].to_owned(),
             inserted: after[start..after.len() - suffix].to_owned(),
             before: cursor,
-            after: self.area.cursor(),
+            after: (self.area.cursor().0, self.area.cursor().1),
         });
         if self.undo.len() > 100 {
             self.undo.remove(0);

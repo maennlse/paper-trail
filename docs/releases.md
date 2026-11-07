@@ -14,7 +14,7 @@ branch pushes and PRs still upload CI artifacts, but do not create releases.
 
 - Six TUI archives: Linux musl, Windows MSVC with static CRT, and macOS, each for
   x86_64 and ARM64. Each archive includes the executable and TUI documentation.
-- Native GTK Linux x86_64 `.tar.gz`: executable, README, and build/dependency info.
+- Native GTK Linux x86_64 `.tar.gz`: executable, `README.md`, and build/dependency info.
 - GTK Linux x86_64 `.flatpak` bundle, with runtime-repository information.
 - Per-package `.sha256` files and a combined `SHA256SUMS` (eight packages total).
 

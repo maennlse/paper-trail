@@ -242,7 +242,7 @@ fn folder_commands_keep_last_accessible_folder_and_reorder_bookmarks() {
     fs::create_dir(&other).unwrap();
     app.command(&format!("folder {}", other.display())).unwrap();
     app.command("folder-up").unwrap();
-    assert_eq!(app.settings.note_folders[0], other);
+    assert_eq!(app.settings.note_folders[0], other.canonicalize().unwrap());
     app.command("close-folder").unwrap();
     assert!(other.is_dir());
     assert_eq!(app.settings.note_folders, [temp.path().join("notes")]);

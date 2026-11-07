@@ -139,7 +139,7 @@ save any pending text first.
 Both frontends check note contents before autosaving. If another client changed
 the file, the save is blocked, pending text remains in memory, and TUI autosave
 pauses. Use `:saveas PATH` for a separate copy or `:reload!` to discard your edits
-explicitly. Cooperating Paper Trail writers use advisory lock files beneath
+explicitly. Cooperating Paper Trail writers use advisory lockfiles beneath
 `.papertrail-locks/`; those directories are not notes. Unrelated editors do not
 honor these locks: content checks detect existing changes, but cannot prevent an
 external write racing the final filesystem operation. Avoid editing the same

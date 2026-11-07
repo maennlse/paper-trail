@@ -1,4 +1,4 @@
-## Downloads
+# Downloads
 
 - **GTK desktop, Linux x86_64:** `paper-trail-gtk-linux-x86_64.flatpak` is the
   recommended download. Flatpak installs the separate GNOME runtime from Flathub
