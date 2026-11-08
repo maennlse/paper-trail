@@ -32,6 +32,8 @@ jobs:
           MULTI_STATUS: ${{ github.actor != 'dependabot[bot]' }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           VALIDATE_ALL_CODEBASE: false
+          # Super-linter v9 defaults to stylelint.config.mjs; use our GTK rules.
+          CSS_FILE_NAME: .stylelintrc.json
           VALIDATE_JSCPD: false
           VALIDATE_PYTHON_MYPY: false
           VALIDATE_PYTHON_RUFF_FORMAT: false

@@ -18,7 +18,8 @@
     </p>
     <p>
       Notes are stored as regular UTF-8 <code>.txt</code> files in a folder you choose.
-      There is no database, no sync engine, and no markdown rendering layer.
+      Optional end-to-end encrypted sync connects the desktop and terminal clients
+      through a separately deployed server. Local-only use needs no account.
     </p>
   </description>
   <screenshots>
@@ -34,6 +35,12 @@
   <url type="vcs-browser">https://github.com/maennlse/paper-trail</url>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="@APP_VERSION@" date="2026-11-07"/>
+    <release version="@APP_VERSION@" date="2026-11-08">
+      <description>
+        <p>Optional end-to-end encrypted sync with multi-folder selection, conflict
+        copies, recovery keys, and a non-blocking desktop sync menu. Terminal login
+        supports device authorization over SSH.</p>
+      </description>
+    </release>
   </releases>
 </component>

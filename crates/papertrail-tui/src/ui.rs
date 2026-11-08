@@ -49,6 +49,22 @@ COMMANDS (: opens the prompt; Enter executes)
 :set number           Or :set nonumber (TUI-only preference)
 :set folder-width 16  Folder column width, 10–30; hidden below 80 columns
 :path                 Show the full highlighted folder/current note path
+:sync-configure URL ISSUER CLIENT ['SCOPES']  Sync the active folder
+:login               Device code sign-in (works over SSH)
+:login-show          Show the full verification URL/code
+:login-cancel        Cancel pending device sign-in (or Ctrl-C)
+:login-browser       Optional browser/PKCE login on this machine
+:unlock :sync        Separate vault unlock and manual sync
+:create-vault         Create vault; save and confirm recovery key
+:recover-vault        Unlock using recovery key
+:change-passphrase    Rewrap vault; save replacement recovery key
+:lock :logout         Clear vault key / credentials; files stay plaintext
+:sync-status          Show synchronization status
+:sync-folders         List folder IDs, selection and local mappings
+:sync-add-folder PATH / :sync-remove-folder PATH  Select/unselect; never delete
+:sync-map-folder ID PATH / :sync-download-dir PATH  Device-local directories
+:sync-map-legacy NOTE_ID FOLDER_ID  Confirm an ambiguous legacy assignment
+:sync-accept-remote ID Accept remote name/color; keep local directory
 Tab / Shift-Tab       Complete commands/options/paths while : prompt is open
 
 Paths after :folder, :move, :rename, :saveas may contain spaces
@@ -115,9 +131,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         );
         return;
     }
+    let login_height = if app.device_prompt.is_some() { 5 } else { 0 };
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(2)])
+        .constraints([Constraint::Min(3), Constraint::Length(2 + login_height)])
         .split(area);
     let columns = panes(vertical[0], app.preferences.folder_width);
     app.panes = columns;
@@ -133,7 +150,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .map(|(index, path)| {
             let active = *path == app.settings.notes_dir;
             let unavailable = !path.is_dir();
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let name = app.settings.folder_name(path);
             let token = app
                 .settings
                 .folder_colors
@@ -193,9 +210,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             let folder = note
                 .path
                 .parent()
-                .and_then(|p| p.file_name())
-                .unwrap_or_default()
-                .to_string_lossy();
+                .map(|p| app.settings.folder_name(p))
+                .unwrap_or_default();
             ListItem::new(vec![
                 Line::from(format!("{opened}{pin}{}", note.title)),
                 Line::styled(
@@ -279,14 +295,45 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             PromptKind::Command => ":",
             PromptKind::NotesSearch | PromptKind::Find => "/",
             PromptKind::Delete => "Delete note? Type yes: ",
+            PromptKind::Unlock => "Vault passphrase: ",
+            PromptKind::CreateVault => "New strong vault passphrase (16+ characters): ",
+            PromptKind::RecoverVault => "Recovery key: ",
+            PromptKind::ChangePassphrase => "New strong vault passphrase (16+ characters): ",
+            PromptKind::ConfirmRecovery => "Saved the recovery key? Type yes: ",
         };
-        format!("{prefix}{}", prompt.text)
+        let text = if prompt.kind.secret() {
+            "•".repeat(prompt.text.chars().count())
+        } else {
+            prompt.text.clone()
+        };
+        format!("{prefix}{text}")
     } else {
         app.status.clone()
     };
-    let footer =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(vertical[1]);
-    frame.render_widget(Paragraph::new(status), footer[0]);
+    let footer = Layout::vertical([
+        Constraint::Length(login_height),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(vertical[1]);
+    if let Some(prompt) = &app.device_prompt {
+        let uri = if prompt.verification_uri.width() > area.width.saturating_sub(4) as usize {
+            "Use :login-show for the full verification URL"
+        } else {
+            &prompt.verification_uri
+        };
+        frame.render_widget(
+            Paragraph::new(format!(
+                "{uri}\nCode: {} · expires in {}s\nKeep editing · Ctrl-C or :login-cancel cancels",
+                prompt.user_code.as_str(),
+                prompt.seconds_left()
+            ))
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered().title("Sign in on another device · :login-show")),
+            footer[0],
+        );
+    }
+    frame.render_widget(Paragraph::new(status), footer[1]);
     let keys = match app.focus {
         Focus::Folders => "FOLDERS · j/k · Enter open · :path",
         Focus::Notes => "NOTES · j/k preview · Enter edit",
@@ -315,7 +362,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     };
     frame.render_widget(
         Paragraph::new(hints).style(Style::default().fg(Color::DarkGray)),
-        footer[1],
+        footer[2],
     );
     if let Some(prompt) = app.prompt.as_ref().filter(|p| p.completion.active) {
         let completion = &prompt.completion;
@@ -360,6 +407,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             );
         }
     }
+    if let Some(key) = &app.recovery_key {
+        let popup = Rect::new(
+            area.x + 1,
+            area.y + 1,
+            area.width.saturating_sub(2),
+            vertical[0].height.saturating_sub(2),
+        );
+        frame.render_widget(Clear, popup);
+        frame.render_widget(Paragraph::new(format!("Save this recovery key somewhere safe:\n\n{}\n\nIt is shown only now. Losing your passphrase, recovery key, and all unlocked devices means your notes cannot be recovered.\n\nType yes in the prompt below only after saving it. Esc cancels. Local files remain plaintext.",key.as_str())).wrap(Wrap { trim:false }).block(Block::bordered().title("Save Recovery Key")),popup);
+    }
     if app.help {
         let popup = ratatui::layout::Rect::new(
             area.x + 1,
@@ -379,6 +436,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 })),
             popup,
         );
+    }
+    if app.device_details {
+        if let Some(prompt) = &app.device_prompt {
+            let popup = Rect::new(
+                area.x + 1,
+                area.y + 1,
+                area.width.saturating_sub(2),
+                area.height.saturating_sub(2),
+            );
+            frame.render_widget(Clear, popup);
+            frame.render_widget(Paragraph::new(format!("Open this HTTPS URL in a browser on any trusted device:\n\n{}\n\nEnter this user code:\n\n{}\n\nExpires in {} seconds. Approve only the sign-in you started.\n\nNo browser or forwarded port is needed on this SSH host. Vault unlock is a separate step. The SSH host must be trusted with your notes.\n\nEsc / Enter closes this view; Ctrl-C cancels sign-in.",prompt.verification_uri,prompt.user_code.as_str(),prompt.seconds_left())).wrap(Wrap {trim:false}).scroll((app.help_scroll,0)).block(Block::bordered().title("Device Sign-In · ↑↓/PgUp/PgDn scroll")),popup);
+        }
     }
 }
 

@@ -4,6 +4,7 @@ mod desktop;
 mod dialogs;
 mod editor;
 mod sidebar;
+mod sync;
 #[cfg(test)]
 mod tests;
 

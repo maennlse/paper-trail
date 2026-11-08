@@ -1,48 +1,44 @@
 {
   "extends": ["stylelint-config-standard"],
-  "overrides": [
-    {
-      "files": ["../../crates/papertrail-desktop/resources/*.css"],
-      "rules": {
-        "selector-type-no-unknown": [
-          true,
-          {
-            "ignoreTypes": [
-              "accelerator",
-              "arrow",
-              "border",
-              "box",
-              "check",
-              "checkbutton",
-              "contents",
-              "entry",
-              "flowbox",
-              "flowboxchild",
-              "headerbar",
-              "image",
-              "label",
-              "modelbutton",
-              "popover",
-              "preferencespage",
-              "radio",
-              "scrolledwindow",
-              "searchentry",
-              "selection",
-              "separator",
-              "text",
-              "textview",
-              "undershoot",
-              "viewport",
-              "window"
-            ]
-          }
-        ],
-        "selector-pseudo-class-no-unknown": [
-          true,
-          { "ignorePseudoClasses": ["selected"] }
-        ],
-        "no-descending-specificity": null
+  "rules": {
+    "selector-type-no-unknown": [
+      true,
+      {
+        "ignoreTypes": [
+          "accelerator",
+          "arrow",
+          "border",
+          "box",
+          "check",
+          "checkbutton",
+          "contents",
+          "entry",
+          "flowbox",
+          "flowboxchild",
+          "headerbar",
+          "image",
+          "label",
+          "modelbutton",
+          "popover",
+          "preferencespage",
+          "radio",
+          "scrolledwindow",
+          "searchentry",
+          "selection",
+          "separator",
+          "text",
+          "textview",
+          "undershoot",
+          "viewport",
+          "window"
+        ]
       }
-    }
-  ]
+    ],
+    "selector-pseudo-class-no-unknown": [
+      true,
+      { "ignorePseudoClasses": ["selected"] }
+    ],
+    "selector-no-unmatchable": null,
+    "no-descending-specificity": null
+  }
 }

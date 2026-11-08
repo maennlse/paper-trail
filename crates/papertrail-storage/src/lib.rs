@@ -185,6 +185,25 @@ impl Repository {
             other => other,
         }
     }
+
+    /// Remote deletion must not discard a filesystem edit made during a fetch.
+    pub fn delete_if_unchanged(&self, path: &Path, original: &Note) -> io::Result<()> {
+        let target = fs::canonicalize(path)?;
+        let _lock = shared::lock_note(&target)?;
+        if self.load(path)?.body != original.body {
+            return Err(io::Error::other(
+                "Note changed on disk during deletion; sync again",
+            ));
+        }
+        fs::remove_file(path)?;
+        #[cfg(unix)]
+        File::open(
+            path.parent()
+                .ok_or_else(|| io::Error::other("Missing note parent"))?,
+        )?
+        .sync_all()?;
+        Ok(())
+    }
 }
 
 fn numbered(folder: &Path, name: &str, index: usize) -> PathBuf {

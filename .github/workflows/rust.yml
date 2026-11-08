@@ -25,17 +25,19 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: >-
           cargo test --locked -p papertrail-core -p papertrail-storage
-          -p papertrail-tui
+          -p papertrail-tui -p papertrail-crypto -p papertrail-sync
+          -p papertrail-server
       - run: >-
           cargo clippy --locked -p papertrail-core -p papertrail-storage
-          -p papertrail-tui --all-targets -- -D warnings
+          -p papertrail-tui -p papertrail-crypto -p papertrail-sync
+          -p papertrail-server --all-targets -- -D warnings
 
   desktop:
     runs-on: ubuntu-latest
     container: fedora:44
     steps:
       - run: >-
-          dnf install -y git gcc curl pkgconf-pkg-config gtk4-devel
+          dnf install -y git gcc cmake curl pkgconf-pkg-config gtk4-devel
           libadwaita-devel gtksourceview5-devel xorg-x11-server-Xvfb
           xdotool dbus-daemon meson ninja-build desktop-file-utils appstream
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
