@@ -118,6 +118,27 @@
                         </child>
                       </object>
                     </child>
+                    <child>
+                      <object class="GtkBox" id="sync_footer">
+                        <property name="orientation">vertical</property>
+                        <property name="halign">center</property>
+                        <property name="margin-top">6</property>
+                        <property name="margin-bottom">10</property>
+                        <child>
+                          <object class="GtkMenuButton" id="sync_menu_button">
+                            <property name="tooltip-text">Sync</property>
+                            <property name="halign">center</property>
+                            <property name="css-classes">flat</property>
+                            <property name="direction">up</property>
+                            <property name="child">
+                                  <object class="GtkImage" id="sync_icon">
+                                    <property name="icon-name">emblem-synchronizing-symbolic</property>
+                                  </object>
+                            </property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
                   </object>
                 </child>
                 <child>

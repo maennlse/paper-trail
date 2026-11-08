@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 papertrail-core.workspace = true
 papertrail-storage.workspace = true
+papertrail-sync.workspace = true
+zeroize = "1"
 serde.workspace = true
 serde_json.workspace = true
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache", "underline-color"] }

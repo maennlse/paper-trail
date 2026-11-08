@@ -129,6 +129,59 @@ Only external editing needs another program installed.
 
 ## Shared data and safety
 
+### Device-code sign-in (including SSH)
+
+`:login` uses OAuth Device Authorization (RFC 8628), not a browser on the TUI host.
+It shows an HTTPS verification URL and a short-lived user code. Open that URL on
+another trusted device, enter the code, and approve the sign-in you started.
+`:login-show` displays the full URL/code; Esc closes that view without cancelling.
+Use `:login-cancel` or Ctrl-C to cancel. Editing and local autosave continue while
+authorization is pending. Codes disappear on cancellation, completion, denial or
+expiry; expiry never silently starts a new authorization request.
+
+For example, allocate a terminal when connecting remotely:
+
+```sh
+ssh -t HOST '/path/to/paper-trail-tui --no-mouse'
+```
+
+Configure the public native client to allow the **Device Authorization** grant
+(`urn:ietf:params:oauth:grant-type:device_code`), plus Refresh Token for
+`offline_access`. Keep the same issuer, client ID and API-audience scopes. No client
+secret, callback listener, forwarded port or browser installation is needed on the
+SSH host. `:login-browser` remains available for explicit local browser/PKCE login;
+GTK's Sign In continues using browser/PKCE. An issuer without a discovered device
+authorization endpoint produces an actionable error, not a browser fallback.
+
+SSH sessions (detected by `SSH_CONNECTION`/`SSH_TTY`) and Linux terminals without
+`DISPLAY`/`WAYLAND_DISPLAY` keep tokens in memory only. They do not read, write or
+delete desktop-keyring credentials, including on refresh/sign-out, so no hidden
+keyring-unlock prompt is required. Other graphical sessions still use platform
+secure storage when available, with memory-only fallback and no plaintext token file.
+
+Device login authenticates the account only. Unlock separately with `:unlock` and
+the masked vault passphrase; **never enter that passphrase on the provider's
+verification page**. The SSH host must be trusted: it holds the plaintext working
+files and the vault key in memory after unlock. Cancellation stops client polling,
+not the provider's open approval page. An in-flight HTTPS call may take up to its
+timeout to finish. If approval/identity validation has already committed, the UI
+says cancellation is too late; use `:logout` to clear that session instead.
+
+Optional encrypted synchronization is available through `:sync-configure`,
+`:login`, `:unlock`, `:sync`, and `:sync-status`. Use `:create-vault` for the first
+device and save its recovery key. `:lock` clears the memory-only vault key;
+`:logout` also removes secure-stored credentials. Local files remain plaintext.
+See [encrypted sync](encrypted-sync.md) for setup, threat boundaries, and limitations.
+
+Use `:sync-add-folder PATH` and `:sync-remove-folder PATH` to change the selected
+collections without deleting notes, and `:sync-folders` to inspect stable IDs and
+local mappings. `:sync-map-folder ID '/absolute/path'` explicitly chooses a device's
+directory; `:sync-download-dir PATH` sets where newly discovered collections are
+created. Empty folders sync too. Legacy assignments that cannot be proven stop
+safely: confirm them with `:sync-map-legacy NOTE_ID FOLDER_ID` (or GTK Configure
+Sync). `:sync-accept-remote FOLDER_ID` acknowledges conflicting remote name/color
+metadata while keeping the local directory. Directory scans remain non-recursive.
+
 Notes, bookmarks, pins, folder colors, and language overrides share the desktop
 format. TUI preferences live in `tui.json` alongside the selected settings file;
 desktop window/layout preferences are not changed by TUI commands. Settings

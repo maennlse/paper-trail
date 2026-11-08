@@ -195,16 +195,13 @@ impl Desktop {
         for note in &notes {
             list.append(&self.note_row(note));
         }
+        let title = if all {
+            "All".into()
+        } else {
+            settings.folder_name(&settings.notes_dir)
+        };
         self.widget::<gtk::Label>("sidebar_title_label")
-            .set_label(if all {
-                "All"
-            } else {
-                settings
-                    .notes_dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("Notes")
-            });
+            .set_label(&title);
         let query = self
             .widget::<gtk::SearchEntry>("sidebar_search_entry")
             .text();
@@ -485,12 +482,7 @@ impl Desktop {
             button.add_css_class("active");
         }
         let title = folder
-            .map(|p| {
-                p.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            })
+            .map(|p| self.model.borrow().settings.folder_name(p))
             .unwrap_or_else(|| "All".into());
         button.set_tooltip_text(Some(
             &folder

@@ -608,7 +608,14 @@ impl Desktop {
                             "A folder with that name already exists",
                         ));
                     }
+                    let mut local = d.sync.local()?;
                     std::fs::rename(&path, &target)?;
+                    d.sync.relocate(&path, &target)?;
+                    for protected in &mut local.protected {
+                        if let Ok(suffix) = protected.strip_prefix(&path) {
+                            *protected = target.join(suffix);
+                        }
+                    }
                     let mut m = d.model.borrow_mut();
                     m.settings.rename_folder(&path, &target);
                     if let Some(note) = &mut m.session.current {

@@ -23,6 +23,17 @@ pub struct Model {
 }
 
 pub struct Desktop {
+    pub sync: papertrail_sync::control::Service,
+    pub sync_job:
+        RefCell<Option<std::sync::mpsc::Receiver<io::Result<papertrail_sync::control::Outcome>>>>,
+    pub sync_unlocked: Cell<bool>,
+    pub sync_status: RefCell<String>,
+    pub sync_last: Cell<Instant>,
+    pub sync_requested: Cell<Option<Instant>>,
+    pub sync_retry: Cell<std::time::Duration>,
+    pub sync_interactive: Cell<bool>,
+    pub sync_pending: RefCell<Option<papertrail_sync::control::Command>>,
+    pub sync_error: Cell<bool>,
     pub window: adw::ApplicationWindow,
     pub builder: gtk::Builder,
     pub view: sourceview5::View,
@@ -110,6 +121,18 @@ impl Desktop {
         search_settings.set_case_sensitive(false);
         let search = sourceview5::SearchContext::new(&buffer, Some(&search_settings));
         let desktop = Rc::new(Self {
+            sync: papertrail_sync::control::Service::new(&settings_file.path),
+            sync_job: RefCell::new(None),
+            sync_unlocked: Cell::new(false),
+            sync_status: RefCell::new(
+                "Local-only. Configure Sync to enable encrypted synchronization.".into(),
+            ),
+            sync_last: Cell::new(Instant::now()),
+            sync_requested: Cell::new(None),
+            sync_retry: Cell::new(std::time::Duration::from_secs(30)),
+            sync_interactive: Cell::new(false),
+            sync_pending: RefCell::new(None),
+            sync_error: Cell::new(false),
             window,
             builder,
             view,
@@ -133,6 +156,7 @@ impl Desktop {
         });
         desktop.install_style();
         desktop.setup_actions(app);
+        desktop.setup_sync();
         desktop.setup_editor();
         desktop.setup_sidebar();
         desktop.apply_preferences();
@@ -197,11 +221,22 @@ impl Desktop {
         if let Some(timer) = self.timer.borrow_mut().take() {
             timer.remove();
         }
-        self.model.borrow_mut().session.flush(&self.repository)
+        let _local = self.sync.local()?;
+        let dirty = self.model.borrow().session.is_dirty();
+        self.model.borrow_mut().session.flush(&self.repository)?;
+        if dirty {
+            self.schedule_sync();
+        }
+        Ok(())
     }
     pub fn close_note(self: &Rc<Self>) -> io::Result<()> {
         self.flush()?;
-        self.model.borrow_mut().session.close(&self.repository)?;
+        {
+            let mut local = self.sync.local()?;
+            self.model.borrow_mut().session.close(&self.repository)?;
+            local.protected.clear();
+        }
+        self.schedule_sync();
         self.refresh()?;
         self.show_session();
         Ok(())
@@ -209,8 +244,10 @@ impl Desktop {
     pub fn open(self: &Rc<Self>, path: &Path) -> io::Result<()> {
         self.flush()?;
         {
+            let mut local = self.sync.local()?;
             let mut model = self.model.borrow_mut();
             model.session.open(&self.repository, path)?;
+            local.protected = vec![path.to_owned()];
             if path.parent() != Some(model.settings.notes_dir.as_path()) || model.all {
                 model
                     .settings
@@ -227,13 +264,16 @@ impl Desktop {
         self.flush()?;
         let folder = self.model.borrow().settings.notes_dir.clone();
         check_notes_folder(&folder)?;
-        let note = self.repository.create(&folder).map_err(|error| {
-            papertrail_storage::startup::folder_error(
-                "Could not create a note in folder",
-                &folder,
-                error,
-            )
-        })?;
+        let note = {
+            let _local = self.sync.local()?;
+            self.repository.create(&folder).map_err(|error| {
+                papertrail_storage::startup::folder_error(
+                    "Could not create a note in folder",
+                    &folder,
+                    error,
+                )
+            })?
+        };
         self.open(&note.path)
     }
     pub fn choose_active(self: &Rc<Self>, folder: Option<&Path>) -> io::Result<()> {
@@ -242,13 +282,16 @@ impl Desktop {
             check_notes_folder(folder)?;
         }
         {
+            let mut local = self.sync.local()?;
             let mut model = self.model.borrow_mut();
             model.session.close(&self.repository)?;
+            local.protected.clear();
             model.all = folder.is_none();
             if let Some(folder) = folder {
                 model.settings.add_folder(folder.to_owned(), true);
             }
         }
+        self.schedule_sync();
         self.persist()?;
         self.refresh()?;
         self.show_session();
@@ -256,7 +299,17 @@ impl Desktop {
     }
     pub fn rename_note(self: &Rc<Self>, old: &Path, name: &str) -> io::Result<()> {
         self.flush()?;
-        let note = self.repository.rename(old, name)?;
+        let note = {
+            let mut local = self.sync.local()?;
+            let note = self.repository.rename(old, name)?;
+            self.sync.relocate(old, &note.path)?;
+            for path in &mut local.protected {
+                if path == old {
+                    *path = note.path.clone();
+                }
+            }
+            note
+        };
         self.relocate(old, note)?;
         self.refresh()?;
         self.show_session();
@@ -264,7 +317,17 @@ impl Desktop {
     }
     pub fn move_note(self: &Rc<Self>, old: &Path, folder: &Path) -> io::Result<()> {
         self.flush()?;
-        let note = self.repository.move_note(old, folder)?;
+        let note = {
+            let mut local = self.sync.local()?;
+            let note = self.repository.move_note(old, folder)?;
+            self.sync.relocate(old, &note.path)?;
+            for path in &mut local.protected {
+                if path == old {
+                    *path = note.path.clone();
+                }
+            }
+            note
+        };
         self.relocate(old, note)?;
         self.refresh()?;
         self.show_session();
@@ -280,16 +343,20 @@ impl Desktop {
                 m.session.current = Some(note);
             }
         }
+        self.schedule_sync();
         self.persist()
     }
     pub fn remove_note(self: &Rc<Self>, path: &Path) -> io::Result<()> {
         self.flush()?;
-        self.repository.delete(path)?;
         {
+            let mut local = self.sync.local()?;
+            self.repository.delete(path)?;
             let mut m = self.model.borrow_mut();
             m.session.discard_deleted(path);
             m.settings.delete_note(path);
+            local.protected.retain(|p| p != path);
         }
+        self.schedule_sync();
         self.persist()?;
         self.refresh()?;
         if self.model.borrow().session.current.is_none() {

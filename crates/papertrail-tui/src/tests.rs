@@ -29,6 +29,217 @@ fn type_text(app: &mut App, text: &str) {
 }
 
 #[test]
+fn sync_secret_prompts_are_masked_and_never_completed_or_written_to_settings() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    app.command("sync-configure https://sync.example https://issuer.example native")
+        .unwrap();
+    assert!(app
+        .command("unlock never-put-secrets-in-arguments")
+        .is_err());
+    app.command("unlock").unwrap();
+    type_text(&mut app, "private vault passphrase");
+    key(&mut app, KeyCode::Tab);
+    assert!(!app.prompt.as_ref().unwrap().completion.active);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(!screen.contains("private vault passphrase"));
+    assert!(screen.contains("Vault passphrase"));
+    key(&mut app, KeyCode::Esc);
+    assert!(app.prompt.is_none());
+    let settings = fs::read_to_string(temp.path().join("config/sync/config.json")).unwrap();
+    assert!(!settings.contains("private vault passphrase"));
+}
+
+#[test]
+fn sync_folder_selection_is_explicit_and_account_edits_preserve_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    app.command("sync-configure https://sync.example https://issuer.example native 'openid offline_access audience'").unwrap();
+    let first = app.settings.notes_dir.clone();
+    let other = temp.path().join("other folder");
+    fs::create_dir(&other).unwrap();
+    fs::write(other.join("keep.txt"), "keep").unwrap();
+    app.command(&format!("folder {}", other.display())).unwrap();
+    app.command(&format!("sync-add-folder {}", other.display()))
+        .unwrap();
+    app.command(&format!("sync-remove-folder {}", first.display()))
+        .unwrap();
+    app.command("sync-configure https://sync.example https://issuer.example native 'openid offline_access updated'").unwrap();
+    let config = app.sync.saved_config().unwrap().unwrap();
+    assert_eq!(config.folders, vec![other.clone()]);
+    assert!(config.download_dir.is_some());
+    assert_eq!(config.scopes, "openid offline_access updated");
+    app.command("sync-folders").unwrap();
+    assert!(app.path_details.as_ref().unwrap().contains("other folder"));
+    assert_eq!(fs::read_to_string(other.join("keep.txt")).unwrap(), "keep");
+}
+
+#[test]
+fn login_defaults_to_device_flow_without_invoking_a_browser() {
+    // No sync configuration: the worker exits before any network request. The
+    // command must nevertheless select device flow, not the browser variant.
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    app.command("login").unwrap();
+    assert!(app.device_cancel.is_some());
+    assert!(app.device_notifications.is_some());
+    assert!(app.status.contains("device login code"));
+    app.command("login-cancel").unwrap();
+    assert!(app.device_cancel.as_ref().unwrap().is_cancelled());
+}
+
+#[test]
+fn device_login_banner_cancellation_and_completion_preserve_edits() {
+    use papertrail_sync::{
+        auth::device::{Cancellation, Prompt},
+        control::Outcome,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    app.command("new ssh.txt").unwrap();
+    type_text(&mut app, "before");
+    app.flush().unwrap();
+    let (result_tx, result_rx) = std::sync::mpsc::channel::<std::io::Result<Outcome>>();
+    let (prompt_tx, prompt_rx) = std::sync::mpsc::channel();
+    let cancel = Cancellation::default();
+    app.sync_job = Some(result_rx);
+    app.device_cancel = Some(cancel.clone());
+    app.device_notifications = Some(prompt_rx);
+    let prompt = || Prompt {
+        verification_uri: "https://issuer.example/activate".into(),
+        user_code: zeroize::Zeroizing::new("ABCD-EFGH".into()),
+        expires_at: std::time::Instant::now() + std::time::Duration::from_secs(300),
+    };
+    prompt_tx.send(prompt()).unwrap();
+    app.tick().unwrap();
+    assert!(app.device_prompt.is_some());
+    type_text(&mut app, " during login");
+    app.flush().unwrap();
+    assert_eq!(app.session.text, "before during login");
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("ABCD-EFGH"));
+    assert!(text.contains("https://issuer.example/activate"));
+    assert!(!text.contains("PRIVATE_DEVICE_CODE"));
+    app.command("login-show").unwrap();
+    assert!(app.device_details);
+    key(&mut app, KeyCode::Esc);
+    assert!(!app.device_details);
+    assert!(!cancel.is_cancelled());
+    app.command("login-cancel").unwrap();
+    assert!(cancel.is_cancelled());
+    assert!(app.device_prompt.is_none());
+    prompt_tx.send(prompt()).unwrap();
+    app.tick().unwrap();
+    assert!(
+        app.device_prompt.is_none(),
+        "a late progress notification revived a cancelled code"
+    );
+    type_text(&mut app, " still editing");
+    result_tx
+        .send(Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "cancelled",
+        )))
+        .unwrap();
+    app.tick().unwrap();
+    assert!(app.sync_job.is_none());
+    assert!(app.device_cancel.is_none());
+    assert_eq!(app.session.text, "before during login still editing");
+    assert!(app.session.is_dirty());
+    app.flush().unwrap();
+    assert_eq!(
+        fs::read_to_string(app.current_path().unwrap()).unwrap(),
+        app.session.text
+    );
+    app.persist().unwrap();
+    assert!(
+        !fs::read_to_string(temp.path().join("config/settings.json"))
+            .unwrap()
+            .contains("ABCD-EFGH")
+    );
+}
+
+#[test]
+fn completing_device_login_does_not_reload_the_editor_or_unlock_the_vault() {
+    use papertrail_sync::{
+        auth::device::{Cancellation, Prompt},
+        control::Outcome,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    app.command("new ssh.txt").unwrap();
+    type_text(&mut app, "unsaved local text");
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.sync_job = Some(rx);
+    app.device_cancel = Some(Cancellation::default());
+    app.device_prompt = Some(Prompt {
+        verification_uri: "https://issuer.example/activate".into(),
+        user_code: zeroize::Zeroizing::new("DONE-CODE".into()),
+        expires_at: std::time::Instant::now() + std::time::Duration::from_secs(300),
+    });
+    tx.send(Ok(Outcome {
+        message: "Signed in for this session".into(),
+        recovery: None,
+        synced: false,
+        unlocked: false,
+        settings_update: None,
+        local_changed: false,
+    }))
+    .unwrap();
+    app.tick().unwrap();
+    assert!(app.device_prompt.is_none());
+    assert!(!app.sync_unlocked);
+    assert_eq!(app.session.text, "unsaved local text");
+    assert!(app.session.is_dirty());
+    assert_eq!(app.focus, Focus::Editor);
+}
+
+#[test]
+fn lock_requested_during_device_login_survives_a_failed_local_save() {
+    use papertrail_sync::{auth::device::Cancellation, control::Outcome};
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    app.command("new missing.txt").unwrap();
+    let path = app.current_path().unwrap();
+    fs::remove_file(path).unwrap();
+    type_text(&mut app, "keep this unsaved text");
+    let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<Outcome>>();
+    let cancel = Cancellation::default();
+    app.sync_job = Some(rx);
+    app.device_cancel = Some(cancel.clone());
+    app.command("lock").unwrap();
+    assert!(cancel.is_cancelled());
+    tx.send(Err(std::io::Error::new(
+        std::io::ErrorKind::Interrupted,
+        "cancelled",
+    )))
+    .unwrap();
+    app.tick().unwrap();
+    assert!(
+        app.sync_job.is_some(),
+        "lock was not queued independently of the failed save"
+    );
+    assert_eq!(app.session.text, "keep this unsaved text");
+    assert!(app.session.is_dirty());
+}
+
+#[test]
 fn vim_edit_autosave_undo_visual_and_safe_quit() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = app(temp.path());

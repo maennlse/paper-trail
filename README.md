@@ -13,8 +13,9 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](https://www.gnu.org/licenses/gpl-3.0.html)
 
 Paper Trail is a local-first note app written in Rust, with a native GNOME desktop
-app and a portable terminal client. Your notes stay in ordinary text files—no
-database, no sync service, no special format.
+app and a portable terminal client. Your notes stay in ordinary text files.
+Optional client-side end-to-end encrypted sync uses a separately deployed server;
+the server does not hold the decryption key. Local-only use needs no account.
 
 > [!IMPORTANT]
 > This project is completely vibe coded.
@@ -60,6 +61,8 @@ metadata and lets you restore access. It does not move or delete your notes.
 ## Explore further
 
 - [Build, run, and test from source](docs/building.md)
+- [Encrypted sync, server setup, and security boundaries](docs/encrypted-sync.md)
+- [Short sync architecture note](docs/sync-architecture.md)
 - [Terminal usage and standalone targets](docs/tui.md)
 - [Release process](docs/releases.md)
 - [Report an issue](https://github.com/maennlse/paper-trail/issues)

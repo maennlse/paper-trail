@@ -1,4 +1,26 @@
-# Downloads
+# Paper Trail 0.4.0
+
+## Highlights
+
+- Optional client-side end-to-end encrypted sync for GTK and TUI, backed by a
+  separately deployed OIDC-authenticated Rust server. Ordinary local text files
+  remain unchanged; local-only use still needs no account.
+- Independent vault passphrase and recovery key, encrypted folder metadata,
+  per-device folder mappings, selective sync, conflict copies, tombstones, and
+  rollback checkpoints.
+- Non-blocking desktop sync with a bottom-left status/menu icon; editing stays
+  available during network operations.
+- TUI device-code authentication for SSH, cancellable login, and memory-only
+  credentials on SSH/headless hosts. Desktop browser/PKCE login is unchanged.
+- Explicit ZITADEL-compatible server introspection and secret-safe request/auth
+  diagnostics (`paper-trail-server --verbose`).
+
+Sync is experimental and has not had an independent security audit. Local working
+files and comparison baselines remain plaintext. Upgrade the sync server before
+connecting updated clients; this version supports encrypted revision v2 and the
+multi-folder catalog. See [encrypted sync setup and security boundaries](https://github.com/maennlse/paper-trail/blob/v0.4.0/docs/encrypted-sync.md).
+
+## Downloads
 
 - **GTK desktop, Linux x86_64:** `paper-trail-gtk-linux-x86_64.flatpak` is the
   recommended download. Flatpak installs the separate GNOME runtime from Flathub

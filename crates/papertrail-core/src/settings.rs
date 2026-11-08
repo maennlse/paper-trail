@@ -12,6 +12,8 @@ pub struct Settings {
     pub notes_dir: PathBuf,
     pub note_folders: Vec<PathBuf>,
     pub folder_colors: BTreeMap<PathBuf, String>,
+    #[serde(default)]
+    pub folder_labels: BTreeMap<PathBuf, String>,
     pub pinned_notes: Vec<PathBuf>,
     pub note_language_overrides: BTreeMap<PathBuf, String>,
     pub show_line_numbers: bool,
@@ -34,6 +36,7 @@ impl Settings {
             notes_dir: default_dir.clone(),
             note_folders: vec![default_dir],
             folder_colors: BTreeMap::new(),
+            folder_labels: BTreeMap::new(),
             pinned_notes: vec![],
             note_language_overrides: BTreeMap::new(),
             show_line_numbers: true,
@@ -101,6 +104,16 @@ impl Settings {
                 }
             }
         }
+        if let Some(labels) = raw["folder_labels"].as_object() {
+            for (key, value) in labels {
+                if let Some(label) = value
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty() && s.len() <= 1024)
+                {
+                    result.folder_labels.insert(path(key), label.into());
+                }
+            }
+        }
         if let Some(a) = raw["note_language_overrides"].as_object() {
             for (k, v) in a {
                 if let Some(v) = v.as_str().filter(|s| !s.is_empty()) {
@@ -164,6 +177,14 @@ impl Settings {
             self.notes_dir = path;
         }
     }
+    pub fn folder_name(&self, path: &Path) -> String {
+        self.folder_labels.get(path).cloned().unwrap_or_else(|| {
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into()
+        })
+    }
 
     pub fn remove_folder(&mut self, path: &Path) {
         if self.note_folders.len() <= 1 {
@@ -171,6 +192,7 @@ impl Settings {
         }
         self.note_folders.retain(|p| p != path);
         self.folder_colors.remove(path);
+        self.folder_labels.remove(path);
         if self.notes_dir == path {
             self.notes_dir = self.note_folders[0].clone();
         }
@@ -227,6 +249,17 @@ impl Settings {
             .iter()
             .map(|(p, v)| (rewrite(p), v.clone()))
             .collect();
+        self.folder_labels = self
+            .folder_labels
+            .iter()
+            .map(|(p, v)| (rewrite(p), v.clone()))
+            .collect();
+        if self.folder_labels.contains_key(new) {
+            self.folder_labels.insert(
+                new.to_owned(),
+                new.file_name().unwrap_or_default().to_string_lossy().into(),
+            );
+        }
         self.note_language_overrides = self
             .note_language_overrides
             .iter()

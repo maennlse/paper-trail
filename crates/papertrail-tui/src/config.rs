@@ -3,7 +3,7 @@ use papertrail_storage::atomic_write;
 use serde::{Deserialize, Serialize};
 use std::{env, fs, io, path::PathBuf};
 
-pub const HELP: &str = "Paper Trail TUI\n\nUsage: paper-trail-tui [--config FILE] [--notes-dir DIR] [--no-mouse]\n\n--config FILE     Share a specific desktop settings file (including Flatpak)\n--notes-dir DIR   Open an existing directory; never recreate a missing bookmark\n--no-mouse        Keep native terminal mouse/text selection\n--help            Show this help\n--version         Show version\n\nWithout --config, use existing native settings, then existing Linux Flatpak\nsettings, otherwise native defaults. TUI preferences are stored alongside the\nselected settings in tui.json. Press ? inside the app for keys and commands.\n";
+pub const HELP: &str = "Paper Trail TUI\n\nUsage: paper-trail-tui [--config FILE] [--notes-dir DIR] [--no-mouse]\n\n--config FILE     Share a specific desktop settings file (including Flatpak)\n--notes-dir DIR   Open an existing directory; never recreate a missing bookmark\n--no-mouse        Keep native terminal mouse/text selection\n--help            Show this help\n--version         Show version\n\nWithout --config, use existing native settings, then existing Linux Flatpak\nsettings, otherwise native defaults. TUI preferences are stored alongside the\nselected settings in tui.json. Press ? inside the app for keys and commands.\n\n:login uses device-code authentication: approve the URL/code on another device.\nIt needs no browser or forwarded port on an SSH host. :login-cancel cancels;\n:login-browser explicitly uses the local system browser instead.\nSSH/headless tokens are session-only; :unlock separately unlocks the vault.\n";
 
 #[derive(Debug)]
 pub struct Paths {

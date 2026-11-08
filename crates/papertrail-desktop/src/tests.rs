@@ -587,6 +587,207 @@ fn capture(d: &Desktop, suffix: &str) {
         .unwrap();
 }
 
+fn background_sync_is_non_intrusive(app: &adw::Application, root: &std::path::Path) {
+    use papertrail_sync::control::Outcome;
+    let gtk_settings = gtk::Settings::default().unwrap();
+    let animations = gtk_settings.property::<bool>("gtk-enable-animations");
+    gtk_settings.set_property("gtk-enable-animations", true);
+    let folder = root.join("notes");
+    let d = Desktop::with_settings(
+        app,
+        SettingsFile {
+            path: root.join("settings.json"),
+        },
+        Settings::new(folder.clone()),
+        &folder,
+    )
+    .unwrap();
+    d.window.present();
+    d.new_note().unwrap();
+    let first = d.current_path().unwrap();
+    d.buffer.set_text("Saved before the network request");
+    d.flush().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<Outcome>>();
+    *d.sync_job.borrow_mut() = Some(rx);
+    d.sync_unlocked.set(true);
+    d.sync_indicator();
+    assert!(d.window.content().unwrap().is_sensitive());
+    assert!(d.view.is_sensitive());
+    let sync = d.widget::<gtk::MenuButton>("sync_menu_button");
+    assert!(gtk::IconTheme::for_display(&d.view.display()).has_icon(
+        d.widget::<gtk::Image>("sync_icon")
+            .icon_name()
+            .unwrap()
+            .as_str()
+    ));
+    assert!(sync.is_sensitive());
+    assert!(d
+        .widget::<gtk::Image>("sync_icon")
+        .has_css_class("sync-spinning"));
+    gtk_settings.set_property("gtk-enable-animations", false);
+    assert!(!d
+        .widget::<gtk::Image>("sync_icon")
+        .has_css_class("sync-spinning"));
+    gtk_settings.set_property("gtk-enable-animations", true);
+    assert!(d.window.lookup_action("sync-status").is_none());
+    assert!(!d.window.lookup_action("sync-login").unwrap().is_enabled());
+    settle();
+    let bounds = sync.compute_bounds(&d.window).unwrap();
+    assert!(bounds.x() < 64.0);
+    assert!(bounds.y() > (d.window.height() - 100) as f32);
+    sync.popup();
+    settle();
+    assert!(sync.popover().unwrap().is_visible());
+    capture(&d, "sync-menu");
+    sync.popdown();
+    // Navigation, local saves, renames and new typing all continue during a job.
+    d.new_note().unwrap();
+    let second = d.current_path().unwrap();
+    assert_eq!(d.sync.local().unwrap().protected, vec![second.clone()]);
+    d.rename_note(&second, "renamed.txt").unwrap();
+    let renamed = d.current_path().unwrap();
+    assert_eq!(d.sync.local().unwrap().protected, vec![renamed]);
+    d.open(&first).unwrap();
+    d.buffer.set_text("Still typing during sync");
+    assert!(d.model.borrow().session.is_dirty());
+    tx.send(Err(std::io::Error::other(
+        "Network temporarily unavailable",
+    )))
+    .unwrap();
+    d.sync_poll();
+    assert!(
+        d.window.visible_dialog().is_none(),
+        "background failure opened a modal dialog"
+    );
+    assert!(d.sync_unlocked.get());
+    assert!(d.sync_error.get());
+    assert!(!d
+        .widget::<gtk::Image>("sync_icon")
+        .has_css_class("sync-spinning"));
+    assert!(d.window.lookup_action("sync-login").unwrap().is_enabled());
+    assert_eq!(d.model.borrow().session.text, "Still typing during sync");
+    // A delayed result must merge metadata, not replace current preferences or text.
+    let baseline = d.model.borrow().settings.clone();
+    let mut updated = baseline.clone();
+    updated.set_pinned(&first, true);
+    updated
+        .note_language_overrides
+        .insert(first.clone(), "python".into());
+    d.update_settings(|s| {
+        s.theme_mode = "dark".into();
+        s.note_language_overrides
+            .insert(first.clone(), "rust".into());
+    })
+    .unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    *d.sync_job.borrow_mut() = Some(rx);
+    tx.send(Ok(Outcome {
+        message: "Synced quietly".into(),
+        recovery: None,
+        synced: true,
+        unlocked: true,
+        settings_update: Some((Box::new(baseline), Box::new(updated))),
+        local_changed: false,
+    }))
+    .unwrap();
+    d.sync_poll();
+    assert_eq!(d.model.borrow().settings.theme_mode, "dark");
+    assert_eq!(
+        d.model.borrow().settings.note_language_overrides[&first],
+        "rust"
+    );
+    assert!(d.model.borrow().settings.pinned_notes.contains(&first));
+    assert_eq!(d.model.borrow().session.text, "Still typing during sync");
+    assert!(d.model.borrow().session.is_dirty());
+    assert!(d.window.visible_dialog().is_none());
+    d.sync_unlocked.set(false);
+    capture(&d, "sync-idle");
+    d.window.close();
+    settle();
+    gtk_settings.set_property("gtk-enable-animations", animations);
+}
+
+fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
+    app: &adw::Application,
+    root: &std::path::Path,
+) {
+    let a = root.join("Personal");
+    let b = root.join("Work");
+    let c = root.join("Not selected");
+    for path in [&a, &b, &c] {
+        fs::create_dir_all(path).unwrap();
+    }
+    let mut settings = Settings::new(a.clone());
+    settings.add_folder(b.clone(), false);
+    settings.add_folder(c.clone(), false);
+    let d = Desktop::with_settings(
+        app,
+        SettingsFile {
+            path: root.join("settings.json"),
+        },
+        settings,
+        &a,
+    )
+    .unwrap();
+    d.sync
+        .configure(papertrail_sync::Config {
+            version: 2,
+            server: "https://sync.example".into(),
+            issuer: "https://issuer.example".into(),
+            client_id: "public-native".into(),
+            scopes: "openid offline_access custom-audience".into(),
+            folders: vec![a.clone(), b.clone()],
+            download_dir: Some(root.join("Downloads")),
+            ..papertrail_sync::Config::default()
+        })
+        .unwrap();
+    d.choose_active(Some(&c)).unwrap();
+    d.window.present();
+    settle();
+    d.window
+        .lookup_action("sync-configure")
+        .unwrap()
+        .activate(None);
+    settle();
+    assert_eq!(
+        d.widget::<adw::EntryRow>("sync_config_server").text(),
+        "https://sync.example"
+    );
+    assert_eq!(
+        d.widget::<adw::EntryRow>("sync_config_issuer").text(),
+        "https://issuer.example"
+    );
+    assert_eq!(
+        d.widget::<adw::EntryRow>("sync_config_client").text(),
+        "public-native"
+    );
+    assert_eq!(
+        d.widget::<adw::EntryRow>("sync_config_scopes").text(),
+        "openid offline_access custom-audience"
+    );
+    capture(&d, "sync-configure-folders");
+    d.widget::<adw::EntryRow>("sync_config_scopes")
+        .set_text("openid offline_access changed-scope");
+    let dialog = d
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    dialog.emit_by_name::<()>("response", &[&"save"]);
+    dialog.close();
+    settle();
+    let config = d.sync.saved_config().unwrap().unwrap();
+    assert!(config.folders.contains(&a));
+    assert!(config.folders.contains(&b));
+    assert!(!config.folders.contains(&c));
+    assert_eq!(config.scopes, "openid offline_access changed-scope");
+    assert_eq!(config.download_dir, Some(root.join("Downloads")));
+    assert!(d.window.lookup_action("sync-status").is_none());
+    d.window.close();
+    settle();
+}
+
 #[test]
 fn desktop_workflows_use_embedded_assets_and_preserve_pending_edits() {
     adw::init().expect("GTK tests need a display (use xvfb-run)");
@@ -611,6 +812,19 @@ fn desktop_workflows_use_embedded_assets_and_preserve_pending_edits() {
     )
     .unwrap();
     for (name, _, _) in crate::actions::SHORTCUTS {
+        assert!(d.window.lookup_action(name).is_some(), "missing {name}");
+    }
+    for name in [
+        "sync-configure",
+        "sync-login",
+        "sync-create",
+        "sync-unlock",
+        "sync-recover",
+        "sync-passphrase",
+        "sync-now",
+        "sync-lock",
+        "sync-logout",
+    ] {
         assert!(d.window.lookup_action(name).is_some(), "missing {name}");
     }
     assert!(!d.window.lookup_action("delete-note").unwrap().is_enabled());
@@ -774,4 +988,9 @@ fn desktop_workflows_use_embedded_assets_and_preserve_pending_edits() {
     d.window.close();
     settle();
     startup_folder_recovery_regression(&app, &temp.path().join("startup-recovery"));
+    background_sync_is_non_intrusive(&app, &temp.path().join("background-sync"));
+    sync_configuration_prefills_and_preserves_multiple_selected_folders(
+        &app,
+        &temp.path().join("configure-folders"),
+    );
 }

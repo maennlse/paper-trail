@@ -10,6 +10,8 @@
   },
   "command": "paper-trail",
   "finish-args": [
+    "--share=network",
+    "--talk-name=org.freedesktop.secrets",
     "--share=ipc",
     "--socket=wayland",
     "--socket=fallback-x11",
