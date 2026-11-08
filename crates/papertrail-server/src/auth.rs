@@ -23,7 +23,7 @@ struct Discovery {
     introspection_endpoint: Option<String>,
     introspection_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Claims {
     iss: String,
     sub: String,
@@ -481,10 +481,24 @@ mod tests {
             assert!(!logs.contains(secret));
         }
     }
-    // Public test-only key; never used by the server or any deployment.
-    const PEM:&str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgthJmgqTUTJX1bU4H\nsqgdXtjKZA0TWG+zN02dbs+9ENehRANCAAQR6v7FRHpmqV1SiabUzgrbDqkU9Lwq\n3vkGwlyiYgmXI4f8RFu0j5Mclc7iQXgsqscixOpKlBGqxr06MQSnpiS+\n-----END PRIVATE KEY-----";
+    fn test_keys() -> &'static (EncodingKey, JwkSet) {
+        use aws_lc_rs::{
+            rand::SystemRandom,
+            signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_ASN1_SIGNING},
+        };
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        static KEYS: std::sync::OnceLock<(EncodingKey, JwkSet)> = std::sync::OnceLock::new();
+        KEYS.get_or_init(|| {
+            // Ephemeral test signing material: never stored in the repository.
+            let document = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING,&SystemRandom::new()).unwrap();
+            let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING,document.as_ref()).unwrap();
+            let public = pair.public_key().as_ref();
+            let keys = serde_json::from_value(serde_json::json!({"keys":[{"kty":"EC","crv":"P-256","x":URL_SAFE_NO_PAD.encode(&public[1..33]),"y":URL_SAFE_NO_PAD.encode(&public[33..65]),"kid":"test","alg":"ES256","use":"sig"}]})).unwrap();
+            (EncodingKey::from_ec_der(document.as_ref()),keys)
+        })
+    }
     fn keys() -> JwkSet {
-        serde_json::from_value(serde_json::json!({"keys":[{"kty":"EC","crv":"P-256","x":"Eer-xUR6ZqldUomm1M4K2w6pFPS8Kt75BsJcomIJlyM","y":"h_xEW7SPkxyVzuJBeCyqxyLE6kqUEarGvToxBKemJL4","kid":"test","alg":"ES256","use":"sig"}]})).unwrap()
+        test_keys().1.clone()
     }
     #[test]
     fn introspection_checks_active_type_issuer_audience_and_times() {
@@ -544,7 +558,7 @@ mod tests {
         let jwt = encode(
             &header,
             &serde_json::json!({"test":"access"}),
-            &EncodingKey::from_ec_pem(PEM.as_bytes()).unwrap(),
+            &test_keys().0,
         )
         .unwrap();
         let accepted = jwt.clone();
@@ -660,7 +674,7 @@ mod tests {
             .unwrap()
             .as_secs();
         let claims = serde_json::json!({"iss":"https://issuer.example","sub":"alice","aud":"papertrail-api","exp":now+300,"nbf":now-1});
-        let key = EncodingKey::from_ec_pem(PEM.as_bytes()).unwrap();
+        let key = test_keys().0.clone();
         let token = encode(&header, &claims, &key).unwrap();
         assert_eq!(
             verify(&token, "https://issuer.example", "papertrail-api", &keys())
