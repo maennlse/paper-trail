@@ -74,12 +74,40 @@ fn sync_folder_selection_is_explicit_and_account_edits_preserve_it() {
         .unwrap();
     app.command("sync-configure https://sync.example https://issuer.example native 'openid offline_access updated'").unwrap();
     let config = app.sync.saved_config().unwrap().unwrap();
-    assert_eq!(config.folders, vec![other.clone()]);
+    assert_eq!(config.folders, vec![fs::canonicalize(&other).unwrap()]);
     assert!(config.download_dir.is_some());
     assert_eq!(config.scopes, "openid offline_access updated");
     app.command("sync-folders").unwrap();
     assert!(app.path_details.as_ref().unwrap().contains("other folder"));
     assert_eq!(fs::read_to_string(other.join("keep.txt")).unwrap(), "keep");
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_selection_recognizes_directory_aliases_without_duplicate_choices() {
+    let temp = tempfile::tempdir().unwrap();
+    let real = temp.path().join("real");
+    fs::create_dir(&real).unwrap();
+    let alias = temp.path().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let mut app = app(&alias);
+    app.command("sync-configure https://sync.example https://issuer.example native")
+        .unwrap();
+    let first = app.settings.notes_dir.clone();
+    let canonical = fs::canonicalize(&first).unwrap();
+    app.command(&format!("sync-add-folder {}", canonical.display()))
+        .unwrap();
+    assert_eq!(app.sync.saved_config().unwrap().unwrap().folders.len(), 1);
+    let choices = app.sync.folder_choices(&app.settings).unwrap();
+    assert_eq!(choices.len(), 1);
+    assert!(choices[0].selected);
+    app.command(&format!("sync-remove-folder {}", canonical.display()))
+        .unwrap();
+    assert!(app.sync.saved_config().unwrap().unwrap().folders.is_empty());
+    let choices = app.sync.folder_choices(&app.settings).unwrap();
+    assert_eq!(choices.len(), 1);
+    assert!(!choices[0].selected);
+    assert!(first.is_dir());
 }
 
 #[test]

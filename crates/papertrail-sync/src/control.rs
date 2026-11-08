@@ -99,7 +99,10 @@ impl Service {
                         && path
                             .as_ref()
                             .map(|p| {
-                                config.folders.contains(p)
+                                config
+                                    .folders
+                                    .iter()
+                                    .any(|folder| crate::same_directory(folder, p))
                                     || config.folder_mappings.get(id) == Some(p)
                                     || config.selected_folders.contains(id)
                                     || (config.auto_download
@@ -119,15 +122,20 @@ impl Service {
             }
         }
         for path in settings.note_folders.iter().chain(&config.folders) {
-            if !choices
-                .iter()
-                .any(|choice| choice.path.as_ref() == Some(path))
-            {
+            if !choices.iter().any(|choice| {
+                choice
+                    .path
+                    .as_ref()
+                    .is_some_and(|p| crate::same_directory(p, path))
+            }) {
                 choices.push(crate::folders::FolderChoice {
                     id: None,
                     path: Some(path.clone()),
                     name: settings.folder_name(path),
-                    selected: config.folders.contains(path),
+                    selected: config
+                        .folders
+                        .iter()
+                        .any(|folder| crate::same_directory(folder, path)),
                     conflict: false,
                 });
             }

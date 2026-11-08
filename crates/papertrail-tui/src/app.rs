@@ -831,7 +831,9 @@ impl App {
                     config.selected_folders.remove(arg);
                     config.excluded_folders.insert(arg.into());
                     if let Some(path) = &choice.path {
-                        config.folders.retain(|p| p != path);
+                        config
+                            .folders
+                            .retain(|p| !papertrail_sync::same_directory(p, path));
                     }
                 }
                 self.sync.configure(config)?;
@@ -854,15 +856,25 @@ impl App {
                     let path = fs::canonicalize(path)?;
                     check_notes_folder(&path)?;
                     if command == "sync-add-folder" {
-                        if !config.folders.contains(&path) {
+                        if !config
+                            .folders
+                            .iter()
+                            .any(|p| papertrail_sync::same_directory(p, &path))
+                        {
                             config.folders.push(path.clone());
                         }
                     } else {
                         config.download_dir = Some(config.download_root()?);
-                        config.folders.retain(|p| p != &path);
+                        config
+                            .folders
+                            .retain(|p| !papertrail_sync::same_directory(p, &path));
                     }
                     for choice in self.sync.folder_choices(&self.settings)? {
-                        if choice.path.as_ref() == Some(&path) {
+                        if choice
+                            .path
+                            .as_ref()
+                            .is_some_and(|p| papertrail_sync::same_directory(p, &path))
+                        {
                             if let Some(id) = choice.id {
                                 if command == "sync-add-folder" {
                                     config.excluded_folders.remove(&id);

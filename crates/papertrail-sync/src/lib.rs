@@ -23,6 +23,12 @@ fn json<T: serde::de::DeserializeOwned>(response: Response) -> io::Result<T> {
 pub fn error(message: impl std::fmt::Display) -> io::Error {
     io::Error::other(message.to_string())
 }
+/// Compare existing directory aliases without changing user-facing bookmarks.
+/// Unavailable paths match only literally; do not guess identity after unmounts.
+pub fn same_directory(left: &std::path::Path, right: &std::path::Path) -> bool {
+    left == right
+        || matches!((std::fs::canonicalize(left),std::fs::canonicalize(right)),(Ok(left),Ok(right)) if left == right)
+}
 pub fn read_config(bytes: &[u8]) -> io::Result<Config> {
     let config: Config =
         serde_json::from_slice(bytes).map_err(|_| error("Invalid sync configuration"))?;
