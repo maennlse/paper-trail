@@ -14,7 +14,7 @@ no-clobber moves, and local content conflict checks. GTK4/libadwaita/GtkSourceVi
 and Ratatui are separate frontends sharing these crates. There was no server,
 network authentication or encryption before this work.
 
-**Local storage is not replaced.** UTF-8 text remains the working format, preserving
+**Local files are not replaced.** UTF-8 text remains the working format, preserving
 external-editor compatibility. Invalid UTF-8/newline normalization still follows
 the existing repository adapter; sync is for text, not arbitrary binary files.
 The encrypted format is a transport/history format, not a conversion of note files.
@@ -174,7 +174,7 @@ TUI equivalents (use `:sync-folders` to see opaque IDs):
 
 Account login and vault unlock are separate. Configure an **exact trusted OIDC
 issuer**, public native client ID(s), registered redirects, and scopes granting
-the API audience. There is no hard-coded Zitadel dependency. The issuer discovery
+the API audience. There is no hardcoded Zitadel dependency. The issuer discovery
 document supplies authorization/device-authorization/token/JWKS endpoints; insecure
 endpoints and issuer mismatches fail. GTK and optional TUI browser login use
 Authorization Code with PKCE S256 through the system browser. TUI device login uses
