@@ -3889,6 +3889,32 @@
   {
     "type": "archive",
     "archive-type": "tar-gzip",
+    "url": "https://static.crates.io/crates/rmp/rmp-0.8.15.crate",
+    "sha256": "4ba8be72d372b2c9b35542551678538b562e7cf86c3315773cae48dfbfe7790c",
+    "dest": "cargo/vendor/rmp-0.8.15"
+  },
+  {
+    "type": "inline",
+    "contents": "{\"package\": \"4ba8be72d372b2c9b35542551678538b562e7cf86c3315773cae48dfbfe7790c\", \"files\": {}}",
+    "dest": "cargo/vendor/rmp-0.8.15",
+    "dest-filename": ".cargo-checksum.json"
+  },
+  {
+    "type": "archive",
+    "archive-type": "tar-gzip",
+    "url": "https://static.crates.io/crates/rmpv/rmpv-1.3.1.crate",
+    "sha256": "7a4e1d4b9b938a26d2996af33229f0ca0956c652c1375067f0b45291c1df8417",
+    "dest": "cargo/vendor/rmpv-1.3.1"
+  },
+  {
+    "type": "inline",
+    "contents": "{\"package\": \"7a4e1d4b9b938a26d2996af33229f0ca0956c652c1375067f0b45291c1df8417\", \"files\": {}}",
+    "dest": "cargo/vendor/rmpv-1.3.1",
+    "dest-filename": ".cargo-checksum.json"
+  },
+  {
+    "type": "archive",
+    "archive-type": "tar-gzip",
     "url": "https://static.crates.io/crates/rusqlite/rusqlite-0.32.1.crate",
     "sha256": "7753b721174eb8ff87a9a0e799e2d7bc3749323e773db92e0984debb00019d6e",
     "dest": "cargo/vendor/rusqlite-0.32.1"

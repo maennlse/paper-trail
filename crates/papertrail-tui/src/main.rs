@@ -3,6 +3,8 @@ mod app;
 mod completion;
 mod config;
 mod editor;
+mod neovim;
+mod sync_folders;
 #[cfg(test)]
 mod tests;
 mod ui;
@@ -69,7 +71,10 @@ fn run(app: &mut App) -> io::Result<()> {
             return Err(io::Error::other("Termination requested"));
         }
         terminal.draw(|frame| ui::render(frame, app))?;
-        if event::poll(Duration::from_millis(100))? {
+        // Neovim redraws arrive independently of terminal input. Keep the pane
+        // responsive without requiring another key to wake the host UI.
+        let interval = if app.neovim.is_some() { 16 } else { 100 };
+        if event::poll(Duration::from_millis(interval))? {
             let result = match event::read()? {
                 Event::Key(key) if key.kind != KeyEventKind::Release => app.key(key),
                 Event::Mouse(mouse) => app.mouse(mouse),
@@ -143,13 +148,17 @@ fn main() -> io::Result<()> {
     }));
     let mut app = App::new(config::Paths::discover(args)?)?;
     let result = run(&mut app);
-    if result.is_err() && app.session.is_dirty() {
+    if result.is_err() {
+        // The embedded editor can have a final change queued even when the
+        // host's last observed snapshot was clean. Flush pulls it before exit.
         eprintln!("Terminal error; trying to save pending edits...");
         if let Err(error) = app.flush() {
             eprintln!("Could not save edits: {error}");
-            match save_recovery(&app.session.text) {
-                Ok(path) => eprintln!("Pending text recovered to {}", path.display()),
-                Err(error) => eprintln!("Could not write recovery copy: {error}"),
+            if app.session.is_dirty() {
+                match save_recovery(&app.session.text) {
+                    Ok(path) => eprintln!("Pending text recovered to {}", path.display()),
+                    Err(error) => eprintln!("Could not write recovery copy: {error}"),
+                }
             }
         }
     }

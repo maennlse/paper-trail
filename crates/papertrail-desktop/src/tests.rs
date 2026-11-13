@@ -8,8 +8,111 @@ use sourceview5::prelude::*;
 use std::{
     fs,
     rc::Rc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+#[derive(Debug)]
+struct UiDiagnostic {
+    level: glib::LogLevel,
+    domain: String,
+    message: String,
+}
+type UiDiagnostics = Arc<Mutex<Vec<UiDiagnostic>>>;
+
+fn record_ui_diagnostics() -> UiDiagnostics {
+    let diagnostics = UiDiagnostics::default();
+    let recorded = diagnostics.clone();
+    // GTK uses structured logging. Always forward to GLib's normal writer: this
+    // checks application warnings without hiding renderer/platform diagnostics.
+    glib::log_set_writer_func(move |level, fields| {
+        let value = |key| {
+            fields
+                .iter()
+                .find(|field| field.key() == key)
+                .and_then(|field| field.value_str())
+                .unwrap_or("")
+        };
+        let domain = value("GLIB_DOMAIN");
+        if matches!(level, glib::LogLevel::Warning | glib::LogLevel::Critical)
+            && matches!(domain, "Gtk" | "Adwaita" | "Gdk")
+        {
+            if let Ok(mut diagnostics) = recorded.lock() {
+                diagnostics.push(UiDiagnostic {
+                    level,
+                    domain: domain.into(),
+                    message: value("MESSAGE").into(),
+                });
+            }
+        }
+        glib::log_writer_default(level, fields)
+    });
+    diagnostics
+}
+
+fn assert_no_application_diagnostics(d: &Desktop, diagnostics: &UiDiagnostics) {
+    let recorded = diagnostics.lock().unwrap();
+    let failures: Vec<_> = recorded
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.level == glib::LogLevel::Critical
+                || (matches!(diagnostic.domain.as_str(), "Gtk" | "Adwaita")
+                    && (diagnostic.message.contains("Trying to measure")
+                        || diagnostic
+                            .message
+                            .contains("can only be placed into GtkListBox")))
+        })
+        .collect();
+    for diagnostic in &failures {
+        if let Some(pointer) = diagnostic
+            .message
+            .split_whitespace()
+            .find(|word| word.starts_with("0x"))
+        {
+            if let Some(mut widget) = descendant(d.window.upcast_ref(), &|widget| {
+                format!("{:p}", widget.as_ptr()) == pointer
+            }) {
+                eprintln!(
+                    "Diagnostic allocation: {}x{}, margins top/bottom {}/{}, request mode {:?}",
+                    widget.width(),
+                    widget.height(),
+                    widget.margin_top(),
+                    widget.margin_bottom(),
+                    widget.request_mode()
+                );
+                let mut child = widget.first_child();
+                while let Some(item) = child {
+                    eprintln!(
+                        "Diagnostic child: {} {}x{}",
+                        item.type_().name(),
+                        item.width(),
+                        item.height()
+                    );
+                    child = item.next_sibling();
+                }
+                let mut path = Vec::new();
+                loop {
+                    path.push(
+                        widget
+                            .buildable_id()
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|| widget.type_().name().into()),
+                    );
+                    let Some(parent) = widget.parent() else {
+                        break;
+                    };
+                    widget = parent;
+                }
+                path.reverse();
+                eprintln!("Diagnostic widget: {}", path.join("/"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "Application GTK diagnostics: {failures:#?}"
+    );
+}
 
 fn settle() {
     let context = glib::MainContext::default();
@@ -749,6 +852,9 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
         .unwrap()
         .activate(None);
     settle();
+    assert!(!d
+        .widget::<adw::SwitchRow>("sync_config_discovery")
+        .is_active());
     assert_eq!(
         d.widget::<adw::EntryRow>("sync_config_server").text(),
         "https://sync.example"
@@ -788,8 +894,236 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
     settle();
 }
 
+fn sync_discovery_trust_is_explicit(app: &adw::Application, root: &std::path::Path) {
+    let notes = root.join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    let d = Desktop::with_settings(
+        app,
+        SettingsFile {
+            path: root.join("settings.json"),
+        },
+        Settings::new(notes.clone()),
+        &notes,
+    )
+    .unwrap();
+    d.window.present();
+    settle();
+    d.window
+        .lookup_action("sync-configure")
+        .unwrap()
+        .activate(None);
+    settle();
+    assert!(d
+        .widget::<adw::SwitchRow>("sync_config_discovery")
+        .is_active());
+    assert!(!d
+        .widget::<adw::EntryRow>("sync_config_issuer")
+        .is_sensitive());
+    d.window.visible_dialog().unwrap().close();
+    settle();
+    let config = papertrail_sync::Config {
+        server: "https://sync.example".into(),
+        issuer: "https://issuer.example".into(),
+        client_id: "native".into(),
+        scopes: "openid offline_access".into(),
+        discover_auth: true,
+        folders: vec![notes],
+        ..papertrail_sync::Config::default()
+    };
+    d.sync_confirm_discovered(config.clone(), None, vec![]);
+    settle();
+    let dialog = d
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert!(dialog.body().contains("https://sync.example"));
+    assert!(dialog.body().contains("https://issuer.example"));
+    assert!(!d.sync.configured());
+    dialog.emit_by_name::<()>("response", &[&"cancel"]);
+    dialog.close();
+    settle();
+    assert!(!d.sync.configured());
+    d.sync_confirm_discovered(config, None, vec![]);
+    settle();
+    let dialog = d
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    dialog.emit_by_name::<()>("response", &[&"accept"]);
+    dialog.close();
+    settle();
+    let saved = d.sync.saved_config().unwrap().unwrap();
+    assert!(saved.discover_auth);
+    d.sync_confirm_discovered(saved.clone(), Some(saved.clone()), vec![]);
+    settle();
+    assert!(d.window.visible_dialog().is_none());
+    let mut changed = saved.clone();
+    changed.issuer = "https://new-issuer.example".into();
+    d.sync_confirm_discovered(changed, Some(saved.clone()), vec![]);
+    settle();
+    let dialog = d
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert!(dialog.body().contains("Previously accepted"));
+    dialog.emit_by_name::<()>("response", &[&"cancel"]);
+    dialog.close();
+    settle();
+    assert!(d.sync.saved_config().unwrap().unwrap() == saved);
+    d.window.close();
+    settle();
+}
+
+fn transient_dialog_regressions(app: &adw::Application, root: &std::path::Path) {
+    let notes = root.join("Original notes");
+    fs::create_dir_all(&notes).unwrap();
+    let file = notes.join("keep.txt");
+    fs::write(&file, "Keep this note").unwrap();
+    let d = Desktop::with_settings(
+        app,
+        SettingsFile {
+            path: root.join("settings.json"),
+        },
+        Settings::new(notes.clone()),
+        &notes,
+    )
+    .unwrap();
+    let mut config = papertrail_sync::Config {
+        server: "https://sync.example".into(),
+        issuer: "https://issuer.example".into(),
+        client_id: "native".into(),
+        scopes: "openid offline_access".into(),
+        folders: vec![notes.clone()],
+        ..papertrail_sync::Config::default()
+    };
+    d.sync.configure(config.clone()).unwrap();
+    d.window.present();
+    settle();
+
+    let footer = d.widget::<gtk::Widget>("sync_footer");
+    let button = d.widget::<gtk::Widget>("sync_menu_button");
+    assert_eq!(footer.halign(), gtk::Align::Fill);
+    assert_eq!((footer.margin_top(), footer.margin_bottom()), (6, 10));
+    assert_eq!(button.halign(), gtk::Align::Center);
+    let bounds = button.compute_bounds(&footer).unwrap();
+    assert!((bounds.x() + bounds.width() / 2.0 - footer.width() as f32 / 2.0).abs() <= 1.0);
+
+    d.window
+        .lookup_action("sync-configure")
+        .unwrap()
+        .activate(None);
+    settle();
+    let original_row = d.widget::<adw::EntryRow>("sync_config_server");
+    original_row.set_text("https://discard-this-edit.example");
+    assert!(d
+        .builder
+        .object::<adw::EntryRow>("sync_config_server")
+        .is_none());
+    let first = d.window.visible_dialog().unwrap();
+    first.close();
+    // Reopen before the previous closing animation finishes. Its closed signal
+    // must not clear this newer dialog's rows or retain the cancelled values.
+    d.window
+        .lookup_action("sync-configure")
+        .unwrap()
+        .activate(None);
+    settle();
+    let current_row = d.widget::<adw::EntryRow>("sync_config_server");
+    assert_ne!(original_row, current_row);
+    assert_eq!(current_row.text(), "https://sync.example");
+    assert!(d.sync.saved_config().unwrap().unwrap() == config);
+    d.window.visible_dialog().unwrap().close();
+    wait_until(|| d.sync_config_widgets.borrow().is_none());
+
+    config.scopes = "openid offline_access updated".into();
+    d.sync.configure(config.clone()).unwrap();
+    d.window
+        .lookup_action("sync-configure")
+        .unwrap()
+        .activate(None);
+    settle();
+    assert_eq!(
+        d.widget::<adw::EntryRow>("sync_config_scopes").text(),
+        config.scopes
+    );
+    let dialog = d
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    dialog.emit_by_name::<()>("response", &[&"save"]);
+    dialog.close();
+    wait_until(|| d.sync_config_widgets.borrow().is_none());
+    let saved = d.sync.saved_config().unwrap().unwrap();
+    assert_eq!(saved.scopes, config.scopes);
+    config = saved;
+
+    // EntryRow needs the PreferencesGroup's native ListBox parent. Reopening
+    // Edit Folder must keep that hierarchy and leave cancelled edits untouched.
+    let edit = d.edit_folder(notes.clone());
+    settle();
+    let entry = descendant(edit.upcast_ref(), &|widget| widget.is::<adw::EntryRow>())
+        .unwrap()
+        .downcast::<adw::EntryRow>()
+        .unwrap();
+    assert!(entry.parent().unwrap().is::<gtk::ListBox>());
+    entry.set_text("Cancelled name");
+    let cancel = descendant(edit.upcast_ref(), &|widget| {
+        widget
+            .downcast_ref::<gtk::Button>()
+            .is_some_and(|button| button.label().as_deref() == Some("Cancel"))
+    })
+    .unwrap()
+    .downcast::<gtk::Button>()
+    .unwrap();
+    cancel.emit_clicked();
+    wait_until(|| !edit.is_visible());
+    assert!(notes.is_dir());
+    assert!(!root.join("Cancelled name").exists());
+
+    let edit = d.edit_folder(notes.clone());
+    settle();
+    let entry = descendant(edit.upcast_ref(), &|widget| widget.is::<adw::EntryRow>())
+        .unwrap()
+        .downcast::<adw::EntryRow>()
+        .unwrap();
+    assert_eq!(entry.text(), "Original notes");
+    assert!(entry.parent().unwrap().is::<gtk::ListBox>());
+    let color_class = papertrail_core::colors::css_class("preset-4");
+    descendant(edit.upcast_ref(), &|widget| {
+        widget.is::<gtk::ToggleButton>() && widget.has_css_class(&color_class)
+    })
+    .unwrap()
+    .downcast::<gtk::ToggleButton>()
+    .unwrap()
+    .set_active(true);
+    descendant(edit.upcast_ref(), &|widget| {
+        widget
+            .downcast_ref::<gtk::Button>()
+            .is_some_and(|button| button.label().as_deref() == Some("Save"))
+    })
+    .unwrap()
+    .downcast::<gtk::Button>()
+    .unwrap()
+    .emit_clicked();
+    wait_until(|| !edit.is_visible());
+    assert_eq!(d.model.borrow().settings.folder_colors[&notes], "preset-4");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "Keep this note");
+    assert!(d.sync.saved_config().unwrap().unwrap() == config);
+    d.window.close();
+    settle();
+}
+
 #[test]
 fn desktop_workflows_use_embedded_assets_and_preserve_pending_edits() {
+    let diagnostics = record_ui_diagnostics();
     adw::init().expect("GTK tests need a display (use xvfb-run)");
     gio::resources_register_include!("papertrail.gresource").unwrap();
     let app = adw::Application::builder()
@@ -834,6 +1168,7 @@ fn desktop_workflows_use_embedded_assets_and_preserve_pending_edits() {
     );
     d.window.present();
     settle();
+    assert_no_application_diagnostics(&d, &diagnostics);
     capture(&d, "");
     d.new_note().unwrap();
     let first = d.current_path().unwrap();
@@ -993,4 +1328,7 @@ fn desktop_workflows_use_embedded_assets_and_preserve_pending_edits() {
         &app,
         &temp.path().join("configure-folders"),
     );
+    sync_discovery_trust_is_explicit(&app, &temp.path().join("discovery-trust"));
+    transient_dialog_regressions(&app, &temp.path().join("transient-dialogs"));
+    assert_no_application_diagnostics(&d, &diagnostics);
 }

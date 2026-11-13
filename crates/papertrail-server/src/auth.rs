@@ -83,6 +83,11 @@ pub fn https(url: &str) -> bool {
     })
 }
 impl Authenticator {
+    /// The same exact issuer used by token validation, not a second setting.
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
     pub async fn discover(issuer: String, audience: String) -> Result<Self, &'static str> {
         Self::discover_with_mode(issuer, audience, TokenValidation::Jwt).await
     }
@@ -441,6 +446,130 @@ pub fn verify(
 mod tests {
     use super::*;
     use jsonwebtoken::{encode, EncodingKey, Header};
+    #[tokio::test]
+    async fn public_native_config_reuses_validator_issuer_and_never_exposes_server_credentials() {
+        use axum::{body::Body, http::Request};
+        use http_body_util::BodyExt;
+        use std::{path::Path, sync::Arc};
+        use tower::ServiceExt;
+        let auth = Authenticator {
+            issuer: "https://existing-issuer.example/tenant".into(),
+            audience: "SERVER_AUDIENCE_PRIVATE".into(),
+            client: reqwest::Client::new(),
+            validator: Validator::Introspection {
+                endpoint: "https://existing-issuer.example/introspect".into(),
+                client_id: "CONFIDENTIAL_CLIENT_ID".into(),
+                client_secret: Zeroizing::new("CONFIDENTIAL_CLIENT_SECRET".into()),
+            },
+        };
+        let mut server = Arc::new(
+            crate::Server::open(Path::new(":memory:"), Some(auth))
+                .unwrap()
+                .with_native_client(Some(
+                    crate::NativeClientConfig::new(
+                        "public-native".into(),
+                        "openid offline_access provider:api".into(),
+                    )
+                    .unwrap(),
+                )),
+        );
+        let response = crate::router(server.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/auth/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert!(response.headers().contains_key("x-request-id"));
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"issuer":"https://existing-issuer.example/tenant", "client_id":"public-native", "scope":"openid offline_access provider:api"})
+        );
+        let body = std::str::from_utf8(&bytes).unwrap();
+        for secret in [
+            "SERVER_AUDIENCE_PRIVATE",
+            "CONFIDENTIAL_CLIENT_ID",
+            "CONFIDENTIAL_CLIENT_SECRET",
+            "introspect",
+            "access_token",
+            "refresh_token",
+            "vault",
+            "private_key",
+        ] {
+            assert!(!body.contains(secret), "leaked {secret}");
+        }
+        for path in [
+            "/v1/identity",
+            "/v1/vault",
+            "/v1/changes",
+            "/v1/export",
+            "/v1/account",
+        ] {
+            let response = crate::router(server.clone())
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 401, "unprotected {path}");
+        }
+        for method in ["POST", "PUT", "DELETE"] {
+            assert_eq!(
+                crate::router(server.clone())
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri("/v1/auth/config")
+                            .body(Body::empty())
+                            .unwrap()
+                    )
+                    .await
+                    .unwrap()
+                    .status(),
+                405
+            );
+        }
+        Arc::get_mut(&mut server).unwrap().native_client = None;
+        let response = crate::router(server)
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/auth/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 503);
+        assert!(response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .is_empty());
+        // An incomplete existing deployment still starts and serves a safe error.
+        let server = Arc::new(crate::Server::open(Path::new(":memory:"), None).unwrap());
+        let response = crate::router(server)
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/auth/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 503);
+        assert!(response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .is_empty());
+    }
     #[test]
     fn rejection_logs_are_specific_and_never_include_claim_values() {
         let logs = crate::logging::tests::capture(|| {

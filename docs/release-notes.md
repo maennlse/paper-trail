@@ -33,6 +33,12 @@ multi-folder catalog. See [encrypted sync setup and security boundaries](https:/
   Windows builds use the static C runtime plus Windows system DLLs. macOS builds
   link only Apple system libraries dynamically. No GTK, Python, or Rust install
   is needed to run the TUI; external editing requires a separate editor.
+- **Sync server:** choose `paper-trail-server-<target>.tar.gz` (Linux/macOS) or
+  `.zip` (Windows), for the same six x86_64/ARM64 targets as the TUI. Linux builds
+  are fully static; Windows uses the static CRT and system DLLs; macOS uses only
+  Apple system libraries dynamically. SQLite and cryptography are bundled, but an
+  OIDC provider and HTTPS reverse proxy must be configured separately. Each archive
+  includes deployment guidance and no credentials or database.
 
 Documentation is included in the archives. `SHA256SUMS` and per-asset `.sha256`
 files are attached. macOS/Windows binaries are not signed or notarized.

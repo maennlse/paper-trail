@@ -29,8 +29,25 @@ the server does not hold the decryption key. Local-only use needs no account.
   when desktop and terminal share notes.
 - **Feel at home.** Native desktop dialogs, light/dark appearance, fonts, zoom,
   find/replace, and printing.
-- **Work from the terminal.** Vim-style editing, your external editor, instant
+- **Work from the terminal.** Built-in Vim-style editing or optional embedded
+  [real Neovim](docs/tui.md#embedded-neovim-optional), your external editor, instant
   previews, mouse navigation, and command completion—without GTK.
+
+## See it in action
+
+### Native GNOME desktop
+
+![Paper Trail desktop showing colored folders, pinned notes, and the plain-text editor](data/screenshots/gtk-editor.png)
+
+### Terminal client
+
+![Paper Trail TUI showing matching folder colors, All notes, and an editor preview](data/screenshots/tui.png)
+
+The [interactive sync-folder checklist](data/screenshots/tui-sync-folders.png)
+keeps selection inside the terminal: open `:sync-folders`, toggle with Space or a
+click, then Enter to save or Esc to cancel. Unselecting never deletes notes.
+
+Screenshots show the actual applications with isolated demonstration notes.
 
 ## Get Paper Trail
 
@@ -57,6 +74,25 @@ extensionless notes, work too; existing notes and settings need no conversion.
 
 If a saved folder becomes unavailable, Paper Trail retains its bookmark and
 metadata and lets you restore access. It does not move or delete your notes.
+
+## Build local downloads
+
+```sh
+python3 build-aux/build_local.py
+```
+
+Choose Desktop, TUI, Server, or all supported components, then confirm the build.
+The interactive helper writes archives and checksums to a fresh directory under
+`dist/local/`, without installing tools or overwriting earlier output.
+
+For unattended builds:
+
+```sh
+python3 build-aux/build_local.py --components tui,server --non-interactive
+```
+
+Native builds are clearly labeled; verified standalone packages require the
+matching toolchain. See [local build options and prerequisites](docs/building.md#local-build-artifacts-interactive).
 
 ## Explore further
 

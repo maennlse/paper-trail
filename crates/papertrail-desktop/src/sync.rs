@@ -466,6 +466,11 @@ impl Desktop {
             }
         };
         let bound = state.as_ref().is_some_and(|s| !s.vault_id.is_empty());
+        // Configure Sync is rebuilt from current state on every opening. Its
+        // transient rows must not reuse names in the permanent window builder.
+        let config_widgets = gtk::Builder::new();
+        self.sync_config_widgets
+            .replace(Some(config_widgets.clone()));
         let dialog = adw::AlertDialog::new(Some("Configure Encrypted Sync"),Some("Choose folders to sync. Unchecking keeps local and remote notes. Mapping a different directory copies notes there without removing the originals; close its open notes first. Server/account settings are fixed once a vault is bound."));
         let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
         let group = adw::PreferencesGroup::new();
@@ -475,6 +480,11 @@ impl Desktop {
         server.set_text(initial.as_ref().map(|c| c.server.as_str()).unwrap_or(""));
         server.set_editable(!bound);
         group.add(&server);
+        let discovery = adw::SwitchRow::new();
+        discovery.set_title("Discover authentication from sync server");
+        discovery.set_subtitle("Turn off for manual configuration or older servers");
+        discovery.set_active(initial.as_ref().is_none_or(|c| c.discover_auth));
+        group.add(&discovery);
         let issuer = adw::EntryRow::new();
         issuer.set_title("Exact HTTPS OIDC issuer");
         issuer.set_text(initial.as_ref().map(|c| c.issuer.as_str()).unwrap_or(""));
@@ -494,6 +504,13 @@ impl Desktop {
                 .unwrap_or("openid offline_access"),
         );
         group.add(&scopes);
+        for row in [&issuer, &client, &scopes] {
+            discovery
+                .bind_property("active", row, "sensitive")
+                .invert_boolean()
+                .sync_create()
+                .build();
+        }
         content.append(&group);
         for (id, row) in [
             ("sync_config_server", &server),
@@ -501,8 +518,9 @@ impl Desktop {
             ("sync_config_client", &client),
             ("sync_config_scopes", &scopes),
         ] {
-            self.builder.expose_object(id, row);
+            config_widgets.expose_object(id, row);
         }
+        config_widgets.expose_object("sync_config_discovery", &discovery);
         let downloads = adw::EntryRow::new();
         downloads.set_title("New remote folders are downloaded into");
         let root = initial
@@ -646,6 +664,7 @@ impl Desktop {
                 config.issuer = issuer.text().trim().into();
                 config.client_id = client.text().trim().into();
                 config.scopes = scopes.text().into();
+                config.discover_auth = discovery.is_active();
                 config.download_dir = Some(downloads.text().trim().into());
                 config.folders.clear();
                 config.auto_download = auto_download.is_active();
@@ -664,31 +683,153 @@ impl Desktop {
                     }
                     if selected.is_active() {
                         if let Some(path) = &*path.borrow() {
-                            if !config.folders.contains(path) {config.folders.push(path.clone());}
-                        }
-                    }
-                }
-                for (id,row,options) in &legacy_rows {
-                    if let Some((folder,_)) = row.selected().checked_sub(1).and_then(|i|options.get(i as usize)) {
-                        config.legacy_note_mappings.insert(id.clone(),folder.clone());
-                    }
-                }
-                match d.sync.configure(config) {
-                    Ok(()) => {
-                        for (id,accept) in &conflicts {
-                            if accept.is_active() {
-                                if let Err(e) = d.sync.accept_remote_folder(id,&d.model.borrow().settings) {d.error(&e);return;}
+                            if !config.folders.contains(path) {
+                                config.folders.push(path.clone());
                             }
                         }
-                        *d.sync_status.borrow_mut() =
-                            "Configuration saved. Sign in/unlock if needed; selected folders will sync.".into();
-                        d.sync_indicator();
-                        d.schedule_sync();
                     }
-                    Err(e) => d.error(&e),
+                }
+                for (id, row, options) in &legacy_rows {
+                    if let Some((folder, _)) = row
+                        .selected()
+                        .checked_sub(1)
+                        .and_then(|i| options.get(i as usize))
+                    {
+                        config
+                            .legacy_note_mappings
+                            .insert(id.clone(), folder.clone());
+                    }
+                }
+                let accepted = conflicts
+                    .iter()
+                    .filter(|(_, accept)| accept.is_active())
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                if config.discover_auth {
+                    d.sync_discover(config, initial.clone(), accepted);
+                } else {
+                    d.sync_save_configuration(config, initial.as_ref(), &accepted);
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        dialog.connect_closed(move |_| {
+            if let Some(d) = weak.upgrade() {
+                // An older dialog may finish its closing animation after a new
+                // one opens. Do not discard the new dialog's widget registry.
+                let current = d.sync_config_widgets.borrow().as_ref() == Some(&config_widgets);
+                if current {
+                    d.sync_config_widgets.replace(None);
                 }
             }
         });
         dialog.present(Some(&self.window));
+    }
+
+    fn sync_save_configuration(
+        &self,
+        config: papertrail_sync::Config,
+        previous: Option<&papertrail_sync::Config>,
+        accepted: &[String],
+    ) {
+        let result = (|| {
+            if self.sync.saved_config()?.as_ref() != previous {
+                return Err(io::Error::other(
+                    "Sync configuration changed during setup; reopen Configure Sync",
+                ));
+            }
+            self.sync.configure(config)?;
+            for id in accepted {
+                self.sync
+                    .accept_remote_folder(id, &self.model.borrow().settings)?;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                *self.sync_status.borrow_mut() =
+                    "Configuration saved. Sign in/unlock if needed; selected folders will sync."
+                        .into();
+                self.sync_indicator();
+                self.schedule_sync();
+            }
+            Err(e) => self.error(&e),
+        }
+    }
+
+    fn sync_discover(
+        self: &Rc<Self>,
+        config: papertrail_sync::Config,
+        previous: Option<papertrail_sync::Config>,
+        accepted: Vec<String>,
+    ) {
+        let progress = adw::AlertDialog::new(
+            Some("Discovering Authentication"),
+            Some("Contacting the sync server and validating its identity provider…"),
+        );
+        progress.add_response("cancel", "Cancel");
+        progress.set_close_response("cancel");
+        let cancelled = Rc::new(std::cell::Cell::new(false));
+        let flag = cancelled.clone();
+        progress.connect_response(None, move |_, _| flag.set(true));
+        progress.present(Some(&self.window));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(papertrail_sync::auth::config::prepare(config));
+        });
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            let Some(d) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if cancelled.get() {
+                return glib::ControlFlow::Break;
+            }
+            let result = match rx.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(_) => Err(io::Error::other(
+                    "Authentication discovery worker disconnected",
+                )),
+            };
+            progress.close();
+            match result {
+                Err(e) => d.error(&e),
+                Ok(config) => d.sync_confirm_discovered(config, previous.clone(), accepted.clone()),
+            }
+            glib::ControlFlow::Break
+        });
+    }
+    pub(crate) fn sync_confirm_discovered(
+        self: &Rc<Self>,
+        config: papertrail_sync::Config,
+        previous: Option<papertrail_sync::Config>,
+        accepted: Vec<String>,
+    ) {
+        if papertrail_sync::auth::config::needs_confirmation(previous.as_ref(), &config) {
+            let confirm = adw::AlertDialog::new(
+                Some("Trust This Identity Provider?"),
+                Some(&papertrail_sync::auth::config::trust_description(
+                    previous.as_ref(),
+                    &config,
+                )),
+            );
+            confirm.set_body_use_markup(false);
+            confirm.add_response("cancel", "Cancel");
+            confirm.add_response("accept", "Trust Identity Provider");
+            confirm.set_close_response("cancel");
+            confirm.set_default_response(Some("cancel"));
+            let weak = Rc::downgrade(self);
+            confirm.connect_response(None, move |_, response| {
+                if response == "accept" {
+                    if let Some(d) = weak.upgrade() {
+                        d.sync_save_configuration(config.clone(), previous.as_ref(), &accepted);
+                    }
+                }
+            });
+            confirm.present(Some(&self.window));
+        } else {
+            self.sync_save_configuration(config, previous.as_ref(), &accepted);
+        }
     }
 }

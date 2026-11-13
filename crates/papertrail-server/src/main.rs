@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use papertrail_server::{
     auth::{Authenticator, TokenValidation},
-    router, Server,
+    router, NativeClientConfig, Server,
 };
 use std::{net::SocketAddr, path::Path, sync::Arc};
 use zeroize::Zeroizing;
@@ -38,6 +38,7 @@ fn token_validation() -> Result<TokenValidation, Box<dyn std::error::Error>> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|a| a == "--help") {
         println!("paper-trail-server [--verbose|-v]\nRequired: PAPERTRAIL_OIDC_ISSUER, PAPERTRAIL_API_AUDIENCE\nOptional: PAPERTRAIL_DATABASE (papertrail.sqlite3), PAPERTRAIL_LISTEN (127.0.0.1:8787)\nPAPERTRAIL_TOKEN_VALIDATION: jwt (default, RFC 9068 at+jwt) or introspection (RFC 7662; ZITADEL-compatible).\nIntrospection requires PAPERTRAIL_INTROSPECTION_CLIENT_ID and PAPERTRAIL_INTROSPECTION_CLIENT_SECRET_FILE (server-only API credentials).\nLogging: stderr, info by default; --verbose/-v enables server debug logs. RUST_LOG overrides the filter (e.g. warn,papertrail_server=debug).\nRequires an HTTPS reverse proxy. Only loopback listen addresses are accepted.\nNever use an ID token as an API credential.");
+        println!("Native authentication discovery (optional): PAPERTRAIL_NATIVE_CLIENT_ID (public native client, never the introspection client), PAPERTRAIL_NATIVE_SCOPES (default: openid offline_access; add provider-specific API scopes). GET /v1/auth/config returns 503 until a native client ID is configured. The issuer is reused from PAPERTRAIL_OIDC_ISSUER; PAPERTRAIL_API_AUDIENCE remains server-only.");
         return Ok(());
     }
     let verbose = std::env::args()
@@ -73,10 +74,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !address.ip().is_loopback() {
         return Err("Use a loopback listener behind an HTTPS reverse proxy".into());
     }
+    let native_client = match std::env::var("PAPERTRAIL_NATIVE_CLIENT_ID") {
+        Ok(id) => Some(NativeClientConfig::new(
+            id,
+            match std::env::var("PAPERTRAIL_NATIVE_SCOPES") {
+                Ok(scopes) => scopes,
+                Err(std::env::VarError::NotPresent) => "openid offline_access".into(),
+                Err(_) => return Err("Invalid PAPERTRAIL_NATIVE_SCOPES".into()),
+            },
+        )?),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(_) => return Err("Invalid PAPERTRAIL_NATIVE_CLIENT_ID".into()),
+    };
     let auth = Authenticator::discover_with_mode(issuer, audience, token_validation()?).await?;
     let path = std::env::var("PAPERTRAIL_DATABASE").unwrap_or("papertrail.sqlite3".into());
     tracing::debug!(target: "papertrail_server", "Opening database");
-    let server = Arc::new(Server::open(Path::new(&path), Some(auth))?);
+    let server =
+        Arc::new(Server::open(Path::new(&path), Some(auth))?.with_native_client(native_client));
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(target: "papertrail_server", %address, "Encrypted sync listening; HTTPS reverse proxy required");
     axum::serve(listener, router(server))

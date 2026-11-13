@@ -17,6 +17,32 @@ use std::sync::{Arc, Mutex};
 pub struct Server {
     db: Mutex<Connection>,
     pub auth: Option<auth::Authenticator>,
+    native_client: Option<NativeClientConfig>,
+}
+/// Public native-client settings. Never populate this from introspection credentials.
+#[derive(Serialize)]
+pub struct NativeClientConfig {
+    client_id: String,
+    scope: String,
+}
+impl NativeClientConfig {
+    pub fn new(client_id: String, scope: String) -> Result<Self, &'static str> {
+        if client_id.trim().is_empty()
+            || client_id.len() > 1024
+            || client_id.chars().any(char::is_control)
+            || scope.len() > 8192
+            || !scope.split(' ').any(|s| s == "openid")
+            || scope.split(' ').any(|s| {
+                s.is_empty()
+                    || !s.bytes().all(|b| {
+                        b == 0x21 || (0x23..=0x5b).contains(&b) || (0x5d..=0x7e).contains(&b)
+                    })
+            })
+        {
+            return Err("Invalid public native client ID or scopes (openid is required)");
+        }
+        Ok(Self { client_id, scope })
+    }
 }
 type ApiResult<T> = Result<T, StatusCode>;
 impl Server {
@@ -38,13 +64,50 @@ impl Server {
         Ok(Self {
             db: Mutex::new(db),
             auth,
+            native_client: None,
         })
+    }
+    pub fn with_native_client(mut self, native_client: Option<NativeClientConfig>) -> Self {
+        self.native_client = native_client;
+        self
     }
 }
 pub fn router(server: Arc<Server>) -> Router {
     routes(server.clone())
-        .layer(middleware::from_fn_with_state(server, authenticate))
+        // Preserve the protected router's fallback when merging a public route.
+        .fallback(|| async { StatusCode::NOT_FOUND })
+        .layer(middleware::from_fn_with_state(server.clone(), authenticate))
+        // Merge after applying authentication: only this read-only route is public.
+        .merge(
+            Router::new()
+                .route("/v1/auth/config", get(auth_config))
+                .with_state(server),
+        )
         .layer(middleware::from_fn(logging::request))
+}
+async fn auth_config(State(server): State<Arc<Server>>) -> ApiResult<Json<serde_json::Value>> {
+    let auth = server
+        .auth
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let native = server
+        .native_client
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    if !auth::https(auth.issuer())
+        || auth.issuer().len() > 4096
+        || auth
+            .issuer()
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+        || reqwest::Url::parse(auth.issuer()).is_ok_and(|url| url.query().is_some())
+    {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    // Explicit allowlist: never serialize Authenticator, its audience, or credentials.
+    Ok(Json(serde_json::json!({
+        "issuer": auth.issuer(), "client_id": native.client_id, "scope": native.scope,
+    })))
 }
 // Separate from authentication only to allow deterministic authorization tests.
 fn routes(server: Arc<Server>) -> Router {

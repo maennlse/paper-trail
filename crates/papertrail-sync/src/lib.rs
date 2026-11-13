@@ -43,6 +43,10 @@ pub struct Config {
     pub issuer: String,
     pub client_id: String,
     pub scopes: String,
+    /// Opt-in for existing profiles. `issuer` is the issuer explicitly accepted
+    /// for `server`; discovery must never replace it during authentication.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub discover_auth: bool,
     pub folders: Vec<PathBuf>,
     #[serde(default)]
     pub download_dir: Option<PathBuf>,
@@ -68,6 +72,7 @@ impl Default for Config {
             issuer: String::new(),
             client_id: String::new(),
             scopes: String::new(),
+            discover_auth: false,
             folders: Vec::new(),
             download_dir: None,
             folder_mappings: Default::default(),
@@ -145,14 +150,15 @@ impl Config {
     }
 }
 pub fn https(url: &str) -> bool {
-    reqwest::Url::parse(url).is_ok_and(|u| {
-        u.scheme() == "https"
-            && u.host_str().is_some()
-            && u.username().is_empty()
-            && u.password().is_none()
-            && u.fragment().is_none()
-            && u.query().is_none()
-    })
+    !url.chars().any(|c| c.is_control() || c.is_whitespace())
+        && reqwest::Url::parse(url).is_ok_and(|u| {
+            u.scheme() == "https"
+                && u.host_str().is_some()
+                && u.username().is_empty()
+                && u.password().is_none()
+                && u.fragment().is_none()
+                && u.query().is_none()
+        })
 }
 pub fn http() -> io::Result<Client> {
     Client::builder()

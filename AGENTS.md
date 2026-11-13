@@ -51,9 +51,9 @@ Run `meson compile -C _build` for packaging regressions. Regenerate
 `cargo-sources.json` after lockfile changes using
 `python3 build-aux/generate_flatpak_sources.py`.
 
-Release builds reuse `.github/workflows/rust.yml` and `tui.yml` from the
+Release builds reuse `.github/workflows/rust.yml`, `tui.yml`, and `server.yml` from the
 tag-triggered `release.yml`. Keep write permissions confined to the publish job
-and require all eight checksum-verified packages before publishing. Run release
+and require all fourteen checksum-verified packages before publishing. Run release
 helper tests with `python3 -m unittest discover -s build-aux -p test_release.py`.
 Creating/pushing version tags and publishing releases require explicit user intent;
 see `docs/releases.md`.

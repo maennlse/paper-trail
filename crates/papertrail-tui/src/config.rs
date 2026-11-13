@@ -77,6 +77,16 @@ impl Paths {
 pub struct Preferences {
     pub hide_numbers: bool,
     pub folder_width: u16,
+    pub editor: EditorBackend,
+    pub nvim_clean: bool,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EditorBackend {
+    #[default]
+    Builtin,
+    Neovim,
 }
 
 impl Default for Preferences {
@@ -84,6 +94,8 @@ impl Default for Preferences {
         Self {
             hide_numbers: false,
             folder_width: 16,
+            editor: EditorBackend::Builtin,
+            nvim_clean: false,
         }
     }
 }

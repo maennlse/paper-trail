@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use crate::{
-    config::{Paths, Preferences},
+    config::{EditorBackend, Paths, Preferences},
     editor::{Editor, Mode},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -40,6 +40,7 @@ pub enum PromptKind {
     RecoverVault,
     ChangePassphrase,
     ConfirmRecovery,
+    ConfirmIssuer,
 }
 impl PromptKind {
     pub fn secret(self) -> bool {
@@ -55,7 +56,14 @@ pub struct Prompt {
     pub completion: crate::completion::Completion,
 }
 
+struct DiscoveryJob {
+    result: std::sync::mpsc::Receiver<io::Result<papertrail_sync::Config>>,
+    previous: Option<papertrail_sync::Config>,
+}
+
 pub struct App {
+    discovery_job: Option<DiscoveryJob>,
+    pub(crate) pending_auth: Option<(papertrail_sync::Config, Option<papertrail_sync::Config>)>,
     pub sync: Service,
     pub sync_job: Option<std::sync::mpsc::Receiver<io::Result<Outcome>>>,
     pub sync_unlocked: bool,
@@ -75,9 +83,12 @@ pub struct App {
     pub preferences: Preferences,
     pub session: Session,
     pub editor: Editor,
+    pub neovim: Option<crate::neovim::Neovim>,
     pub notes: Vec<Note>,
     pub note_index: usize,
     pub folder_index: usize,
+    pub folder_all_selected: bool,
+    pub sync_folders: Option<crate::sync_folders::Picker>,
     pub all: bool,
     pub focus: Focus,
     pub prompt: Option<Prompt>,
@@ -112,6 +123,8 @@ impl App {
         let preferences_path = file.path.with_file_name("tui.json");
         let preferences = Preferences::load(&preferences_path)?;
         let mut app = Self {
+            discovery_job: None,
+            pending_auth: None,
             sync: if session_only_login() {
                 Service::new_session_only(&file.path)
             } else {
@@ -131,6 +144,8 @@ impl App {
                 .iter()
                 .position(|p| *p == settings.notes_dir)
                 .unwrap_or(0),
+            folder_all_selected: false,
+            sync_folders: None,
             settings,
             home: paths.home,
             baseline,
@@ -139,6 +154,7 @@ impl App {
             preferences,
             session: Session::default(),
             editor: Editor::default(),
+            neovim: None,
             notes: vec![],
             note_index: 0,
             all: false,
@@ -166,6 +182,14 @@ impl App {
                 recovery.unavailable.display(),
                 recovery.fallback.display()
             );
+        }
+        if app.preferences.editor == EditorBackend::Neovim
+            && app.neovim.is_none()
+            && app.session.current.is_none()
+        {
+            if let Err(error) = app.start_neovim(app.preferences.nvim_clean) {
+                app.status = format!("{error}. Built-in editor active for this session; F2 opens Paper Trail commands");
+            }
         }
         Ok(app)
     }
@@ -238,14 +262,26 @@ impl App {
         self.preferences.save(&self.preferences_path)
     }
     pub fn flush(&mut self) -> io::Result<()> {
+        self.synchronize_neovim()?;
+        self.flush_observed()
+    }
+    fn flush_observed(&mut self) -> io::Result<()> {
+        let dirty = self.session.is_dirty();
         self.session.flush(&Repository)?;
         self.autosave_paused = false;
+        if dirty {
+            if let Some(neovim) = &mut self.neovim {
+                neovim.mark_saved();
+            }
+        }
         Ok(())
     }
     pub fn tick(&mut self) -> io::Result<()> {
+        self.poll_neovim()?;
         self.sync_poll()?;
         if self.sync_unlocked
             && self.sync_job.is_none()
+            && self.sync_folders.is_none()
             && self.sync_last.elapsed() > std::time::Duration::from_secs(30)
         {
             self.sync_now()?;
@@ -254,7 +290,7 @@ impl App {
             return Ok(());
         }
         if !self.autosave_paused && self.session.save_due(Instant::now()) {
-            if let Err(error) = self.flush() {
+            if let Err(error) = self.flush_observed() {
                 self.autosave_paused = true;
                 return Err(error);
             }
@@ -269,14 +305,156 @@ impl App {
             self.session.edit(text, Instant::now());
         }
     }
+    fn observe_neovim(&mut self, text: String) {
+        if text != self.session.text && self.session.current.is_some() {
+            self.editor.set_text(&text);
+            self.session.edit(text, Instant::now());
+        }
+    }
+    fn start_neovim(&mut self, clean: bool) -> io::Result<()> {
+        let path = self
+            .session
+            .current
+            .as_ref()
+            .map(|note| note.path.as_path());
+        #[cfg(not(test))]
+        let mut candidate = crate::neovim::Neovim::start(clean, path, &self.session.text)?;
+        #[cfg(test)]
+        let mut candidate = crate::neovim::Neovim::start_isolated(
+            clean,
+            path,
+            &self.session.text,
+            &self.home.join("nvim-test"),
+        )?;
+        if self.session.is_dirty() {
+            candidate.mark_dirty()?;
+        }
+        self.neovim = Some(candidate);
+        self.poll_neovim()
+    }
+    fn load_neovim_note(&mut self) {
+        let result = if let Some(neovim) = &mut self.neovim {
+            neovim.load(
+                self.session
+                    .current
+                    .as_ref()
+                    .map(|note| note.path.as_path()),
+                &self.session.text,
+            )
+        } else if self.preferences.editor == EditorBackend::Neovim {
+            self.start_neovim(self.preferences.nvim_clean)
+        } else {
+            Ok(())
+        };
+        if let Err(error) = result {
+            self.neovim = None;
+            self.status = format!(
+                "{error}. Text retained in the built-in editor; F2 :set editor neovim retries"
+            );
+        }
+    }
+    fn synchronize_neovim(&mut self) -> io::Result<()> {
+        self.poll_neovim()?;
+        if let Some(neovim) = &mut self.neovim {
+            match neovim.snapshot() {
+                Ok(text) => self.observe_neovim(text),
+                Err(error) => {
+                    // Drain anything already observed before stopping a stalled
+                    // child. Do not replace the host text or write a stale copy.
+                    let _ = self.poll_neovim();
+                    self.neovim = None;
+                    self.autosave_paused = true;
+                    return Err(io::Error::other(format!("{error}. Latest observed text is retained in the built-in editor; retry the Paper Trail command or choose clean configuration")));
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn poll_neovim(&mut self) -> io::Result<()> {
+        let Some(neovim) = &mut self.neovim else {
+            return Ok(());
+        };
+        let update = neovim.poll();
+        let mut failed = None;
+        for event in update.events {
+            match event {
+                crate::neovim::Event::Text(text) => {
+                    if self.neovim.as_ref().and_then(|nvim| nvim.path.as_deref())
+                        == self
+                            .session
+                            .current
+                            .as_ref()
+                            .map(|note| note.path.as_path())
+                    {
+                        self.observe_neovim(text);
+                    }
+                }
+                crate::neovim::Event::Write(request) => {
+                    let matches = self.neovim.as_ref().is_some_and(|nvim| {
+                        nvim.owns_buffer(request.buffer)
+                            && nvim.path.as_deref()
+                                == self
+                                    .session
+                                    .current
+                                    .as_ref()
+                                    .map(|note| note.path.as_path())
+                    });
+                    let result = if matches && self.session.current.is_some() {
+                        self.observe_neovim(request.text);
+                        // :write is an explicit write even with unchanged text:
+                        // still validate the host's baseline against disk.
+                        if !self.session.is_dirty() {
+                            self.session.edit(self.session.text.clone(), Instant::now());
+                        }
+                        // Do not query a Neovim that is waiting synchronously for
+                        // this response. The request already carries its snapshot.
+                        self.session.flush(&Repository)
+                    } else {
+                        Err(io::Error::other(
+                            "Select the note in Paper Trail before writing it",
+                        ))
+                    };
+                    if let Err(error) = &result {
+                        self.autosave_paused = true;
+                        failed = Some(error.to_string());
+                    } else {
+                        self.autosave_paused = false;
+                    }
+                    if let Some(neovim) = &mut self.neovim {
+                        neovim.reply_write(request.id, result)?;
+                    }
+                }
+            }
+        }
+        if update.closed {
+            self.neovim = None;
+            self.autosave_paused = true;
+            self.focus = Focus::Notes;
+            return Err(io::Error::other("Neovim closed. Latest observed edits are retained; F2 :w saves, :reload! discards, or Enter restarts Neovim"));
+        }
+        if let Some(error) = failed {
+            return Err(io::Error::other(error));
+        }
+        Ok(())
+    }
     pub fn paste(&mut self, text: &str) {
-        if self.sync_blocks_input() || self.device_details {
+        if self.sync_blocks_input() || self.device_details || self.sync_folders.is_some() {
             return;
         }
         if let Some(prompt) = &mut self.prompt {
             prompt.completion.reset();
             // Pasting a command never executes it; require an explicit Enter.
             prompt.text.extend(text.chars().filter(|c| !c.is_control()));
+        } else if self.focus == Focus::Editor && self.neovim.is_some() {
+            if self.session.current.is_none() {
+                self.status = "F2 then new NAME creates a note before pasting".into();
+                return;
+            }
+            if let Some(neovim) = &mut self.neovim {
+                if let Err(error) = neovim.paste(text) {
+                    self.status = error.to_string();
+                }
+            }
         } else if self.focus == Focus::Editor
             && self.editor.mode == Mode::Insert
             && self.session.current.is_some()
@@ -295,8 +473,14 @@ impl App {
                 .iter()
                 .position(|p| p == folder)
                 .unwrap_or(0);
+            self.folder_all_selected = self.all;
         }
         self.focus = Focus::Editor;
+        if self.neovim.is_none() && self.preferences.editor == EditorBackend::Neovim {
+            if let Err(error) = self.start_neovim(self.preferences.nvim_clean) {
+                self.status = format!("{error}. Built-in editor active");
+            }
+        }
         Ok(())
     }
 
@@ -309,8 +493,10 @@ impl App {
         {
             return Ok(());
         }
+        self.flush()?;
         self.session.open(&Repository, path)?;
         self.editor.set_text(&self.session.text);
+        self.load_neovim_note();
         self.autosave_paused = false;
         Ok(())
     }
@@ -321,6 +507,9 @@ impl App {
         } else {
             self.session.close(&Repository)?;
             self.editor.set_text("");
+            if self.neovim.is_some() {
+                self.load_neovim_note();
+            }
         }
         Ok(())
     }
@@ -342,6 +531,7 @@ impl App {
         self.flush()?;
         self.settings.notes_dir = folder;
         self.folder_index = index;
+        self.folder_all_selected = false;
         self.all = false;
         self.query.clear();
         self.focus = Focus::Notes;
@@ -369,7 +559,42 @@ impl App {
         Ok(())
     }
 
+    pub fn folder_cursor(&self) -> usize {
+        if self.folder_all_selected {
+            0
+        } else {
+            self.folder_index + 1
+        }
+    }
+    fn set_folder_cursor(&mut self, row: usize) {
+        self.folder_all_selected = row == 0;
+        if row > 0 {
+            self.folder_index = (row - 1).min(self.settings.note_folders.len().saturating_sub(1));
+        }
+    }
+    fn activate_folder_row(&mut self, row: usize) -> io::Result<()> {
+        if row == 0 {
+            self.flush()?;
+            self.all = true;
+            self.query.clear();
+            self.folder_all_selected = true;
+            self.focus = Focus::Notes;
+            self.editor.mode = Mode::Normal;
+            self.editor.pending = None;
+            self.editor.area.cancel_selection();
+            self.refresh()
+        } else {
+            self.select_folder(row - 1)
+        }
+    }
+
     pub fn mouse(&mut self, event: MouseEvent) -> io::Result<()> {
+        if let Some(picker) = &mut self.sync_folders {
+            if self.mouse_enabled {
+                picker.mouse(event);
+            }
+            return Ok(());
+        }
         if self.sync_blocks_input() || self.recovery_key.is_some() || self.device_details {
             return Ok(());
         }
@@ -390,13 +615,41 @@ impl App {
             return Ok(());
         };
         let rect = self.panes[pane];
+        if pane != 2
+            && self.focus == Focus::Editor
+            && self.neovim.is_some()
+            && event.kind == MouseEventKind::Down(MouseButton::Left)
+        {
+            self.synchronize_neovim()?;
+        }
+        if pane == 2 {
+            if let Some(neovim) = &mut self.neovim {
+                let inner = rect.inner(ratatui::layout::Margin::new(1, 1));
+                if inner.contains(point) {
+                    if matches!(
+                        event.kind,
+                        MouseEventKind::Down(_) | MouseEventKind::Drag(_)
+                    ) {
+                        self.focus = Focus::Editor;
+                    }
+                    neovim.mouse(
+                        event.kind,
+                        event.row - inner.y,
+                        event.column - inner.x,
+                        event.modifiers,
+                    )?;
+                }
+                return Ok(());
+            }
+        }
         if step != 0 {
             match pane {
                 0 => {
-                    self.folder_index = self
-                        .folder_index
+                    let row = self
+                        .folder_cursor()
                         .saturating_add_signed(step as isize)
-                        .min(self.settings.note_folders.len().saturating_sub(1))
+                        .min(self.settings.note_folders.len());
+                    self.set_folder_cursor(row);
                 }
                 1 => {
                     self.select_note(
@@ -417,7 +670,7 @@ impl App {
                 let row = usize::from(event.row - inner.y);
                 match pane {
                     0 => {
-                        self.select_folder(self.folder_state.offset() + row)?;
+                        self.activate_folder_row(self.folder_state.offset() + row)?;
                         self.focus = Focus::Folders;
                         return Ok(());
                     }
@@ -447,6 +700,9 @@ impl App {
             .ok_or_else(|| io::Error::other("Open a note first"))
     }
     pub fn reload(&mut self, discard: bool) -> io::Result<()> {
+        if !discard {
+            self.synchronize_neovim()?;
+        }
         if self.session.is_dirty() && !discard {
             return Err(io::Error::other(
                 "Unsaved changes. Use :saveas PATH, or :reload! to discard explicitly.",
@@ -457,6 +713,7 @@ impl App {
         self.autosave_paused = false;
         self.session.open(&Repository, &note.path)?;
         self.editor.set_text(&self.session.text);
+        self.load_neovim_note();
         Ok(())
     }
     fn new_note(&mut self, name: &str) -> io::Result<()> {
@@ -469,6 +726,9 @@ impl App {
         self.open(&note.path)?;
         self.refresh()?;
         self.editor.mode = Mode::Insert;
+        if let Some(neovim) = &mut self.neovim {
+            neovim.input("i")?;
+        }
         Ok(())
     }
     fn start_prompt(&mut self, kind: PromptKind) {
@@ -490,6 +750,27 @@ impl App {
         Ok(())
     }
     pub fn key(&mut self, key: KeyEvent) -> io::Result<()> {
+        self.poll_neovim()?;
+        if self.sync_folders.is_some() {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
+                return self.finish(false);
+            }
+            let action = self.sync_folders.as_mut().unwrap().key(key);
+            match action {
+                crate::sync_folders::Action::Save => {
+                    self.sync_folders.as_ref().unwrap().save(&self.sync)?;
+                    self.sync_folders = None;
+                    self.status =
+                        "Sync folder selection saved; local and remote notes were kept".into();
+                }
+                crate::sync_folders::Action::Cancel => {
+                    self.sync_folders = None;
+                    self.status = "Sync folder selection cancelled; configuration unchanged".into();
+                }
+                crate::sync_folders::Action::None => (),
+            }
+            return Ok(());
+        }
         if self.device_cancel.is_some()
             && key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('c')
@@ -543,6 +824,32 @@ impl App {
         }
         if self.prompt.is_some() {
             return self.prompt_key(key);
+        }
+        if key.code == KeyCode::F(2) && key.modifiers.is_empty() {
+            if let Some(neovim) = &mut self.neovim {
+                // This is also the recovery shortcut when the child/queue is
+                // stalled. Never prevent opening host commands on an RPC error.
+                let _ = neovim.input("<Esc>");
+            }
+            self.start_prompt(PromptKind::Command);
+            return Ok(());
+        }
+        if key.code == KeyCode::F(6)
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            self.synchronize_neovim()?;
+            return self.switch_pane(key.modifiers.contains(KeyModifiers::SHIFT));
+        }
+        if self.focus == Focus::Editor {
+            if let Some(neovim) = &mut self.neovim {
+                if self.session.current.is_none() {
+                    self.status = "F2 then new NAME creates a note".into();
+                    return Ok(());
+                }
+                return neovim.key(key);
+            }
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
@@ -609,8 +916,9 @@ impl App {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.focus == Focus::Folders {
-                    self.folder_index = (self.folder_index + 1)
-                        .min(self.settings.note_folders.len().saturating_sub(1));
+                    self.set_folder_cursor(
+                        (self.folder_cursor() + 1).min(self.settings.note_folders.len()),
+                    );
                 } else {
                     self.select_note(
                         (self.note_index + 1).min(self.notes.len().saturating_sub(1)),
@@ -619,14 +927,14 @@ impl App {
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.focus == Focus::Folders {
-                    self.folder_index = self.folder_index.saturating_sub(1);
+                    self.set_folder_cursor(self.folder_cursor().saturating_sub(1));
                 } else {
                     self.select_note(self.note_index.saturating_sub(1))?;
                 }
             }
             KeyCode::Enter => {
                 if self.focus == Focus::Folders {
-                    self.select_folder(self.folder_index)?;
+                    self.activate_folder_row(self.folder_cursor())?;
                 } else if let Some(path) = self.notes.get(self.note_index).map(|n| n.path.clone()) {
                     self.open(&path)?;
                 }
@@ -645,7 +953,25 @@ impl App {
         Ok(())
     }
     fn prompt_key(&mut self, key: KeyEvent) -> io::Result<()> {
+        if self
+            .prompt
+            .as_ref()
+            .is_some_and(|p| p.kind == PromptKind::ConfirmIssuer)
+        {
+            match key.code {
+                KeyCode::PageDown => {
+                    self.help_scroll = self.help_scroll.saturating_add(5);
+                    return Ok(());
+                }
+                KeyCode::PageUp => {
+                    self.help_scroll = self.help_scroll.saturating_sub(5);
+                    return Ok(());
+                }
+                _ => (),
+            }
+        }
         if key.code == KeyCode::Esc {
+            self.pending_auth = None;
             if let Some(prompt) = &mut self.prompt {
                 if prompt.kind.secret() {
                     prompt.text.zeroize();
@@ -693,6 +1019,9 @@ impl App {
                         self.session.discard_deleted(&path);
                         self.settings.delete_note(&path);
                         self.editor.set_text("");
+                        if self.neovim.is_some() {
+                            self.load_neovim_note();
+                        }
                         self.focus = Focus::Notes;
                         self.persist()?;
                         self.refresh()?;
@@ -718,6 +1047,17 @@ impl App {
                     } else {
                         SyncCommand::Lock
                     })?;
+                }
+                PromptKind::ConfirmIssuer => {
+                    if let Some((config, previous)) = self.pending_auth.take() {
+                        if prompt.text == "yes" {
+                            self.save_discovered(config, previous.as_ref())?;
+                        } else {
+                            self.status =
+                                "Identity provider not accepted; sync configuration unchanged"
+                                    .into();
+                        }
+                    }
                 }
             }
         } else if let Some(prompt) = &mut self.prompt {
@@ -746,19 +1086,44 @@ impl App {
         self.refresh()
     }
     pub fn command(&mut self, input: &str) -> io::Result<()> {
+        self.synchronize_neovim()?;
         let (command, arg) = input.trim().split_once(' ').unwrap_or((input.trim(), ""));
         let arg = arg.trim();
         match command {
             "sync-configure" => {
                 let parts = shell_words::split(arg).map_err(io::Error::other)?;
-                if parts.len() < 3 || parts.len() > 4 {
-                    return Err(io::Error::other("Usage: :sync-configure HTTPS_SERVER HTTPS_ISSUER PUBLIC_CLIENT_ID 'openid offline_access API_SCOPE'; the quoted scopes argument is optional; do not type square brackets"));
+                if !matches!(parts.len(), 1 | 3 | 4) {
+                    return Err(io::Error::other("Usage: :sync-configure HTTPS_SERVER (discovery), or :sync-configure HTTPS_SERVER HTTPS_ISSUER PUBLIC_CLIENT_ID 'openid offline_access API_SCOPE' (manual; scopes optional)"));
                 }
+                if self.sync_job.is_some() {
+                    return Err(io::Error::other(
+                        "Wait for the current sync operation before configuring authentication",
+                    ));
+                }
+                // Replacing/dropping a discovery receiver discards stale worker results.
+                self.discovery_job = None;
+                self.pending_auth = None;
                 let saved = self.sync.saved_config()?;
                 let fresh = saved.is_none();
-                let mut config = saved.unwrap_or_default();
+                let mut config = saved.clone().unwrap_or_default();
                 config.version = 2;
                 config.server = parts[0].clone();
+                if fresh {
+                    config.folders = vec![self.settings.notes_dir.clone()];
+                }
+                if parts.len() == 1 {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(papertrail_sync::auth::config::prepare(config));
+                    });
+                    self.discovery_job = Some(DiscoveryJob {
+                        result: rx,
+                        previous: saved,
+                    });
+                    self.status = "Discovering authentication; editing remains available. :sync-discovery-cancel cancels".into();
+                    return Ok(());
+                }
+                config.discover_auth = false;
                 config.issuer = parts[1].clone();
                 config.client_id = parts[2].clone();
                 config.scopes = parts.get(3).cloned().unwrap_or_else(|| {
@@ -768,36 +1133,30 @@ impl App {
                         config.scopes.clone()
                     }
                 });
-                if fresh {
-                    config.folders = vec![self.settings.notes_dir.clone()];
-                }
                 self.sync.configure(config)?;
                 self.status =
                     "Sync configured for active folder. :login, then :create-vault or :unlock"
                         .into();
             }
+            "sync-discovery-cancel" => {
+                self.discovery_job = None;
+                self.pending_auth = None;
+                self.status = "Authentication discovery cancelled; configuration unchanged".into();
+            }
             "sync-folders" => {
-                let choices = self.sync.folder_choices(&self.settings)?;
-                self.path_details = Some(
-                    choices
-                        .iter()
-                        .map(|f| {
-                            format!(
-                                "[{}] {}\n  ID: {}\n  Local: {}",
-                                if f.selected { "x" } else { " " },
-                                f.name,
-                                f.id.as_deref().unwrap_or("not registered yet"),
-                                f.path
-                                    .as_ref()
-                                    .map(|p| p.display().to_string())
-                                    .unwrap_or_else(|| "automatic download directory".into())
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n\n"),
-                );
-                self.help = true;
-                self.help_scroll = 0;
+                if self.sync_job.is_some()
+                    || self.discovery_job.is_some()
+                    || self.pending_auth.is_some()
+                {
+                    return Err(io::Error::other("Wait for the current sync/sign-in/discovery operation before selecting folders"));
+                }
+                self.sync_folders = Some(crate::sync_folders::Picker::open(
+                    &self.sync,
+                    &self.settings,
+                )?);
+                self.help = false;
+                self.path_details = None;
+                self.status = "Choose sync folders: Space/click toggles, Enter saves, Esc cancels. No notes are deleted.".into();
             }
             "sync-auto-download" => {
                 let mut config = self
@@ -905,9 +1264,9 @@ impl App {
                 } else {
                     let path = fs::canonicalize(&parts[1])?;
                     check_notes_folder(&path)?;
-                    if self.focus == Focus::Editor {
+                    if self.focus == Focus::Editor || self.neovim.is_some() {
                         return Err(io::Error::other(
-                            "Leave the editor before changing folder mappings",
+                            "Leave the editor and close embedded Neovim (:q), or select the built-in backend, before changing folder mappings",
                         ));
                     }
                     self.flush()?;
@@ -1002,6 +1361,7 @@ impl App {
                 self.sync.relocate(&old, &note.path)?;
                 self.settings.rename_note(&old, &note.path);
                 self.session.current = Some(note);
+                self.load_neovim_note();
                 self.persist()?;
                 self.refresh()?;
             }
@@ -1015,6 +1375,7 @@ impl App {
                 self.settings.rename_note(&old, &note.path);
                 self.session.current = Some(note.clone());
                 self.open(&note.path)?;
+                self.load_neovim_note();
                 self.persist()?;
                 self.refresh()?;
             }
@@ -1029,6 +1390,7 @@ impl App {
                     .iter()
                     .position(|p| *p == self.settings.notes_dir)
                     .unwrap_or(0);
+                self.folder_all_selected = false;
                 self.all = false;
                 self.query.clear();
                 self.focus = Focus::Notes;
@@ -1048,11 +1410,17 @@ impl App {
                 self.settings.remove_folder(&folder);
                 self.settings.notes_dir = next;
                 self.folder_index = 0;
+                self.folder_all_selected = false;
                 self.focus = Focus::Notes;
                 self.refresh()?;
                 self.persist()?;
             }
             "folder-up" | "folder-down" => {
+                if self.folder_all_selected {
+                    return Err(io::Error::other(
+                        "Select a specific folder before reordering; All stays first",
+                    ));
+                }
                 let index = self.folder_index;
                 let next = if command == "folder-up" {
                     index.saturating_sub(1)
@@ -1064,9 +1432,7 @@ impl App {
                 self.persist()?;
             }
             "all" => {
-                self.all = true;
-                self.focus = Focus::Notes;
-                self.refresh()?;
+                self.activate_folder_row(0)?;
             }
             "pin" => {
                 let path = self.current_path()?;
@@ -1090,6 +1456,7 @@ impl App {
             "edit" => {
                 self.flush()?;
                 self.current_path()?;
+                self.neovim = None;
                 self.external = true;
             }
             "reload" | "reload!" => {
@@ -1112,11 +1479,33 @@ impl App {
                 }
                 self.current_path()?;
                 let text = self.editor.text().replace(&parts[0], &parts[1]);
-                self.editor.replace_text(&text);
-                self.sync_edit();
+                if let Some(neovim) = &mut self.neovim {
+                    neovim.replace(&text)?;
+                } else {
+                    self.editor.replace_text(&text);
+                    self.sync_edit();
+                }
             }
             "set" => {
                 match arg {
+                    "editor neovim" => {
+                        self.flush()?;
+                        if self.neovim.is_none() { self.start_neovim(self.preferences.nvim_clean)?; }
+                        self.preferences.editor = EditorBackend::Neovim;
+                        self.status = "Embedded Neovim enabled. F2: Paper Trail commands · F6: panes; : belongs to Neovim in the editor".into();
+                    }
+                    "editor builtin" => {
+                        self.flush()?;
+                        self.neovim = None;
+                        self.preferences.editor = EditorBackend::Builtin;
+                        self.status = "Built-in editor enabled".into();
+                    }
+                    "nvim-config clean" | "nvim-config user" => {
+                        let clean = arg == "nvim-config clean";
+                        self.flush()?;
+                        if self.neovim.is_some() { self.start_neovim(clean)?; }
+                        self.preferences.nvim_clean = clean;
+                    }
                     "number" => self.preferences.hide_numbers = false,
                     "nonumber" => self.preferences.hide_numbers = true,
                     _ if arg.starts_with("folder-width ") => {
@@ -1131,14 +1520,24 @@ impl App {
                     }
                     _ => {
                         return Err(io::Error::other(
-                            "Use :set number, nonumber, or folder-width N (10–30)",
+                            "Use :set editor builtin/neovim, nvim-config clean/user, number/nonumber, or folder-width N (10–30)",
                         ))
                     }
                 }
                 self.preferences.save(&self.preferences_path)?;
             }
             "path" => {
-                self.status = if self.focus == Focus::Folders {
+                self.status = if self.focus == Focus::Folders && self.folder_all_selected {
+                    format!(
+                        "All notes across bookmarked folders:\n{}",
+                        self.settings
+                            .note_folders
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )
+                } else if self.focus == Focus::Folders {
                     self.settings
                         .note_folders
                         .get(self.folder_index)
@@ -1167,13 +1566,29 @@ impl App {
     }
 
     fn sync_start(&mut self, command: SyncCommand) -> io::Result<()> {
+        if (self.discovery_job.is_some()
+            || self.pending_auth.is_some()
+            || self.sync_folders.is_some())
+            && !matches!(&command, SyncCommand::Lock | SyncCommand::Logout)
+        {
+            return Err(io::Error::other(if self.sync_folders.is_some() {
+                "Save or cancel :sync-folders first"
+            } else {
+                "Finish or cancel authentication discovery first"
+            }));
+        }
         if self.sync_job.is_some() {
             return Err(io::Error::other("Sync operation already running"));
         }
         // Lock/sign-out must remain available even if a local note cannot save.
         // They do not discard the editor buffer or change plaintext note files.
         if !matches!(&command, SyncCommand::Lock | SyncCommand::Logout) {
-            self.flush()?;
+            if matches!(&command, SyncCommand::Sync { .. }) {
+                self.poll_neovim()?;
+                self.flush_observed()?;
+            } else {
+                self.flush()?;
+            }
             self.persist()?;
         }
         let message = match &command {
@@ -1225,12 +1640,33 @@ impl App {
                 .session
                 .current
                 .as_ref()
-                .filter(|_| self.focus == Focus::Editor)
+                .filter(|_| self.focus == Focus::Editor || self.neovim.is_some())
                 .map(|n| vec![n.path.clone()])
                 .unwrap_or_default(),
         })
     }
     fn sync_poll(&mut self) -> io::Result<()> {
+        // Do not replace a command/secret prompt the user is currently typing.
+        let discovered = self
+            .discovery_job
+            .as_ref()
+            .filter(|_| self.prompt.is_none() && self.sync_folders.is_none())
+            .and_then(|job| match job.result.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(_) => Some(Err(io::Error::other(
+                    "Authentication discovery worker disconnected",
+                ))),
+            });
+        if let Some(result) = discovered {
+            let previous = self.discovery_job.take().unwrap().previous;
+            match result {
+                Ok(config) => {
+                    self.confirm_discovered(config, previous)?;
+                }
+                Err(e) => self.status = e.to_string(),
+            }
+        }
         if let Some(rx) = &self.device_notifications {
             while let Ok(prompt) = rx.try_recv() {
                 if self
@@ -1268,7 +1704,10 @@ impl App {
                         .file
                         .load(self.settings.notes_dir.clone(), &self.home)?;
                     self.baseline = self.settings.clone();
-                    if self.focus != Focus::Editor {
+                    if self.focus != Focus::Editor
+                        && self.neovim.is_none()
+                        && !self.session.is_dirty()
+                    {
                         self.session = Session::default();
                     }
                     self.refresh()?;
@@ -1298,6 +1737,38 @@ impl App {
         if let Some(command) = after_login {
             self.sync_start(command)?;
         }
+        Ok(())
+    }
+    pub(crate) fn confirm_discovered(
+        &mut self,
+        config: papertrail_sync::Config,
+        previous: Option<papertrail_sync::Config>,
+    ) -> io::Result<()> {
+        if papertrail_sync::auth::config::needs_confirmation(previous.as_ref(), &config) {
+            self.pending_auth = Some((config, previous));
+            self.help = false;
+            self.device_details = false;
+            self.path_details = None;
+            self.help_scroll = 0;
+            self.start_prompt(PromptKind::ConfirmIssuer);
+        } else {
+            self.save_discovered(config, previous.as_ref())?;
+        }
+        Ok(())
+    }
+    fn save_discovered(
+        &mut self,
+        config: papertrail_sync::Config,
+        previous: Option<&papertrail_sync::Config>,
+    ) -> io::Result<()> {
+        if self.sync.saved_config()?.as_ref() != previous {
+            return Err(io::Error::other(
+                "Sync configuration changed during discovery; run :sync-configure SERVER again",
+            ));
+        }
+        self.sync.configure(config)?;
+        self.status =
+            "Authentication configuration accepted. :login, then :create-vault or :unlock".into();
         Ok(())
     }
     fn folder_arg(&self, arg: &str) -> io::Result<PathBuf> {

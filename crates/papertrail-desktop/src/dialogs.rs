@@ -475,7 +475,7 @@ impl Desktop {
             rows.append(&row);
         }
     }
-    pub fn edit_folder(self: &Rc<Self>, path: PathBuf) {
+    pub fn edit_folder(self: &Rc<Self>, path: PathBuf) -> adw::Window {
         let window = adw::Window::builder()
             .title("Edit Folder")
             .transient_for(&self.window)
@@ -493,7 +493,9 @@ impl Desktop {
             .title("Name")
             .text(path.file_name().unwrap_or_default().to_string_lossy())
             .build();
-        content.append(&name);
+        let name_group = adw::PreferencesGroup::new();
+        name_group.add(&name);
+        content.append(&name_group);
         content.append(&label("Color", &["heading"]));
         let selected = self
             .model
@@ -644,5 +646,6 @@ impl Desktop {
         content.append(&actions);
         window.set_content(Some(&content));
         window.present();
+        window
     }
 }

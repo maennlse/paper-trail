@@ -36,6 +36,7 @@ pub struct Desktop {
     pub sync_error: Cell<bool>,
     pub window: adw::ApplicationWindow,
     pub builder: gtk::Builder,
+    pub(crate) sync_config_widgets: RefCell<Option<gtk::Builder>>,
     pub view: sourceview5::View,
     pub buffer: sourceview5::Buffer,
     pub search: sourceview5::SearchContext,
@@ -135,6 +136,7 @@ impl Desktop {
             sync_error: Cell::new(false),
             window,
             builder,
+            sync_config_widgets: RefCell::new(None),
             view,
             buffer,
             search,
@@ -196,6 +198,12 @@ impl Desktop {
     pub fn widget<T: IsA<glib::Object>>(&self, id: &str) -> T {
         self.builder
             .object(id)
+            .or_else(|| {
+                self.sync_config_widgets
+                    .borrow()
+                    .as_ref()
+                    .and_then(|builder| builder.object(id))
+            })
             .unwrap_or_else(|| panic!("Missing widget: {id}"))
     }
     pub fn error(&self, error: &dyn std::fmt::Display) {

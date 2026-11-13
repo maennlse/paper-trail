@@ -23,18 +23,24 @@ jobs:
 
   tui:
     needs: validate
-    uses: ./.github/workflows/tui.yml
+    uses: $/.github/workflows/tui.yml
     permissions:
       contents: read
 
   gtk:
     needs: validate
-    uses: ./.github/workflows/rust.yml
+    uses: $/.github/workflows/rust.yml
+    permissions:
+      contents: read
+
+  server:
+    needs: validate
+    uses: $/.github/workflows/server.yml
     permissions:
       contents: read
 
   publish:
-    needs: [validate, tui, gtk]
+    needs: [validate, tui, gtk, server]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -47,7 +53,7 @@ jobs:
           pattern: paper-trail-*
           path: downloaded-artifacts
           merge-multiple: false
-      - name: Validate all eight packages and collect release assets
+      - name: Validate all fourteen packages and collect release assets
         run: >-
           python3 build-aux/prepare_release.py collect
           downloaded-artifacts dist/release
