@@ -157,7 +157,7 @@ mod tests {
             client_id: public().client_id,
             scopes: public().scope,
             discover_auth: true,
-            folders: vec![std::path::PathBuf::from("/notes")],
+            folders: vec![std::env::temp_dir().join("papertrail-test-notes")],
             ..Config::default()
         }
     }
@@ -199,7 +199,7 @@ mod tests {
         );
         let mut candidate = Config {
             server: "https://sync.example/base".into(),
-            folders: vec![std::path::PathBuf::from("/notes")],
+            folders: vec![std::env::temp_dir().join("papertrail-test-notes")],
             ..Config::default()
         };
         prepare_with(&mut candidate, |_| fetch_with(&client(), &mock(response("200 OK", body))), |issuer| {

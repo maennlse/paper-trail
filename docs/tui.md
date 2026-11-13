@@ -184,8 +184,8 @@ starts a new completion cycle. Tab switches panes only when no prompt is open.
 | `:reload!`                            | Explicitly discard edits and load the disk version  |
 | `:set number`, `:set nonumber`        | TUI-only line-number preference                     |
 | `:set folder-width N`                 | TUI-only folder width, 10–30 terminal cells         |
-| `:set editor builtin/neovim`          | Choose the built-in or embedded Neovim editor      |
-| `:set nvim-config clean/user`         | Choose Neovim defaults or personal config/plugins  |
+| `:set editor builtin/neovim`          | Choose the built-in or embedded Neovim editor       |
+| `:set nvim-config clean/user`         | Choose Neovim defaults or personal config/plugins   |
 | `:path`                               | Show the full highlighted folder/current note path  |
 
 Paths after `:folder`, `:move`, `:rename`, and `:saveas` can contain spaces without

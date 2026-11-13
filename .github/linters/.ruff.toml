@@ -1,0 +1,6 @@
+# Build helpers require Python 3.11+, where tomllib is part of the standard library.
+target-version = "py311"
+line-length = 120
+
+[lint]
+ignore = ["E203"]

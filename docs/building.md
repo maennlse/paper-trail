@@ -169,7 +169,7 @@ This also tests search-button clicks and shortcuts-dialog dismissal through X11
 input events. Set `PAPERTRAIL_SCREENSHOT` to a PNG path to capture the rendered UI.
 Compatibility fixtures protect existing notes and legacy settings.
 
-### Refresh README screenshots
+### Refresh readme screenshots
 
 The screenshots are captures of real GTK and VTE terminal windows, not mockups.
 Build both release clients first. On Linux, install screenshot-only developer
@@ -185,7 +185,7 @@ The helper creates a temporary home/settings profile with synthetic notes and
 public example sync settings; it does not authenticate, contact a sync server,
 or read your real notes. It captures the desktop editor, terminal All view, and
 interactive sync-folder checklist into `data/screenshots/`. `--output-dir PATH`
-can redirect captures without changing the README assets.
+can redirect captures without changing the readme assets.
 `--editor neovim` captures the optional backend using clean, isolated Neovim
 configuration and names the terminal images `tui-neovim.png` and
 `tui-sync-folders-neovim.png`; it requires an installed Neovim runtime.

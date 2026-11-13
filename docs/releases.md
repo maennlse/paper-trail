@@ -16,7 +16,7 @@ Normal branch pushes and PRs still upload CI artifacts, but do not create releas
   x86_64 and ARM64. Each archive includes the executable and TUI documentation.
 - Six server archives for the same targets: Linux musl and macOS `.tar.gz`,
   Windows MSVC with static CRT `.zip`, each for x86_64 and ARM64. Archives include
-  the server executable and deployment README, never configuration or credentials.
+  the server executable and deployment readme, never configuration or credentials.
 - Native GTK Linux x86_64 `.tar.gz`: executable, `README.md`, and build/dependency info.
 - GTK Linux x86_64 `.flatpak` bundle, with runtime-repository information.
 - Per-package `.sha256` files and a combined `SHA256SUMS` (fourteen packages total).

@@ -1077,9 +1077,10 @@ fn folder_badges_and_note_rows_use_the_same_rgb_colors_in_all_and_search_views()
 #[test]
 fn all_folder_row_supports_keyboard_mouse_and_unchanged_folder_numbers() {
     let temp = tempfile::tempdir().unwrap();
-    let mut app = browse_app(temp.path(), 1);
+    let root = temp.path().canonicalize().unwrap();
+    let mut app = browse_app(&root, 1);
     let first = app.settings.notes_dir.clone();
-    let other = temp.path().join("other");
+    let other = root.join("other");
     fs::create_dir(&other).unwrap();
     fs::write(other.join("other.txt"), "Other note").unwrap();
     app.settings.add_folder(other.clone(), false);
@@ -1091,7 +1092,7 @@ fn all_folder_row_supports_keyboard_mouse_and_unchanged_folder_numbers() {
     assert_eq!(app.notes.len(), 2);
     assert!(app.command("folder-down").is_err());
     app.command("folder 2").unwrap();
-    assert_eq!(app.settings.notes_dir, other);
+    assert_eq!(app.settings.notes_dir, other.canonicalize().unwrap());
     assert_eq!(app.folder_index, 1);
     assert!(!app.all);
     app.command("folder 1").unwrap();
@@ -1114,9 +1115,10 @@ fn all_folder_row_supports_keyboard_mouse_and_unchanged_folder_numbers() {
 #[test]
 fn sync_folder_checklist_saves_or_cancels_without_touching_notes_or_editor() {
     let temp = tempfile::tempdir().unwrap();
-    let mut app = browse_app(temp.path(), 1);
+    let root = temp.path().canonicalize().unwrap();
+    let mut app = browse_app(&root, 1);
     let first = app.settings.notes_dir.clone();
-    let other = temp.path().join("other");
+    let other = root.join("other");
     fs::create_dir(&other).unwrap();
     fs::write(other.join("keep.txt"), "keep").unwrap();
     app.settings.add_folder(other.clone(), false);
@@ -1150,7 +1152,7 @@ fn sync_folder_checklist_saves_or_cancels_without_touching_notes_or_editor() {
     key(&mut app, KeyCode::Char(' '));
     key(&mut app, KeyCode::Enter);
     let config = app.sync.saved_config().unwrap().unwrap();
-    assert_eq!(config.folders, vec![other.clone()]);
+    assert_eq!(config.folders, vec![other.canonicalize().unwrap()]);
     assert!(config.download_dir.is_some());
     assert_eq!(app.session.text, text);
     assert!(app.session.is_dirty());

@@ -23,19 +23,19 @@ jobs:
 
   tui:
     needs: validate
-    uses: ./.github/workflows/tui.yml
+    uses: $/.github/workflows/tui.yml
     permissions:
       contents: read
 
   gtk:
     needs: validate
-    uses: ./.github/workflows/rust.yml
+    uses: $/.github/workflows/rust.yml
     permissions:
       contents: read
 
   server:
     needs: validate
-    uses: ./.github/workflows/server.yml
+    uses: $/.github/workflows/server.yml
     permissions:
       contents: read
 

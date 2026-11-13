@@ -1,3 +1,4 @@
+-- luacheck: globals vim
 -- The selected note is an acwrite buffer. Native :write must go through the
 -- host's conditional filesystem adapter, never Neovim's direct file writer.
 local channel, path, lines = ...

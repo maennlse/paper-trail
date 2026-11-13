@@ -178,12 +178,24 @@ fn real_neovim_resize_mouse_and_unicode_render_inside_the_editor_rectangle() {
             KeyModifiers::NONE,
         )
         .unwrap();
-    let cursor = editor
-        .rpc
-        .call("nvim_win_get_cursor", vec![0.into()])
-        .unwrap();
-    assert_eq!(cursor.as_array().unwrap()[0].as_u64(), Some(2));
-    assert_eq!(cursor.as_array().unwrap()[1].as_u64(), Some(3));
+    // Input is queued by Neovim; an API response is not an input barrier.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let cursor = editor
+            .rpc
+            .call("nvim_win_get_cursor", vec![0.into()])
+            .unwrap();
+        if cursor.as_array().unwrap()[0].as_u64() == Some(2)
+            && cursor.as_array().unwrap()[1].as_u64() == Some(3)
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "Mouse input did not move the cursor"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 #[test]
@@ -237,14 +249,24 @@ fn manual_writes_run_user_pre_and_post_hooks_and_reject_native_filename_changes(
         )
         .unwrap();
     editor.input(":w<CR><Esc>").unwrap();
-    let message = editor
-        .rpc
-        .call(
-            "nvim_exec_lua",
-            vec!["return vim.v.errmsg".into(), Value::Array(vec![])],
-        )
-        .unwrap();
-    assert!(message.as_str().unwrap().contains("rename/saveas"));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let message = editor
+            .rpc
+            .call(
+                "nvim_exec_lua",
+                vec!["return vim.v.errmsg".into(), Value::Array(vec![])],
+            )
+            .unwrap();
+        if message.as_str().unwrap().contains("rename/saveas") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "Write rejection was not reported: {message:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert!(!renamed.exists());
     assert!(!editor
         .poll()

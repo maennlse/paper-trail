@@ -7,7 +7,7 @@ macOS, each for x86_64 and ARM64, matching the TUI downloads. Verify the archive
 SHA-256 checksum before extracting it.
 
 The archive contains only `paper-trail-server` (`.exe` on Windows) and this
-README. No configuration, credentials, database, or vault keys are bundled.
+readme. No configuration, credentials, database, or vault keys are bundled.
 Linux binaries are fully static. Windows binaries use the static C runtime and
 Windows system DLLs; macOS binaries link only Apple system libraries dynamically.
 SQLite and cryptography are built into the executable. No GTK, Python, Rust,

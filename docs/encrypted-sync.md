@@ -197,12 +197,12 @@ servers can return 404, with instructions to configure authentication manually.
 
 ### Configuration ownership and precedence
 
-| Setting | Source |
-| --- | --- |
-| Advertised issuer | Existing `PAPERTRAIL_OIDC_ISSUER`, read from the server's token authenticator |
-| Expected access-token audience | Existing `PAPERTRAIL_API_AUDIENCE`; remains independent server-side validation |
-| Advertised public client ID | Optional new `PAPERTRAIL_NATIVE_CLIENT_ID`, copied from the existing provider native-app registration |
-| Advertised scopes | Optional new `PAPERTRAIL_NATIVE_SCOPES`, default `openid offline_access`; include the existing provider-specific API scopes when needed |
+| Setting                        | Source                                                                                                                                  |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Advertised issuer              | Existing `PAPERTRAIL_OIDC_ISSUER`, read from the server's token authenticator                                                           |
+| Expected access-token audience | Existing `PAPERTRAIL_API_AUDIENCE`; remains independent server-side validation                                                          |
+| Advertised public client ID    | Optional new `PAPERTRAIL_NATIVE_CLIENT_ID`, copied from the existing provider native-app registration                                   |
+| Advertised scopes              | Optional new `PAPERTRAIL_NATIVE_SCOPES`, default `openid offline_access`; include the existing provider-specific API scopes when needed |
 
 Previously, native IDs/scopes existed only in client `sync/config.json`, not in the
 server's deployment configuration. These two optional native settings make that
