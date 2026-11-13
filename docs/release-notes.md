@@ -1,24 +1,30 @@
-# Paper Trail 0.4.0
+# Paper Trail 0.5.0
 
 ## Highlights
 
-- Optional client-side end-to-end encrypted sync for GTK and TUI, backed by a
-  separately deployed OIDC-authenticated Rust server. Ordinary local text files
-  remain unchanged; local-only use still needs no account.
-- Independent vault passphrase and recovery key, encrypted folder metadata,
-  per-device folder mappings, selective sync, conflict copies, tombstones, and
-  rollback checkpoints.
-- Non-blocking desktop sync with a bottom-left status/menu icon; editing stays
-  available during network operations.
-- TUI device-code authentication for SSH, cancellable login, and memory-only
-  credentials on SSH/headless hosts. Desktop browser/PKCE login is unchanged.
-- Explicit ZITADEL-compatible server introspection and secret-safe request/auth
-  diagnostics (`paper-trail-server --verbose`).
+- Optional public OIDC configuration discovery in GTK and TUI, with explicit
+  issuer confirmation and pinning. Manual setup remains supported; existing
+  profiles do not silently change authentication providers or vault identities.
+- Real Neovim embedded in the TUI editor pane, using your normal configuration
+  or clean defaults. The built-in editor remains the default. Paper Trail keeps
+  ownership of managed-note saving, autosave, and external-edit conflict checks.
+- Interactive TUI sync-folder selection, an All notes folder row, improved folder
+  badges, and shared GTK/TUI RGB accents.
+- GTK sync-dialog lifecycle, folder-editing, and footer layout fixes.
+- Standalone sync-server downloads for all six TUI targets, checksum-verified
+  fourteen-package releases, and interactive local artifact builds.
 
 Sync is experimental and has not had an independent security audit. Local working
-files and comparison baselines remain plaintext. Upgrade the sync server before
-connecting updated clients; this version supports encrypted revision v2 and the
-multi-folder catalog. See [encrypted sync setup and security boundaries](https://github.com/maennlse/paper-trail/blob/v0.4.0/docs/encrypted-sync.md).
+files and comparison baselines remain plaintext. Encrypted formats, account binding,
+and token validation are unchanged. Update the server to use public authentication
+discovery; older servers can still use manual configuration.
+See [encrypted sync setup and security boundaries](https://github.com/maennlse/paper-trail/blob/v0.5.0/docs/encrypted-sync.md).
+
+Embedded Neovim requires an installed `nvim` 0.9+ executable and is not bundled.
+Press F2, type `set editor neovim`, and Enter to enable it; F6 changes panes.
+Personal configuration/plugins are trusted local code. Switching notes currently
+resets the managed buffer's undo history. Browser policy may prevent the successful
+login callback tab from closing automatically; manual close remains available.
 
 ## Downloads
 
@@ -32,7 +38,8 @@ multi-folder catalog. See [encrypted sync setup and security boundaries](https:/
   (Windows), for x86_64 or ARM64. Linux builds are fully static musl executables.
   Windows builds use the static C runtime plus Windows system DLLs. macOS builds
   link only Apple system libraries dynamically. No GTK, Python, or Rust install
-  is needed to run the TUI; external editing requires a separate editor.
+  is needed for built-in TUI editing; external editing and optional embedded Neovim
+  require a separate editor executable.
 - **Sync server:** choose `paper-trail-server-<target>.tar.gz` (Linux/macOS) or
   `.zip` (Windows), for the same six x86_64/ARM64 targets as the TUI. Linux builds
   are fully static; Windows uses the static CRT and system DLLs; macOS uses only

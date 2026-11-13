@@ -35,7 +35,13 @@
   <url type="vcs-browser">https://github.com/maennlse/paper-trail</url>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="@APP_VERSION@" date="2026-11-08">
+    <release version="@APP_VERSION@" date="2026-11-13">
+      <description>
+        <p>Trusted authentication discovery, optional embedded Neovim in the terminal
+        editor, interactive sync-folder selection, and improved desktop dialogs.</p>
+      </description>
+    </release>
+    <release version="0.4.0" date="2026-11-08">
       <description>
         <p>Optional end-to-end encrypted sync with multi-folder selection, conflict
         copies, recovery keys, and a non-blocking desktop sync menu. Terminal login
