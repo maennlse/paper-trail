@@ -7,11 +7,13 @@ use oauth2::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    io::{self, Read, Write},
+    io::{self, Read},
     net::TcpListener,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+mod callback;
+pub mod config;
 pub mod device;
 
 pub struct LoginFlow {
@@ -142,18 +144,30 @@ impl Discovery {
 }
 fn discover(config: &Config) -> io::Result<Discovery> {
     config.validate()?;
-    let d: Discovery = http()?
+    config::check(config)?;
+    discover_issuer(&config.issuer)
+}
+fn discover_issuer(issuer: &str) -> io::Result<Discovery> {
+    if !https(issuer) {
+        return Err(error("An exact HTTPS OIDC issuer is required"));
+    }
+    let response = http()?
         .get(format!(
             "{}/.well-known/openid-configuration",
-            config.issuer.trim_end_matches('/')
+            issuer.trim_end_matches('/')
         ))
         .send()
-        .map_err(|_| error("OIDC discovery failed"))?
-        .error_for_status()
-        .map_err(|_| error("OIDC discovery status failed"))?
-        .json()
-        .map_err(|_| error("Invalid OIDC discovery"))?;
-    if d.issuer != config.issuer
+        .map_err(|_| error("OIDC discovery failed"))?;
+    if !response.status().is_success() {
+        return Err(error(
+            "OIDC discovery status failed (redirects are not allowed)",
+        ));
+    }
+    let d: Discovery = config::decode(response, 65536)?;
+    validate_discovery(d, issuer)
+}
+fn validate_discovery(d: Discovery, issuer: &str) -> io::Result<Discovery> {
+    if d.issuer != issuer
         || d.authorization_endpoint
             .as_ref()
             .is_some_and(|url| !https(url))
@@ -196,7 +210,7 @@ pub fn login(config: &Config) -> io::Result<Tokens> {
     let (url, state) = request.url();
     webbrowser::open(url.as_str()).map_err(|_| error("Could not open the system browser"))?;
     let deadline = Instant::now() + Duration::from_secs(180);
-    let code = loop {
+    let (code, mut stream) = loop {
         if Instant::now() >= deadline {
             return Err(error("Browser sign-in timed out"));
         }
@@ -206,6 +220,7 @@ pub fn login(config: &Config) -> io::Result<Tokens> {
                     continue;
                 }
                 stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+                stream.set_write_timeout(Some(Duration::from_secs(2)))?;
                 let mut bytes = [0; 8192];
                 let n = stream.read(&mut bytes).unwrap_or(0);
                 let line = std::str::from_utf8(&bytes[..n])
@@ -213,32 +228,10 @@ pub fn login(config: &Config) -> io::Result<Tokens> {
                     .lines()
                     .next()
                     .unwrap_or("");
-                let mut parts = line.split_whitespace();
-                let method = parts.next().unwrap_or("");
-                let path = parts.next().unwrap_or("");
-                let parsed = reqwest::Url::parse(&format!("http://127.0.0.1{path}"));
-                let code = parsed.ok().and_then(|u| {
-                    if method != "GET" || u.path() != "/callback" {
-                        return None;
-                    }
-                    let fields: std::collections::HashMap<_, _> =
-                        u.query_pairs().into_owned().collect();
-                    if fields.get("state") != Some(state.secret())
-                        || fields.get("iss").is_some_and(|s| s != &config.issuer)
-                    {
-                        return None;
-                    }
-                    fields.get("code").cloned()
-                });
-                let response = if code.is_some() {
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nYou can return to Paper Trail."
-                } else {
-                    "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid sign-in callback."
-                };
-                let _ = stream.write_all(response.as_bytes());
-                if let Some(code) = code {
-                    break code;
+                if let Some(code) = callback::code(line, state.secret(), &config.issuer) {
+                    break (code, stream);
                 }
+                let _ = callback::invalid(&mut stream);
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(50))
@@ -246,11 +239,16 @@ pub fn login(config: &Config) -> io::Result<Tokens> {
             Err(e) => return Err(e),
         }
     };
-    let response = client
-        .exchange_code(AuthorizationCode::new(code))
-        .set_pkce_verifier(verifier)
-        .request(&http()?)
-        .map_err(|_| error("Authorization code exchange failed"))?;
+    let response = callback::finish(
+        &mut stream,
+        http().and_then(|http| {
+            client
+                .exchange_code(AuthorizationCode::new(code))
+                .set_pkce_verifier(verifier)
+                .request(&http)
+                .map_err(|_| error("Authorization code exchange failed"))
+        }),
+    )?;
     Ok(Tokens {
         access: response.access_token().secret().clone(),
         refresh: response.refresh_token().map(|r| r.secret().clone()),
@@ -362,6 +360,27 @@ pub fn logout(config: &Config) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn oidc_metadata_requires_exact_advertised_issuer_and_secure_endpoints() {
+        let valid = serde_json::json!({"issuer":"https://issuer.example/tenant", "authorization_endpoint":"https://issuer.example/authorize", "token_endpoint":"https://issuer.example/token", "device_authorization_endpoint":"https://issuer.example/device", "code_challenge_methods_supported":["S256"]});
+        let issuer = "https://issuer.example/tenant";
+        let d = validate_discovery(serde_json::from_value(valid.clone()).unwrap(), issuer).unwrap();
+        assert!(d.browser_endpoint().is_ok());
+        for (field, value) in [
+            ("issuer", "https://issuer.example/tenant/"),
+            ("issuer", "https://evil.example"),
+            ("authorization_endpoint", "javascript:alert(1)"),
+            ("token_endpoint", "http://issuer.example/token"),
+        ] {
+            let mut bad = valid.clone();
+            bad[field] = serde_json::json!(value);
+            assert!(validate_discovery(serde_json::from_value(bad).unwrap(), issuer).is_err());
+        }
+        let mut bad = valid;
+        bad["code_challenge_methods_supported"] = serde_json::json!(["plain"]);
+        let d = validate_discovery(serde_json::from_value(bad).unwrap(), issuer).unwrap();
+        assert!(d.browser_endpoint().is_err());
+    }
     fn flow() -> LoginFlow {
         let (_, verifier) = PkceCodeChallenge::new_random_sha256();
         LoginFlow {

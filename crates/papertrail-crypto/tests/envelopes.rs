@@ -31,6 +31,9 @@ fn revisions_authenticate_every_binding_and_use_fresh_nonces() {
     let mut other = a.clone();
     other.sub = "bob".into();
     assert!(r.open(&key, &other).is_err());
+    let mut other_issuer = a.clone();
+    other_issuer.iss = "https://another-issuer.example".into();
+    assert!(r.open(&key, &other_issuer).is_err());
     for field in 0..6 {
         let mut altered = r.clone();
         match field {
@@ -66,6 +69,9 @@ fn passphrase_recovery_rewrap_and_versions() {
     assert!(v.unlock(&a, "wrong").is_err());
     assert_eq!(key.0, v.recover(&a, &recovery).unwrap().0);
     assert!(v.recover(&a, &Secret::random()).is_err());
+    let mut other_issuer = a.clone();
+    other_issuer.iss = "https://another-issuer.example".into();
+    assert!(v.recover(&other_issuer, &recovery).is_err());
     let (v2, new_recovery) = v.rewrap(&a, "new strong vault passphrase", &key).unwrap();
     assert_eq!(
         key.0,

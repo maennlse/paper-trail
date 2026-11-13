@@ -3,11 +3,92 @@ use axum::{body::Body, http::Request};
 use http_body_util::BodyExt;
 use papertrail_crypto::{opaque_id, NoteData};
 use tower::ServiceExt;
+#[test]
+fn native_settings_are_validated_without_confidential_client_defaults() {
+    assert!(
+        NativeClientConfig::new("native".into(), "openid offline_access custom:api".into()).is_ok()
+    );
+    for client in ["", "  ", "native\nsecret"] {
+        assert!(NativeClientConfig::new(client.into(), "openid".into()).is_err());
+    }
+    for scope in [
+        "",
+        "profile",
+        "openid  profile",
+        "openid\nprofile",
+        "openid bad\\scope",
+        "openid bad\"scope",
+    ] {
+        assert!(NativeClientConfig::new("native".into(), scope.into()).is_err());
+    }
+}
 fn account(sub: &str) -> Account {
     Account {
         iss: "https://issuer.example".into(),
         sub: sub.into(),
     }
+}
+#[tokio::test]
+async fn same_subject_from_a_different_issuer_cannot_access_or_delete_a_vault() {
+    let server = Arc::new(Server::open(std::path::Path::new(":memory:"), None).unwrap());
+    let owner = account("same-subject");
+    let (vault, _, _) = Vault::create(&owner, "a long enough passphrase").unwrap();
+    assert_eq!(
+        call(
+            server.clone(),
+            owner.clone(),
+            "PUT",
+            "/v1/vault",
+            serde_json::to_value(vault).unwrap(),
+            Some(0)
+        )
+        .await
+        .0,
+        204
+    );
+    let mut other = owner.clone();
+    other.iss = "https://different-issuer.example".into();
+    assert_eq!(
+        call(
+            server.clone(),
+            other.clone(),
+            "GET",
+            "/v1/vault",
+            serde_json::Value::Null,
+            None
+        )
+        .await
+        .0,
+        404
+    );
+    let mut request = Request::builder()
+        .method("DELETE")
+        .uri("/v1/account")
+        .header("x-papertrail-confirm", "delete-account")
+        .body(Body::empty())
+        .unwrap();
+    request.extensions_mut().insert(other);
+    assert_eq!(
+        routes(server.clone())
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status(),
+        204
+    );
+    assert_eq!(
+        call(
+            server,
+            owner,
+            "GET",
+            "/v1/vault",
+            serde_json::Value::Null,
+            None
+        )
+        .await
+        .0,
+        200
+    );
 }
 async fn call(
     s: Arc<Server>,

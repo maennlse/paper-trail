@@ -183,6 +183,7 @@ impl Service {
             .lock()
             .map_err(|_| error("Sync worker unavailable"))?;
         let config = c.config()?;
+        auth::config::check(&config)?;
         let api = Api::new(&config, tokens.access.clone())?;
         let account = api.identity()?;
         if account.iss != config.issuer {
@@ -288,9 +289,15 @@ impl Service {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&c.root, std::fs::Permissions::from_mode(0o700))?;
         }
+        let previous = match std::fs::read(c.root.join("config.json")) {
+            Ok(bytes) => Some(crate::read_config(&bytes)?),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
         if c.root.join("state.json").exists() {
-            let old: Config = serde_json::from_slice(&std::fs::read(c.root.join("config.json"))?)
-                .map_err(error)?;
+            let old = previous.as_ref().ok_or_else(|| {
+                error("Existing journal has no sync configuration; restore it before continuing")
+            })?;
             if old.server != config.server
                 || old.issuer != config.issuer
                 || old.client_id != config.client_id
@@ -325,6 +332,15 @@ impl Service {
             &c.root.join("config.json"),
             &serde_json::to_vec_pretty(&config).map_err(error)?,
         )?;
+        if previous.as_ref().is_some_and(|old| {
+            old.server != config.server
+                || old.issuer != config.issuer
+                || old.client_id != config.client_id
+        }) {
+            // Never carry an old identity's in-memory credentials or keys into
+            // an explicitly reconfigured, still-unbound profile.
+            c.clear_identity();
+        }
         c.config = Some(config);
         Ok(())
     }
@@ -343,13 +359,27 @@ impl Service {
     }
 }
 impl Control {
+    fn clear_identity(&mut self) {
+        self.tokens = None;
+        self.key = None;
+        self.pending = None;
+        self.persist_tokens = false;
+    }
     fn config(&mut self) -> io::Result<Config> {
-        self.config = Some(crate::read_config(
+        let config = crate::read_config(
             &std::fs::read(self.root.join("config.json"))
                 .map_err(|_| error("Configure Sync first"))?,
-        )?);
-        let config = self.config.as_ref().unwrap().clone();
-        config.validate()?;
+        )?;
+        if self.config.as_ref().is_some_and(|old| {
+            old.server != config.server
+                || old.issuer != config.issuer
+                || old.client_id != config.client_id
+        }) {
+            // GTK and TUI can share a profile: another frontend may have
+            // explicitly accepted new settings since this service last ran.
+            self.clear_identity();
+        }
+        self.config = Some(config.clone());
         Ok(config)
     }
     fn execute(&mut self, command: Command) -> io::Result<Outcome> {
@@ -472,6 +502,9 @@ impl Control {
             .into();
             return Ok(outcome);
         }
+        // Login helpers check discovery themselves. Check here before using
+        // cached tokens, refreshing, or contacting any data route.
+        auth::config::check(&config)?;
         if self.tokens.is_none() {
             if self.memory_only_tokens {
                 return Err(error(
@@ -712,5 +745,86 @@ mod tests {
                 .unwrap()
                 .memory_only_tokens
         );
+    }
+
+    #[test]
+    fn discovery_cannot_rebind_an_existing_journal_or_expose_memory_credentials() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = Service::new_session_only(&temp.path().join("settings.json"));
+        let config = Config {
+            server: "https://sync.example".into(),
+            issuer: "https://issuer.example".into(),
+            client_id: "native".into(),
+            scopes: "openid offline_access".into(),
+            discover_auth: true,
+            folders: vec![temp.path().join("notes")],
+            ..Config::default()
+        };
+        service.configure(config.clone()).unwrap();
+        let path = service.root.join("state.json");
+        {
+            let mut engine = Engine::open(path.clone()).unwrap();
+            engine.state.account = Some(papertrail_crypto::Account {
+                iss: config.issuer.clone(),
+                sub: "alice".into(),
+            });
+            engine.state.vault_id = papertrail_crypto::opaque_id();
+            engine.save().unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        let mut changed = config.clone();
+        changed.issuer = "https://new-issuer.example".into();
+        assert!(service
+            .configure(changed)
+            .unwrap_err()
+            .to_string()
+            .contains("separate settings profile"));
+        assert!(service.saved_config().unwrap().unwrap() == config);
+        assert_eq!(std::fs::read(path).unwrap(), before);
+        let mut changed = config;
+        changed.client_id = "another-native".into();
+        assert!(service.configure(changed).is_err());
+    }
+
+    #[test]
+    fn switching_an_unbound_identity_drops_old_in_memory_tokens() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = Service::new_session_only(&temp.path().join("settings.json"));
+        let mut config = Config {
+            server: "https://sync.example".into(),
+            issuer: "https://issuer.example".into(),
+            client_id: "native".into(),
+            scopes: "openid offline_access".into(),
+            discover_auth: true,
+            folders: vec![temp.path().join("notes")],
+            ..Config::default()
+        };
+        service.configure(config.clone()).unwrap();
+        service.control.lock().unwrap().tokens = Some(Tokens {
+            access: "ACCESS_SECRET".into(),
+            refresh: Some("REFRESH_SECRET".into()),
+            expires: u64::MAX,
+        });
+        let other_frontend = Service::new_session_only(&temp.path().join("settings.json"));
+        {
+            let mut c = other_frontend.control.lock().unwrap();
+            c.config().unwrap();
+            c.tokens = Some(Tokens {
+                access: "OTHER_ACCESS_SECRET".into(),
+                refresh: None,
+                expires: u64::MAX,
+            });
+        }
+        config.issuer = "https://new-issuer.example".into();
+        service.configure(config).unwrap();
+        assert!(service.control.lock().unwrap().tokens.is_none());
+        {
+            let mut c = other_frontend.control.lock().unwrap();
+            assert_eq!(c.config().unwrap().issuer, "https://new-issuer.example");
+            assert!(c.tokens.is_none());
+        }
+        let saved = std::fs::read_to_string(service.root.join("config.json")).unwrap();
+        assert!(!saved.contains("ACCESS_SECRET"));
+        assert!(!saved.contains("REFRESH_SECRET"));
     }
 }

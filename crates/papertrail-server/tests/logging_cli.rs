@@ -73,4 +73,36 @@ fn help_describes_logging_without_requiring_configuration() {
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("--verbose"));
     assert!(text.contains("RUST_LOG"));
+    assert!(text.contains("PAPERTRAIL_NATIVE_CLIENT_ID"));
+    assert!(text.contains("PAPERTRAIL_NATIVE_SCOPES"));
+    assert!(text.contains("openid offline_access"));
+}
+
+#[test]
+fn invalid_public_native_settings_fail_before_network_and_do_not_echo_values() {
+    for (id, scopes) in [
+        ("", "openid"),
+        ("native", "openid  SCOPE_PRIVATE"),
+        ("NATIVE_PRIVATE\n", "openid"),
+    ] {
+        let output = command()
+            .arg("--verbose")
+            .env("PAPERTRAIL_OIDC_ISSUER", "https://never-contact.example")
+            .env("PAPERTRAIL_API_AUDIENCE", "SERVER_AUDIENCE_PRIVATE")
+            .env("PAPERTRAIL_NATIVE_CLIENT_ID", id)
+            .env("PAPERTRAIL_NATIVE_SCOPES", scopes)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let text = stderr(&output);
+        assert!(text.contains("Invalid public native client ID or scopes"));
+        for excluded in [
+            "Discovering OIDC configuration",
+            "SCOPE_PRIVATE",
+            "NATIVE_PRIVATE",
+            "SERVER_AUDIENCE_PRIVATE",
+        ] {
+            assert!(!text.contains(excluded));
+        }
+    }
 }
