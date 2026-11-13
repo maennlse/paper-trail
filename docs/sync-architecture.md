@@ -20,7 +20,13 @@
   revision, parent, and operation. Filenames, folder names, note metadata and body
   are encrypted. Argon2id wraps the vault key using a separate vault passphrase;
   an independent user-held recovery secret supplies a second wrapper.
-- **Authentication:** discover a configured exact OIDC issuer. Native public
+- **Authentication:** optionally discover public native settings from the sync
+  server's unauthenticated `GET /v1/auth/config`; the issuer comes from its existing
+  authenticator, while the API audience remains server-only. Confirm the server/issuer
+  pair before authentication and persist it as a trust pin. Changed issuers fail
+  closed and require review; existing bound profiles must use a separate profile,
+  never an identity/vault migration. Existing manual settings remain authoritative
+  until discovery is explicitly selected. Validate exact issuer metadata. Native public
   GTK clients use system-browser Authorization Code + PKCE. TUI `:login` uses
   discovered RFC 8628 device authorization for SSH/headless hosts; `:login-browser`
   is an explicit alternative. Neither native flow embeds a client secret.

@@ -3,6 +3,8 @@
 `paper-trail-tui` is a Ratatui terminal frontend sharing Paper Trail's portable
 core and filesystem storage. It needs no GTK, Python, Rust installation, network
 service, or third-party runtime libraries on the destination machine.
+The built-in editor is the default. Optional embedded Neovim requires an installed
+`nvim` executable (0.9+); it is not bundled or needed for built-in editing.
 
 ## Run
 
@@ -28,7 +30,68 @@ config locations follow the platform (XDG on Linux, Application Support on macOS
 and the roaming application-data directory on Windows). If both native and
 Flatpak settings exist, use `--config` to select Flatpak explicitly.
 
-## Keys and editing
+## Embedded Neovim (optional)
+
+![Real Neovim embedded alongside Paper Trail folders and notes](../data/screenshots/tui-neovim.png)
+
+To put **real Neovim inside the editor pane**, open the Paper Trail command prompt
+with **F2**, type `set editor neovim`, and press Enter. Folder and note columns stay
+visible. The choice is saved in the profile's `tui.json`; existing profiles continue
+using the built-in editor until you opt in.
+
+- In the Neovim pane, `:`, `/`, Tab, H/L, Ctrl combinations, counts, registers,
+  macros, undo/redo, completion and syntax highlighting belong to Neovim—not the
+  built-in Vim-style emulation.
+- **F2** opens Paper Trail commands from any pane; **F6 / Shift-F6** changes panes.
+  Type commands after the displayed `:` without adding another colon. For example,
+  F2 → `sync-folders` → Enter opens sync selection; F2 → `q` saves and quits the app.
+- Mouse input and bracketed paste are forwarded to Neovim inside its pane.
+  `--no-mouse` is still respected. Resizing the terminal resizes the embedded UI.
+- Normal Neovim configuration/plugins load by default. For predictable defaults,
+  use F2 → `set nvim-config clean`; restore your configuration with
+  `set nvim-config user`. Changing that option restarts the child after saving.
+  Neovim settings such as line numbers, wrapping, and its colorscheme come from
+  Neovim; Paper Trail's corresponding built-in-editor settings do not override them.
+- F2 → `set editor builtin` saves and returns to the self-contained editor.
+  Missing/unresponsive Neovim produces an actionable error, not a silent switch.
+  At startup failure, text remains available in the built-in editor for that session;
+  the saved preference is not overwritten.
+
+### Saving and safety
+
+The selected note is a Neovim **`acwrite` buffer**. Its `:write` / `:wq` goes through
+Paper Trail's existing conditional filesystem adapter, so another editor's changes
+cannot be overwritten merely by using `:w!`. Standard `BufWritePre`/`BufWritePost`
+hooks run for Neovim's manual writes. Background autosave stays host-driven and does
+not run Neovim's write hooks or interrupt Insert mode. Use F2 → `saveas PATH` for a
+new recovery copy; writing the managed buffer to another filename through Neovim
+is rejected. Local files, encrypted formats, account binding and vault keys do not
+change. Sync protects the active managed buffer even while focus is in a sidebar.
+
+Paper Trail mirrors real buffer changes independently. If the Neovim child exits
+or crashes, latest **observed** text is retained, automatic saving pauses, and focus
+returns to Notes. Enter restarts Neovim; F2 → `w` saves, `saveas PATH` preserves a
+copy, or `reload!` explicitly discards pending edits. Neovim's `:q`/`:q!` closes the
+editor child, not Paper Trail; it does not silently discard the host's retained text.
+Use Paper Trail's F2 → `q!` when you explicitly want to discard and quit the app.
+
+Only the selected note is managed by Paper Trail. Navigating/reloading creates a
+fresh managed buffer (undo history is not retained across note switches). Help and
+plugin buffers can be displayed, but other files opened directly inside Neovim are
+not automatically adopted as Paper Trail notes. Use the sidebars for note selection.
+Do not override the managed buffer's `buftype`/`BufWriteCmd` if you rely on the host's
+save protections. GUI-specific UI extensions, terminal clipboard escape protocols,
+and every possible plugin interaction are not emulated by the single-grid frontend.
+
+Your Neovim configuration/plugins are **trusted local code**, with normal filesystem
+and process access; they are not sandboxed. They can see plaintext notes just as an
+external editor can. The private stdio bridge sends note text/UI input, **not OAuth
+tokens, vault keys, or passphrases**. Managed buffers disable swap files and the child
+uses `-i NONE` to avoid shared ShaDa history; Paper Trail handles note saving/recovery.
+User plugins may still write their own caches or launch programs. Clean mode avoids
+loading personal configuration/plugins.
+
+## Keys and editing (built-in editor)
 
 Three panes show folders, notes, and the editor. **H / L** switches panes left/right;
 **Tab / Shift-Tab** also works. In insert mode, H and L remain typed characters.
@@ -43,8 +106,17 @@ The folder column defaults to **16 terminal cells**, configurable with
 pane hides automatically; pane navigation skips it. Folders remain accessible
 through `:folder PATH` or `:folder NUMBER`.
 
-A **›** marks the highlighted list item, **●** marks the displayed note/active
-folder, and a cyan border identifies keyboard focus. A contextual footer shows
+The folder column has an **All** entry, GTK-style two-letter badges, and a colored
+active-folder bar. All stays first and does not change folder numbers used by
+`:folder NUMBER` or `:move NUMBER`. At narrow widths badges remain visible while
+labels shorten; `:path` shows full folder information. No special icon font is needed.
+Folder badges and note-row accents use GTK's exact shared RGB presets and custom
+colors, including in All/search views. Focused rows use the folder color with
+contrasting text. Exact color matching needs a true-color terminal; the overall
+terminal background/theme is unchanged.
+
+A **›** marks the highlighted list item, **●** marks the displayed note, **▎** marks
+the active folder, and a cyan border identifies keyboard focus. A contextual footer shows
 navigation/editing shortcuts and editor mode.
 
 **Mouse support** is enabled by default: single-click notes to preview, click a
@@ -58,7 +130,7 @@ Mouse capture is released before external editing and when the TUI exits.
 **?** shows scrollable help. List **/** searches filenames, titles, and full note bodies
 across saved folders; **Esc** clears the filter. **p** toggles a selected note's pin.
 
-Editing uses a practical Vim-style subset, **not full Vim compatibility**:
+The default built-in editor uses a practical Vim-style subset, **not full Vim compatibility**:
 
 | Keys                            | Action                                       |
 | ------------------------------- | -------------------------------------------- |
@@ -81,7 +153,8 @@ not part of this frontend.
 
 ## Commands
 
-Press **:** in normal mode, type a command, then **Enter**. **Esc** cancels.
+Press **:** in built-in normal mode, or **F2** from either editor, type a command,
+then **Enter**. **Esc** cancels. `:` inside the Neovim pane belongs to Neovim.
 
 **Tab / Shift-Tab** completes and cycles matching commands, `:set` options and
 folder widths, preset colors, and saved folder numbers. `:folder` and `:move`
@@ -111,6 +184,8 @@ starts a new completion cycle. Tab switches panes only when no prompt is open.
 | `:reload!`                            | Explicitly discard edits and load the disk version  |
 | `:set number`, `:set nonumber`        | TUI-only line-number preference                     |
 | `:set folder-width N`                 | TUI-only folder width, 10–30 terminal cells         |
+| `:set editor builtin/neovim`          | Choose the built-in or embedded Neovim editor      |
+| `:set nvim-config clean/user`         | Choose Neovim defaults or personal config/plugins  |
 | `:path`                               | Show the full highlighted folder/current note path  |
 
 Paths after `:folder`, `:move`, `:rename`, and `:saveas` can contain spaces without
@@ -125,11 +200,26 @@ Windows editor paths, for example `"C:/Program Files/Editor/editor.exe" --wait`.
 Configure graphical editors to wait for their document to close. The terminal
 is restored before launching the editor and reinitialized afterwards. A successful
 editor exit reloads the note; after a failed exit, use `:reload` explicitly.
-Only external editing needs another program installed.
+External editing and the optional embedded Neovim backend need another program
+installed; built-in editing remains self-contained.
 
 ## Shared data and safety
 
 ### Device-code sign-in (including SSH)
+
+For a new client, run `:sync-configure https://YOUR_SYNC_SERVER`. Review the displayed
+server and advertised identity-provider URLs, then type `yes` to trust the issuer.
+PageUp/PageDown scroll long trust details; Esc rejects without saving. Discovery
+runs without blocking editing; `:sync-discovery-cancel` discards its result.
+
+Existing manual profiles remain manual. To use an older server or explicitly retain
+manual authentication, use
+`:sync-configure HTTPS_SERVER HTTPS_ISSUER PUBLIC_CLIENT_ID 'SCOPES'` (scopes optional).
+Discovery failures never silently replace these values. An unchanged accepted issuer
+needs no new confirmation; a change stops authentication/sync and requires reviewing
+setup. Existing journal-bound identities require a separate profile and notes
+directory, not an issuer/account migration. Non-interactive shared-client calls
+reject unconfirmed changes. See [configuration ownership and precedence](encrypted-sync.md#configuration-ownership-and-precedence).
 
 `:login` uses OAuth Device Authorization (RFC 8628), not a browser on the TUI host.
 It shows an HTTPS verification URL and a short-lived user code. Open that URL on
@@ -173,9 +263,20 @@ device and save its recovery key. `:lock` clears the memory-only vault key;
 `:logout` also removes secure-stored credentials. Local files remain plaintext.
 See [encrypted sync](encrypted-sync.md) for setup, threat boundaries, and limitations.
 
-Use `:sync-add-folder PATH` and `:sync-remove-folder PATH` to change the selected
-collections without deleting notes, and `:sync-folders` to inspect stable IDs and
-local mappings. `:sync-map-folder ID '/absolute/path'` explicitly chooses a device's
+Use **`:sync-folders`** to select collections interactively: arrows/`j`/`k` move,
+Space or a mouse click toggles a checkbox, Enter saves all selections, and Esc
+(or Ctrl-C) cancels without writing configuration. PageUp/PageDown scroll the
+list; `i` opens full, scrollable name/path/ID details and Esc returns to the list.
+Both bookmarked local folders and known remote folders appear. Unselecting keeps
+local and remote notes; selecting a remote-only folder uses its existing mapping
+or the configured download root. Unchecking every folder is supported without
+resetting the vault, journal, or mappings. Automatic sync pauses while this dialog
+is open; saving a stale configuration is rejected instead of overwriting changes
+from another frontend. Editor contents are never replaced by selection changes.
+
+`:sync-add-folder PATH`, `:sync-remove-folder PATH`, `:sync-select-folder ID`, and
+`:sync-unselect-folder ID` remain compatibility shortcuts, not required for normal
+selection. `:sync-map-folder ID '/absolute/path'` explicitly chooses a device's
 directory; `:sync-download-dir PATH` sets where newly discovered collections are
 created. Empty folders sync too. Legacy assignments that cannot be proven stop
 safely: confirm them with `:sync-map-legacy NOTE_ID FOLDER_ID` (or GTK Configure

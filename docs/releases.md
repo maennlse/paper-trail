@@ -5,18 +5,21 @@ exactly match `v` plus `[workspace.package].version` in `Cargo.toml`; a mismatch
 tag fails before any build or publication. Prerelease versions such as
 `v0.3.0-rc.1` are published as GitHub prereleases.
 
-The release workflow reuses the existing Rust/GTK and standalone TUI workflows.
-All tests, six native TUI target builds/linkage checks, the native GTK build,
-and the GTK Flatpak build must succeed before the publish job starts. Normal
-branch pushes and PRs still upload CI artifacts, but do not create releases.
+The release workflow reuses the Rust/GTK, standalone TUI, and standalone server
+workflows. All tests, six native TUI and six server target builds/linkage checks,
+the native GTK build, and the GTK Flatpak build must succeed before publishing.
+Normal branch pushes and PRs still upload CI artifacts, but do not create releases.
 
 ## Release assets
 
 - Six TUI archives: Linux musl, Windows MSVC with static CRT, and macOS, each for
   x86_64 and ARM64. Each archive includes the executable and TUI documentation.
+- Six server archives for the same targets: Linux musl and macOS `.tar.gz`,
+  Windows MSVC with static CRT `.zip`, each for x86_64 and ARM64. Archives include
+  the server executable and deployment README, never configuration or credentials.
 - Native GTK Linux x86_64 `.tar.gz`: executable, `README.md`, and build/dependency info.
 - GTK Linux x86_64 `.flatpak` bundle, with runtime-repository information.
-- Per-package `.sha256` files and a combined `SHA256SUMS` (eight packages total).
+- Per-package `.sha256` files and a combined `SHA256SUMS` (fourteen packages total).
 
 The publish job downloads artifacts from the same workflow run, rejects missing
 or duplicate packages, verifies every checksum, and stages only the expected
@@ -55,9 +58,14 @@ releases are not silently overwritten.
 python3 -m unittest discover -s build-aux -p test_release.py
 python3 build-aux/prepare_release.py validate-tag v0.4.0
 python3 build-aux/package_desktop.py
+python3 build-aux/package_server.py x86_64-unknown-linux-musl
 ```
 
-The last command needs an existing native GTK release binary plus its runtime
-libraries and `pkg-config`. `prepare_release.py collect ARTIFACTS DESTINATION`
-can validate locally downloaded CI artifacts without contacting GitHub. Neither
-Python helper creates tags or releases.
+The desktop command needs an existing native GTK release binary plus its runtime
+libraries and `pkg-config`. The server command needs a release binary at
+`target/TARGET/release/`; it verifies standalone linkage and runs only `--help`,
+without requiring OIDC credentials or starting a listener. See
+[server binary deployment](server-release.md) for configuration and build guidance.
+`prepare_release.py collect ARTIFACTS DESTINATION`
+can validate locally downloaded CI artifacts without contacting GitHub. None of
+these Python helpers creates tags or releases.

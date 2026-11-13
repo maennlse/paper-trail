@@ -3,6 +3,51 @@
 Run commands from the repository root. Paper Trail uses Rust; Python is only
 needed for packaging helpers, not to run either client.
 
+## Local build artifacts (interactive)
+
+```sh
+python3 build-aux/build_local.py
+```
+
+Requires Python 3.11+, Rust 1.88+, Cargo and the selected components' C/build
+dependencies. The script asks for **native or standalone**, **Desktop/TUI/Server
+components**, and an output directory. It shows prerequisites and the exact Cargo
+command, then requires confirmation before building. Nothing is installed
+automatically, no tags/releases are created, and no applications are installed.
+
+Each successful run writes archives, individual `.sha256` files and `SHA256SUMS`
+to a **fresh timestamped subdirectory of `dist/local/`**. Existing output is never
+cleared or overwritten. Archives contain only executables, public documentation
+and build information, never notes, settings, databases or credentials.
+
+For automation or a preview:
+
+```sh
+python3 build-aux/build_local.py --components tui,server --non-interactive
+python3 build-aux/build_local.py --components gtk --non-interactive
+python3 build-aux/build_local.py --mode standalone --components tui,server --non-interactive
+python3 build-aux/build_local.py --mode standalone --components server --dry-run
+```
+
+- **Native** is the default: local TUI/server archives have `-native` in their
+  names and a `BUILD-INFO.txt` warning that compatible OS/runtime libraries may
+  be needed. They are **not** silently advertised as static/portable releases.
+  GTK packaging currently supports Linux x86_64 and requires the GNOME development
+  libraries below; other hosts can build TUI/server without GTK.
+- **Standalone** builds TUI/server using the same target and linkage checks as CI:
+  Linux musl, Windows MSVC with static CRT, or Apple system libraries on macOS.
+  Install the matching Rust target and native compiler/tooling beforehand. Linux
+  needs `musl-gcc` and `readelf`; Windows needs MSVC build tools; macOS needs `otool`.
+  A missing target/tool fails clearly; the script never silently downgrades to a
+  dynamic build. GTK is not a standalone component.
+- Targets must match the current machine's OS/CPU because packaging smoke-tests
+  the executable. `--target` can specify that matching target explicitly; use the
+  GitHub Actions matrix to produce other platform/architecture artifacts.
+- `--output-dir PATH` changes the output parent. `CARGO_TARGET_DIR` is honored;
+  explicit `--target` and `--locked` are always passed to Cargo. `--dry-run` creates
+  no output and skips dependency probes/builds. Without a TTY, use
+  `--non-interactive` to avoid prompts.
+
 ## Terminal client
 
 Requires Rust 1.88+, Cargo, and a C linker. No GTK or display is required.
@@ -15,6 +60,12 @@ cargo build --release --locked --bin paper-trail-tui
 The executable is `target/release/paper-trail-tui` (`.exe` on Windows). See the
 [terminal guide](tui.md) for configuration, keybindings, and static/portable
 standalone build targets.
+
+The TUI's optional embedded Neovim backend uses private stdio RPC and needs `nvim`
+0.9+ only when selected; it adds no GTK dependency and is not bundled in archives.
+Tests use isolated Neovim homes and clean configuration. Linux standalone CI installs
+Neovim and sets `PAPERTRAIL_NVIM_TESTS=1` so missing integration coverage fails rather
+than silently skipping; other hosts skip those tests when Neovim is not installed.
 
 ## Desktop prerequisites
 
@@ -95,6 +146,7 @@ cargo test --locked -p papertrail-core -p papertrail-storage -p papertrail-tui
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 -m unittest discover -s build-aux -p test_release.py
+python3 -m unittest discover -s build-aux -p test_build_local.py
 python3 build-aux/generate_flatpak_sources.py --check
 ```
 
@@ -116,6 +168,27 @@ dbus-run-session -- sh build-aux/test-desktop.sh
 This also tests search-button clicks and shortcuts-dialog dismissal through X11
 input events. Set `PAPERTRAIL_SCREENSHOT` to a PNG path to capture the rendered UI.
 Compatibility fixtures protect existing notes and legacy settings.
+
+### Refresh README screenshots
+
+The screenshots are captures of real GTK and VTE terminal windows, not mockups.
+Build both release clients first. On Linux, install screenshot-only developer
+tools: Python PyGObject with GTK 4 and VTE 3.91 bindings, Xvfb, xdotool, ImageMagick,
+and D-Bus. These are not application runtime requirements.
+
+```sh
+cargo build --release --locked --bin paper-trail --bin paper-trail-tui
+dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' python3 build-aux/capture_screenshots.py
+```
+
+The helper creates a temporary home/settings profile with synthetic notes and
+public example sync settings; it does not authenticate, contact a sync server,
+or read your real notes. It captures the desktop editor, terminal All view, and
+interactive sync-folder checklist into `data/screenshots/`. `--output-dir PATH`
+can redirect captures without changing the README assets.
+`--editor neovim` captures the optional backend using clean, isolated Neovim
+configuration and names the terminal images `tui-neovim.png` and
+`tui-sync-folders-neovim.png`; it requires an installed Neovim runtime.
 
 ## Workspace layout
 

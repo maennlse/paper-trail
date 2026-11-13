@@ -54,7 +54,8 @@ or on failure; disabled system animations are respected. Menus stay accessible.
 TUI:
 
 ```text
-:sync-configure https://sync.example https://login.example PUBLIC_CLIENT_ID 'openid offline_access papertrail'
+:sync-configure https://sync.example
+# Review the displayed sync server and identity provider; type yes to trust it.
 :login
 # Open the displayed verification URL/code on another device. No SSH browser needed.
 :create-vault
@@ -155,13 +156,14 @@ Sync. Explicit confirmation publishes the encrypted assignment for subsequent de
 Name/color conflicts keep local directories intact and require acknowledging remote
 metadata in Configure Sync; rename again afterward if a different global name is wanted.
 
-TUI equivalents (use `:sync-folders` to see opaque IDs):
+TUI: `:sync-folders` opens an interactive checklist for local and known remote
+collections. Space/click toggles, Enter saves, and Esc cancels; `i` shows full
+folder names, local paths and opaque IDs. Selection changes never delete notes.
+Existing path/ID commands remain compatibility shortcuts:
 
 ```text
-:sync-add-folder /absolute/path
-:sync-remove-folder /absolute/path
-:sync-download-dir /absolute/download/root
 :sync-folders
+:sync-download-dir /absolute/download/root
 :sync-auto-download off
 :sync-select-folder FOLDER_ID
 :sync-unselect-folder FOLDER_ID
@@ -172,9 +174,93 @@ TUI equivalents (use `:sync-folders` to see opaque IDs):
 
 ## Authentication, HTTPS, and secure storage
 
-Account login and vault unlock are separate. Configure an **exact trusted OIDC
-issuer**, public native client ID(s), registered redirects, and scopes granting
-the API audience. There is no hardcoded Zitadel dependency. The issuer discovery
+Account login and vault unlock are separate. New GTK setup discovers authentication
+from the sync server by default; TUI uses `:sync-configure HTTPS_SERVER`. Clients
+fetch the public `GET /v1/auth/config`, validate its settings, then fetch the issuer's
+standard OIDC discovery metadata and require an **exact** issuer match. The public
+response contains only:
+
+```json
+{
+  "issuer": "https://login.example",
+  "client_id": "YOUR_PUBLIC_NATIVE_CLIENT_ID",
+  "scope": "openid offline_access YOUR_PROVIDER_API_SCOPE"
+}
+```
+
+The examples are placeholders, not built-in provider settings. Configuration and
+metadata fetches use HTTPS, fixed timeouts, size limits and no redirects. Invalid,
+incomplete, unavailable or mismatched discovery fails closed without using tokens
+or silently falling back to manual/insecure settings. The endpoint is public and
+read-only; missing server native-client settings produce an empty HTTP 503. Older
+servers can return 404, with instructions to configure authentication manually.
+
+### Configuration ownership and precedence
+
+| Setting | Source |
+| --- | --- |
+| Advertised issuer | Existing `PAPERTRAIL_OIDC_ISSUER`, read from the server's token authenticator |
+| Expected access-token audience | Existing `PAPERTRAIL_API_AUDIENCE`; remains independent server-side validation |
+| Advertised public client ID | Optional new `PAPERTRAIL_NATIVE_CLIENT_ID`, copied from the existing provider native-app registration |
+| Advertised scopes | Optional new `PAPERTRAIL_NATIVE_SCOPES`, default `openid offline_access`; include the existing provider-specific API scopes when needed |
+
+Previously, native IDs/scopes existed only in client `sync/config.json`, not in the
+server's deployment configuration. These two optional native settings make that
+public configuration available server-side. No issuer/audience setting was added.
+The confidential `PAPERTRAIL_INTROSPECTION_CLIENT_ID` and secret file are unrelated
+server credentials and are **never** advertised or used as native defaults.
+
+The expected audience is normally **not advertised**: it is a resource-server
+validation rule, not a universal OAuth request parameter. Existing flows select the
+API through the provider's native registration/scopes; discovery adds no `audience`
+or `resource` parameter. Advertised/requested scopes do not grant server permissions
+and do not replace signature, issuer, audience, time or account-authorization checks.
+
+- Existing client configurations remain **manual**; missing `discover_auth` means
+  `false`. Explicit issuer/client/scopes continue taking precedence, with no fetch
+  from the new endpoint. Existing servers need no configuration changes to keep
+  these clients working.
+- Select **Discover authentication from sync server** in GTK or run the one-argument
+  TUI setup command to explicitly opt in. Discovery uses the advertised native ID
+  and scopes as a complete set, not a silent mix of manual and discovered fields.
+- For manual/older-server setup, turn that switch off or use
+  `:sync-configure HTTPS_SERVER HTTPS_ISSUER PUBLIC_CLIENT_ID 'SCOPES'`. The optional
+  scopes argument retains existing scopes, or defaults to `openid offline_access`.
+- Discovery failures never overwrite a saved manual configuration. Discovery mode
+  requires the configuration endpoint to remain available; there is no automatic
+  downgrade when it fails. You may explicitly select manual configuration.
+
+### Issuer trust and account identity
+
+Treat the sync server's advertised identity provider as untrusted. Before first
+authentication, GTK/TUI display both URLs and require explicit confirmation. TUI
+requires `yes`; Esc or any other answer rejects. Discovery can be cancelled without
+saving configuration (TUI: `:sync-discovery-cancel`). The accepted server/issuer pair
+is persisted in the profile's `sync/config.json`; `issuer` is the trust pin, not a
+value that runtime discovery may overwrite. A previously explicit manual issuer
+for the same server also represents an existing trust decision.
+
+The same accepted issuer continues automatically. Discovery mode rechecks advertised
+settings before authentication, refresh and authenticated sync operations. An issuer
+change stops those operations with instructions to review Configure Sync (TUI:
+`:sync-configure SERVER`); no new issuer is accepted without confirmation. Native
+client ID/scope changes also require explicitly reviewing configuration. Non-interactive
+shared-client calls reject changes rather than prompting or accepting them.
+
+**Confirmation never migrates an identity.** Existing journal/account protection
+still refuses changing server, issuer or native client ID once a journal exists;
+use a separate settings profile and note directory for a changed identity. No
+accounts are merged, journals reset, vaults adopted, encryption keys changed, or
+encrypted formats rewritten. Identity remains the server-validated `(iss, sub)`.
+Switching an unbound profile clears its old in-memory credentials/keys; credential
+storage remains namespaced by server, issuer and native client ID. Older clients
+that do not understand the discovery flag reject that configuration rather than
+silently dropping its trust policy; update both GTK and TUI for a shared profile.
+
+### Existing OAuth flows
+
+Configure the provider's public native client, registered redirects, and scopes
+granting the API audience. There is no hardcoded Zitadel dependency. The issuer discovery
 document supplies authorization/device-authorization/token/JWKS endpoints; insecure
 endpoints and issuer mismatches fail. GTK and optional TUI browser login use
 Authorization Code with PKCE S256 through the system browser. TUI device login uses
@@ -185,8 +271,13 @@ authorization-response issuer, when supplied, must match. ID tokens are not used
 as credentials or decoded as the source of account identity: the authenticated
 API returns the access token's validated `(iss, sub)` identity.
 
-Linux browser login registers `http://127.0.0.1:{ephemeral-port}/callback` per RFC 8252. This
-loopback redirect is the narrow HTTP exception; all issuer and API requests require
+Linux browser login registers `http://127.0.0.1:{ephemeral-port}/callback` per RFC 8252.
+The callback page tries to close its tab after three seconds once the authorization-code
+exchange succeeds. Browser security may block closing a system-browser tab; a
+manual-close message remains visible. Error pages do not auto-close, and no tokens
+or provider error details are included in the page. The successful page attempts
+to remove OAuth query parameters from its address bar before the timer starts.
+This loopback redirect is the narrow HTTP exception; all issuer and API requests require
 HTTPS and do not follow redirects. API audience selection is issuer-specific;
 configure it with the provider's client/scopes rather than assuming a universal
 nonstandard `audience` authorization parameter.
@@ -301,6 +392,7 @@ caller-selected account. IDs do not contain titles or filenames.
 
 | Route                                     | Behavior                                                           |
 | ----------------------------------------- | ------------------------------------------------------------------ |
+| `GET /v1/auth/config`                     | Public native authentication settings; no Bearer token required    |
 | `GET /v1/identity`                        | Validated account identity                                         |
 | `GET /v1/vault`                           | Current encrypted wrapping envelopes                               |
 | `PUT /v1/vault`                           | `If-Match: 0` creates; current generation conditionally updates    |
@@ -330,10 +422,17 @@ trusts the server's supplied history. Existing state is never silently reset.
 
 ## Run and operate the server
 
+Prebuilt server binaries for Linux, Windows, and macOS (x86_64 and ARM64) are
+available from GitHub Releases and **Standalone Server** CI artifacts. See the
+[server binary deployment guide](server-release.md) for downloads, runtime
+requirements and setup. To build from source:
+
 ```sh
 cargo build --release --locked --bin paper-trail-server
 PAPERTRAIL_OIDC_ISSUER=https://login.example \
 PAPERTRAIL_API_AUDIENCE=papertrail-api \
+PAPERTRAIL_NATIVE_CLIENT_ID=YOUR_PUBLIC_NATIVE_CLIENT_ID \
+PAPERTRAIL_NATIVE_SCOPES='openid offline_access YOUR_PROVIDER_API_SCOPE' \
 PAPERTRAIL_DATABASE=/srv/papertrail/papertrail.sqlite3 \
 ./target/release/paper-trail-server
 ```
@@ -359,6 +458,8 @@ PAPERTRAIL_API_AUDIENCE=YOUR_PROJECT_ID
 PAPERTRAIL_TOKEN_VALIDATION=introspection
 PAPERTRAIL_INTROSPECTION_CLIENT_ID=YOUR_SERVER_API_CLIENT_ID
 PAPERTRAIL_INTROSPECTION_CLIENT_SECRET_FILE=/etc/papertrail/introspection-secret
+PAPERTRAIL_NATIVE_CLIENT_ID=YOUR_EXISTING_PUBLIC_NATIVE_CLIENT_ID
+PAPERTRAIL_NATIVE_SCOPES='openid offline_access urn:zitadel:iam:org:project:id:YOUR_PROJECT_ID:aud'
 ```
 
 The native client's scopes should be
