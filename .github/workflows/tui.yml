@@ -43,9 +43,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install musl compiler
+      - name: Install musl compiler and Neovim test runtime
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools neovim
+          echo "PAPERTRAIL_NVIM_TESTS=1" >> "$GITHUB_ENV"
       - name: Set up Rust
         run: |
           rustup toolchain install stable --profile minimal --target "$TARGET"

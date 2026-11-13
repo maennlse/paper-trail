@@ -32,6 +32,7 @@ pub const COMMANDS: &[&str] = &[
     "x",
     "sync",
     "sync-configure ",
+    "sync-discovery-cancel",
     "sync-status",
     "login",
     "logout",
@@ -128,6 +129,18 @@ pub fn candidates(
     };
     let mut values = match command {
         "set" => {
+            for (prefix, options) in [
+                ("editor ", &["builtin", "neovim"][..]),
+                ("nvim-config ", &["clean", "user"][..]),
+            ] {
+                if let Some(value) = arg.strip_prefix(prefix) {
+                    return Ok(options
+                        .iter()
+                        .filter(|option| option.starts_with(value))
+                        .map(|option| format!("set {prefix}{option}"))
+                        .collect());
+                }
+            }
             if let Some(prefix) = arg.strip_prefix("folder-width ") {
                 return Ok((10..=30)
                     .map(|n| n.to_string())
@@ -135,11 +148,17 @@ pub fn candidates(
                     .map(|n| format!("set folder-width {n}"))
                     .collect());
             }
-            ["number", "nonumber", "folder-width "]
-                .iter()
-                .filter(|v| v.starts_with(arg))
-                .map(|v| format!("set {v}"))
-                .collect()
+            [
+                "number",
+                "nonumber",
+                "folder-width ",
+                "editor ",
+                "nvim-config ",
+            ]
+            .iter()
+            .filter(|v| v.starts_with(arg))
+            .map(|v| format!("set {v}"))
+            .collect()
         }
         "color" => (0..12)
             .map(|n| format!("preset-{n}"))
