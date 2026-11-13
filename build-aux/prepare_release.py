@@ -9,7 +9,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-TUI_TARGETS = (
+NATIVE_TARGETS = (
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
     "x86_64-pc-windows-msvc",
@@ -18,8 +18,9 @@ TUI_TARGETS = (
     "aarch64-apple-darwin",
 )
 PACKAGES = tuple(
-    f"paper-trail-tui-{target}.{'zip' if 'windows' in target else 'tar.gz'}"
-    for target in TUI_TARGETS
+    f"paper-trail-{component}-{target}.{'zip' if 'windows' in target else 'tar.gz'}"
+    for component in ("tui", "server")
+    for target in NATIVE_TARGETS
 ) + ("paper-trail-gtk-linux-x86_64.tar.gz", "paper-trail-gtk-linux-x86_64.flatpak")
 
 

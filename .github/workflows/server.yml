@@ -1,0 +1,76 @@
+---
+name: Standalone Server
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+
+jobs:
+  standalone:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            rustflags: "-C target-feature=+crt-static"
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            rustflags: "-C target-feature=+crt-static"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rustflags: "-C target-feature=+crt-static"
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            rustflags: "-C target-feature=+crt-static"
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            rustflags: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            rustflags: ""
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: ${{ matrix.target }}
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      # Build bundled cryptography rather than adopting a runner's system library.
+      AWS_LC_SYS_USE_SYSTEM: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools cmake ninja-build perl
+          echo "CC=musl-gcc" >> "$GITHUB_ENV"
+      - name: Install Windows assembler
+        if: runner.os == 'Windows' && runner.arch == 'X64'
+        run: |
+          choco install nasm --no-progress -y
+          echo 'C:\Program Files\NASM' >> "$GITHUB_PATH"
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target "$TARGET"
+          rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Test server without GTK
+        run: cargo test --locked --target "$TARGET" -p papertrail-server
+      - name: Build standalone executable
+        run: >-
+          cargo build --release --locked --target "$TARGET"
+          --bin paper-trail-server
+      - name: Verify linkage and package
+        run: python build-aux/package_server.py "$TARGET"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: paper-trail-server-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error

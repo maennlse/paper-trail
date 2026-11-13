@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import struct
 import subprocess
 import sys
@@ -47,7 +48,7 @@ def windows_imports(binary: Path) -> list[str]:
     return libraries
 
 
-def verify(binary: Path, target: str) -> None:
+def verify(binary: Path, target: str, *, check_version: bool = True) -> None:
     """Reject dynamic Linux builds and third-party runtime dependencies elsewhere."""
     if "linux" in target:
         program = subprocess.check_output(
@@ -97,36 +98,85 @@ def verify(binary: Path, target: str) -> None:
                 raise ValueError(f"Non-system macOS dependency: {library}")
     else:
         raise ValueError(f"Unsupported standalone target: {target}")
-    subprocess.run([str(binary), "--version"], check=True)
+    if check_version:
+        subprocess.run([str(binary), "--version"], check=True)
     subprocess.run([str(binary), "--help"], check=True, stdout=subprocess.DEVNULL)
 
 
-def main() -> None:
-    """Package one of the six native CI target builds, with a checksum."""
-    target = sys.argv[1]
-    root = Path(__file__).resolve().parent.parent
-    executable = "paper-trail-tui.exe" if "windows" in target else "paper-trail-tui"
-    binary = root / "target" / target / "release" / executable
-    verify(binary, target)
-    destination = root / "dist"
-    destination.mkdir(exist_ok=True)
-    stem = f"paper-trail-tui-{target}"
-    readme = root / "docs/tui.md"
-    if "windows" in target:
+# Explicit keyword-only source/output overrides keep local builds out of CI's dist/.
+# pylint: disable-next=too-many-arguments
+def package(
+    root: Path,
+    target: str,
+    *,
+    executable_name: str,
+    documentation: Path,
+    check_version: bool = True,
+    binary: Path | None = None,
+    destination: Path | None = None,
+) -> Path:
+    """Package a verified standalone executable and its documentation, never data."""
+    executable = f"{executable_name}.exe" if "windows" in target else executable_name
+    binary = binary or root / "target" / target / "release" / executable
+    verify(binary, target, check_version=check_version)
+    return create_archive(
+        binary,
+        documentation,
+        destination or root / "dist",
+        f"{executable_name}-{target}",
+    )
+
+
+def create_archive(
+    binary: Path,
+    documentation: Path,
+    destination: Path,
+    stem: str,
+    build_info: str | None = None,
+) -> Path:
+    """Archive only explicit public files; native builds include a dependency notice."""
+    for source in (binary, documentation):
+        if not source.is_file() or source.is_symlink():
+            raise ValueError(
+                f"Archive input must be a regular file, not a directory/link: {source}"
+            )
+    destination.mkdir(parents=True, exist_ok=True)
+    executable = binary.name
+    if executable.endswith(".exe"):
         archive = destination / f"{stem}.zip"
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
             bundle.write(binary, executable)
-            bundle.write(readme, "README.md")
+            bundle.write(documentation, "README.md")
+            if build_info is not None:
+                bundle.writestr("BUILD-INFO.txt", build_info)
     else:
         archive = destination / f"{stem}.tar.gz"
         with tarfile.open(archive, "w:gz") as bundle:
             bundle.add(binary, arcname=executable)
-            bundle.add(readme, arcname="README.md")
+            bundle.add(documentation, arcname="README.md")
+            if build_info is not None:
+                data = build_info.encode("utf-8")
+                entry = tarfile.TarInfo("BUILD-INFO.txt")
+                entry.size = len(data)
+                entry.mode = 0o644
+                bundle.addfile(entry, io.BytesIO(data))
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     archive.with_suffix(archive.suffix + ".sha256").write_text(
         f"{digest}  {archive.name}\n", encoding="utf-8"
     )
-    print(f"Verified and packaged {archive}")
+    print(f"Packaged {archive}")
+    return archive
+
+
+def main() -> None:
+    """Package one of the six native CI target builds, with a checksum."""
+    root = Path(__file__).resolve().parent.parent
+    package(
+        root,
+        sys.argv[1],
+        executable_name="paper-trail-tui",
+        documentation=root / "docs/tui.md",
+    )
 
 
 if __name__ == "__main__":

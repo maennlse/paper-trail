@@ -11,9 +11,15 @@ import tarfile
 from pathlib import Path
 
 
-def package(root: Path, distribution_file: Path = Path("/etc/os-release")) -> Path:
+def package(
+    root: Path,
+    distribution_file: Path = Path("/etc/os-release"),
+    *,
+    binary: Path | None = None,
+    destination: Path | None = None,
+) -> Path:
     """Validate a trusted local build, then archive it without launching the GUI."""
-    binary = root / "target/release/paper-trail"
+    binary = binary or root / "target/release/paper-trail"
     with binary.open("rb") as executable:
         header = executable.read(20)
     if (
@@ -36,8 +42,8 @@ def package(root: Path, distribution_file: Path = Path("/etc/os-release")) -> Pa
         f"GTK / libadwaita / GtkSourceView build versions:\n{versions}\n"
         f"Dynamic library dependencies:\n{libraries}"
     ).encode()
-    destination = root / "dist"
-    destination.mkdir(exist_ok=True)
+    destination = destination or root / "dist"
+    destination.mkdir(parents=True, exist_ok=True)
     archive = destination / "paper-trail-gtk-linux-x86_64.tar.gz"
     with tarfile.open(archive, "w:gz") as bundle:
         bundle.add(binary, arcname="paper-trail")
