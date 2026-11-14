@@ -2503,7 +2503,7 @@ name = "papertrail-crypto"
 version = "0.5.0"
 dependencies = [
  "argon2",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chacha20poly1305",
  "rand_core 0.6.4",
  "serde",
@@ -2536,7 +2536,7 @@ version = "0.5.0"
 dependencies = [
  "aws-lc-rs",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "http-body-util",
  "jsonwebtoken",
  "papertrail-crypto",
