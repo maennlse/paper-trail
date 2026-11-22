@@ -45,6 +45,21 @@ impl NativeClientConfig {
     }
 }
 type ApiResult<T> = Result<T, StatusCode>;
+// SQLite INTEGER is signed; wire counters remain unsigned. Reject overflow and
+// negative database values rather than silently truncating or wrapping.
+fn sql_counter(value: u64) -> ApiResult<i64> {
+    i64::try_from(value).map_err(|_| StatusCode::BAD_REQUEST)
+}
+fn read_counter(row: &rusqlite::Row<'_>) -> rusqlite::Result<u64> {
+    let value: i64 = row.get(0)?;
+    u64::try_from(value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Integer,
+            Box::new(error),
+        )
+    })
+}
 impl Server {
     pub fn open(
         path: &std::path::Path,
@@ -221,7 +236,7 @@ async fn put_vault(
             }
         }
     }
-    tx.execute("INSERT INTO vaults VALUES (?,?,?,?) ON CONFLICT(iss,sub) DO UPDATE SET generation=excluded.generation,data=excluded.data",params![a.iss,a.sub,v.generation,serde_json::to_string(&v).unwrap()]).map_err(database_error)?;
+    tx.execute("INSERT INTO vaults VALUES (?,?,?,?) ON CONFLICT(iss,sub) DO UPDATE SET generation=excluded.generation,data=excluded.data",params![a.iss,a.sub,sql_counter(v.generation)?,serde_json::to_string(&v).unwrap()]).map_err(database_error)?;
     tx.commit().map_err(database_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -285,7 +300,7 @@ async fn append(
         .query_row(
             "SELECT sequence,data FROM revisions WHERE iss=? AND sub=? AND revision=?",
             params![a.iss, a.sub, r.id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((read_counter(r)?, r.get(1)?)),
         )
         .optional()
         .map_err(database_error)?;
@@ -307,12 +322,12 @@ async fn append(
         .query_row(
             "SELECT COALESCE(MAX(sequence),0)+1 FROM revisions WHERE iss=? AND sub=?",
             params![a.iss, a.sub],
-            |r| r.get(0),
+            read_counter,
         )
         .map_err(database_error)?;
     tx.execute(
         "INSERT INTO revisions VALUES (?,?,?,?,?,?)",
-        params![a.iss, a.sub, seq, note, r.id, data],
+        params![a.iss, a.sub, sql_counter(seq)?, note, r.id, data],
     )
     .map_err(database_error)?;
     tx.commit().map_err(database_error)?;
@@ -357,7 +372,7 @@ async fn erase_folder(
         .query_row(
             "SELECT COALESCE(MAX(sequence),0) FROM revisions WHERE iss=? AND sub=?",
             params![a.iss, a.sub],
-            |r| r.get(0),
+            read_counter,
         )
         .map_err(database_error)?;
     let head: Option<String> = tx.query_row(
@@ -390,14 +405,14 @@ async fn erase_folder(
         *notes.entry(r.note_id.clone()).or_default() += 1;
     }
     for (note, count) in &notes {
-        let total: usize = tx
+        let total: i64 = tx
             .query_row(
                 "SELECT COUNT(*) FROM revisions WHERE iss=? AND sub=? AND note=?",
                 params![a.iss, a.sub, note],
                 |row| row.get(0),
             )
             .map_err(database_error)?;
-        if total != *count {
+        if usize::try_from(total).ok() != Some(*count) {
             return Err(StatusCode::BAD_REQUEST);
         }
         tx.execute(
@@ -425,7 +440,7 @@ async fn erase_folder(
         params![
             a.iss,
             a.sub,
-            latest + 1,
+            sql_counter(latest + 1)?,
             catalog.note_id,
             catalog.id,
             serde_json::to_string(catalog).unwrap()
@@ -455,7 +470,7 @@ async fn changes(
         .query_row(
             "SELECT COALESCE(MAX(sequence),0) FROM revisions WHERE iss=? AND sub=?",
             params![a.iss, a.sub],
-            |r| r.get(0),
+            read_counter,
         )
         .map_err(database_error)?;
     let through = q.through.unwrap_or(latest);
@@ -464,9 +479,10 @@ async fn changes(
     }
     let mut stmt = db.prepare("SELECT sequence,data FROM revisions WHERE iss=? AND sub=? AND sequence>? AND sequence<=? ORDER BY sequence LIMIT 100").map_err(database_error)?;
     let rows = stmt
-        .query_map(params![a.iss, a.sub, q.cursor, through], |r| {
-            Ok((r.get::<_, u64>(0)?, r.get::<_, String>(1)?))
-        })
+        .query_map(
+            params![a.iss, a.sub, sql_counter(q.cursor)?, sql_counter(through)?],
+            |r| Ok((read_counter(r)?, r.get::<_, String>(1)?)),
+        )
         .map_err(database_error)?;
     let mut changes = vec![];
     let mut bytes = 0;
@@ -529,7 +545,7 @@ async fn export(
         .map_err(database_error)?;
     let rows = stmt
         .query_map(params![a.iss, a.sub], |r| {
-            Ok((r.get::<_, u64>(0)?, r.get::<_, String>(1)?))
+            Ok((read_counter(r)?, r.get::<_, String>(1)?))
         })
         .map_err(database_error)?;
     let mut revisions = vec![];
