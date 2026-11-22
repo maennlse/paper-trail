@@ -3,8 +3,51 @@ use std::cell::RefCell;
 #[derive(Default)]
 struct Memory {
     revisions: RefCell<Vec<Revision>>,
+    erased: RefCell<BTreeSet<String>>,
 }
 impl Remote for Memory {
+    fn upload_checked(&self, r: &Revision, head: Option<&str>) -> io::Result<Option<u64>> {
+        if !self.erased.borrow().is_empty() {
+            if r.note_id != r.vault_id && self.erased.borrow().contains(&r.note_id) {
+                return Err(error("erased note"));
+            }
+            let all = self.revisions.borrow();
+            let current = all
+                .iter()
+                .rev()
+                .find(|old| old.note_id == r.vault_id)
+                .map(|r| r.id.as_str());
+            if current != head {
+                return Err(error("stale catalog"));
+            }
+        }
+        self.upload(r)
+    }
+    fn erase_folder(&self, request: &papertrail_crypto::Erasure) -> io::Result<()> {
+        let mut all = self.revisions.borrow_mut();
+        if all.len() as u64 != request.through {
+            return Err(error("concurrent change"));
+        }
+        for replacement in &request.replacements {
+            let index = all
+                .iter()
+                .position(|r| r.id == replacement.revision.id)
+                .unwrap();
+            assert_eq!(
+                digest(&serde_json::to_vec(&all[index]).unwrap()),
+                replacement.original_digest
+            );
+            all[index] = replacement.revision.clone();
+            self.erased
+                .borrow_mut()
+                .insert(replacement.revision.note_id.clone());
+        }
+        self.erased
+            .borrow_mut()
+            .insert(request.catalog.vault_id.clone());
+        all.push(request.catalog.clone());
+        Ok(())
+    }
     fn upload(&self, r: &Revision) -> io::Result<Option<u64>> {
         let mut all = self.revisions.borrow_mut();
         if let Some(index) = all.iter().position(|old| old == r) {
@@ -44,6 +87,248 @@ impl Remote for Memory {
         })
     }
 }
+#[test]
+fn folder_erasure_keeps_local_edits_and_prevents_offline_reupload() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (vault, key, _) = Vault::create(&a, "a long enough test passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut one, c1, s1) = setup(temp.path(), "one", &a, &vault);
+    let (mut two, c2, s2) = setup(temp.path(), "two", &a, &vault);
+    let path1 = c1.folders[0].join("secret");
+    let path2 = c2.folders[0].join("secret");
+    fs::write(&path1, "first revision").unwrap();
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    fs::write(&path1, "second revision").unwrap();
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    fs::write(&path2, "offline edit that must stay").unwrap();
+    fs::write(c2.folders[0].join("offline-new"), "must not upload").unwrap();
+    two.scan(&c2, &key, &s2, &[]).unwrap();
+    assert!(!two.state.outgoing.is_empty());
+    two.state.incoming = Some(remote.changes(two.state.cursor, None).unwrap());
+    let folder = one.state.bindings.keys().next().unwrap().clone();
+    one.delete_folder(&remote, &c1, &key, &s1, &folder).unwrap();
+    assert_eq!(fs::read_to_string(&path1).unwrap(), "second revision");
+    assert!(one
+        .state
+        .catalog
+        .as_ref()
+        .unwrap()
+        .deleted_folders
+        .contains(&folder));
+    let after = remote.revisions.borrow().len();
+    for r in remote
+        .revisions
+        .borrow()
+        .iter()
+        .filter(|r| r.note_id != vault.id)
+    {
+        assert!(matches!(
+            r.open_record(&key, &a).unwrap(),
+            Record::Erased { .. }
+        ));
+    }
+    // Simulate a crash after persisting the catalog marker but before replacing
+    // a journaled page which still contains the original encrypted payload.
+    let live = remote.changes(two.state.cursor, None).unwrap();
+    two.prepare_folders(&remote, &c2, &key, &s2, &live).unwrap();
+    assert!(two.state.incoming.is_some());
+    drop(two);
+    let mut two = Engine::open(temp.path().join("two/sync/state.json")).unwrap();
+    two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    assert_eq!(
+        fs::read_to_string(&path2).unwrap(),
+        "offline edit that must stay"
+    );
+    assert_eq!(remote.revisions.borrow().len(), after);
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    assert_eq!(remote.revisions.borrow().len(), after);
+    assert!(two.state.outgoing.is_empty());
+    assert!(two.state.deferred.is_empty());
+    // Fresh replicas authenticate the erased history but never create the folder.
+    let mut fresh = Engine::open(temp.path().join("fresh/sync/state.json")).unwrap();
+    fresh.bind(&a, &vault).unwrap();
+    let config = Config {
+        folders: vec![],
+        download_dir: Some(temp.path().join("downloads")),
+        ..c1.clone()
+    };
+    fresh.run(&remote, &config, &key, &s1, &[]).unwrap();
+    assert!(fresh.state.bindings.is_empty());
+    // Re-enabling is an explicit operation and assigns fresh folder/note IDs.
+    let old_ids: BTreeSet<_> = one.state.notes.keys().cloned().collect();
+    drop(one);
+    fs::write(
+        temp.path().join("one/sync/config.json"),
+        serde_json::to_vec(&c1).unwrap(),
+    )
+    .unwrap();
+    let service = crate::control::Service::new_session_only(&temp.path().join("one/settings.json"));
+    let choices = service.folder_choices(&s1).unwrap();
+    assert!(choices.is_empty());
+    service.sync_as_new_folder(&folder).unwrap();
+    assert!(service.sync_as_new_folder(&folder).is_err());
+    let new_config = service.saved_config().unwrap().unwrap();
+    let mut one = Engine::open(temp.path().join("one/sync/state.json")).unwrap();
+    one.run(&remote, &new_config, &key, &s1, &[]).unwrap();
+    one.run(&remote, &new_config, &key, &s1, &[]).unwrap();
+    let new_folder = one.state.bindings.keys().next().unwrap();
+    assert_ne!(new_folder, &folder);
+    assert!(one.state.notes.keys().all(|id| !old_ids.contains(id)));
+    assert_eq!(fs::read_to_string(&path1).unwrap(), "second revision");
+}
+
+#[test]
+fn erasing_an_empty_folder_does_not_block_other_folders_or_require_its_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (vault, key, _) = Vault::create(&a, "a long enough test passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut engine, mut config, settings) = setup(temp.path(), "one", &a, &vault);
+    let other = temp.path().join("one/Other");
+    fs::create_dir(&other).unwrap();
+    config.folders.push(other.clone());
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    let folder = engine
+        .state
+        .bindings
+        .iter()
+        .find(|(_, b)| b.path == config.folders[0])
+        .unwrap()
+        .0
+        .clone();
+    engine
+        .delete_folder(&remote, &config, &key, &settings, &folder)
+        .unwrap();
+    fs::remove_dir(&config.folders[0]).unwrap();
+    fs::write(other.join("still-syncing"), "kept syncing").unwrap();
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    assert!(remote.revisions.borrow().iter().any(
+        |r| matches!(r.open_record(&key, &a).unwrap(), Record::Note(n) if n.body == "kept syncing")
+    ));
+}
+
+#[test]
+fn lost_erasure_response_is_reconciled_without_deleting_local_files_or_reuploading() {
+    struct LostErasure {
+        memory: Memory,
+        lost: std::cell::Cell<bool>,
+    }
+    impl Remote for LostErasure {
+        fn upload(&self, r: &Revision) -> io::Result<Option<u64>> {
+            self.memory.upload(r)
+        }
+        fn upload_checked(&self, r: &Revision, head: Option<&str>) -> io::Result<Option<u64>> {
+            self.memory.upload_checked(r, head)
+        }
+        fn changes(&self, cursor: u64, through: Option<u64>) -> io::Result<Changes> {
+            self.memory.changes(cursor, through)
+        }
+        fn erase_folder(&self, request: &papertrail_crypto::Erasure) -> io::Result<()> {
+            self.memory.erase_folder(request)?;
+            if !self.lost.replace(true) {
+                return Err(error("lost response"));
+            }
+            Ok(())
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (vault, key, _) = Vault::create(&a, "a long enough test passphrase").unwrap();
+    let remote = LostErasure {
+        memory: Memory::default(),
+        lost: Default::default(),
+    };
+    let (mut engine, config, settings) = setup(temp.path(), "one", &a, &vault);
+    let path = config.folders[0].join("kept");
+    fs::write(&path, "retained locally").unwrap();
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    let folder = engine.state.bindings.keys().next().unwrap().clone();
+    assert!(engine
+        .delete_folder(&remote, &config, &key, &settings, &folder)
+        .is_err());
+    let count = remote.memory.revisions.borrow().len();
+    drop(engine);
+    let mut engine = Engine::open(temp.path().join("one/sync/state.json")).unwrap();
+    engine
+        .delete_folder(&remote, &config, &key, &settings, &folder)
+        .unwrap();
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    assert_eq!(fs::read_to_string(path).unwrap(), "retained locally");
+    assert_eq!(remote.memory.revisions.borrow().len(), count);
+}
+
+#[test]
+fn deleting_a_folder_preserves_notes_and_deferred_moves_already_moved_elsewhere() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (vault, key, _) = Vault::create(&a, "a long enough test passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut one, mut c1, s1) = setup(temp.path(), "one", &a, &vault);
+    let (mut two, c2, s2) = setup(temp.path(), "two", &a, &vault);
+    let other = temp.path().join("one/Other");
+    fs::create_dir(&other).unwrap();
+    c1.folders.push(other.clone());
+    let original = c1.folders[0].join("moved");
+    fs::write(&original, "moved note").unwrap();
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    let note_id = one.state.notes.keys().next().unwrap().clone();
+    let protected = two.state.notes[&note_id].path.clone();
+    let moved = other.join("moved");
+    fs::rename(&original, &moved).unwrap();
+    one.state.notes.get_mut(&note_id).unwrap().path = moved;
+    one.save().unwrap();
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    two.run(&remote, &c2, &key, &s2, &[protected]).unwrap();
+    assert!(!two.state.deferred.is_empty());
+    let old_folder = one
+        .state
+        .bindings
+        .iter()
+        .find(|(_, b)| b.path == c1.folders[0])
+        .unwrap()
+        .0
+        .clone();
+    one.delete_folder(&remote, &c1, &key, &s1, &old_folder)
+        .unwrap();
+    two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    assert!(two.state.deferred.is_empty());
+    assert_eq!(
+        fs::read_to_string(&two.state.notes[&note_id].path).unwrap(),
+        "moved note"
+    );
+    let mut fresh = Engine::open(temp.path().join("fresh/sync/state.json")).unwrap();
+    fresh.bind(&a, &vault).unwrap();
+    let config = Config {
+        folders: vec![],
+        download_dir: Some(temp.path().join("fresh/downloads")),
+        ..c1
+    };
+    fresh.run(&remote, &config, &key, &s1, &[]).unwrap();
+    assert_eq!(
+        fs::read_to_string(&fresh.state.notes[&note_id].path).unwrap(),
+        "moved note"
+    );
+}
+
 fn setup(root: &Path, name: &str, a: &Account, v: &Vault) -> (Engine, Config, Settings) {
     let notes = root.join(name).join("Notes");
     fs::create_dir_all(&notes).unwrap();
@@ -61,6 +346,7 @@ fn setup(root: &Path, name: &str, a: &Account, v: &Vault) -> (Engine, Config, Se
             },
         )]),
         legacy_notes: BTreeMap::new(),
+        deleted_folders: BTreeSet::new(),
     });
     e.state.bindings.insert(
         folder_id,
@@ -83,6 +369,72 @@ fn setup(root: &Path, name: &str, a: &Account, v: &Vault) -> (Engine, Config, Se
     };
     (e, c, Settings::new(notes))
 }
+#[test]
+fn cancellation_journals_inflight_upload_and_resumes_without_losing_pending_notes() {
+    struct CancelAfterUpload<'a> {
+        remote: &'a Memory,
+        cancel: crate::control::Cancellation,
+    }
+    impl Remote for CancelAfterUpload<'_> {
+        fn check_cancelled(&self) -> io::Result<()> {
+            if self.cancel.is_cancelled() {
+                Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"))
+            } else {
+                Ok(())
+            }
+        }
+        fn changes(&self, c: u64, t: Option<u64>) -> io::Result<Changes> {
+            self.check_cancelled()?;
+            self.remote.changes(c, t)
+        }
+        fn upload(&self, revision: &Revision) -> io::Result<Option<u64>> {
+            self.check_cancelled()?;
+            let receipt = self.remote.upload(revision)?;
+            self.cancel.cancel();
+            Ok(receipt)
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let account = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (vault, key, _) = Vault::create(&account, "long enough passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut engine, config, settings) = setup(temp.path(), "one", &account, &vault);
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    let before = remote.revisions.borrow().len();
+    for name in ["first.txt", "second.txt"] {
+        fs::write(config.folders[0].join(name), name).unwrap();
+    }
+    let cancelled = CancelAfterUpload {
+        remote: &remote,
+        cancel: crate::control::Cancellation::default(),
+    };
+    let error = engine
+        .run(&cancelled, &config, &key, &settings, &[])
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(remote.revisions.borrow().len(), before + 1);
+    assert_eq!(engine.state.outgoing.len(), 1);
+    let receipt = remote.revisions.borrow().last().unwrap().id.clone();
+    assert!(engine.state.known.contains_key(&receipt));
+    let path = engine.state_path.clone();
+    drop(engine);
+    let mut engine = Engine::open(path).unwrap();
+    assert!(engine.state.known.contains_key(&receipt));
+    assert_eq!(engine.state.outgoing.len(), 1);
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    assert!(engine.state.outgoing.is_empty());
+    assert_eq!(remote.revisions.borrow().len(), before + 2);
+    for name in ["first.txt", "second.txt"] {
+        assert_eq!(
+            fs::read_to_string(config.folders[0].join(name)).unwrap(),
+            name
+        );
+    }
+}
+
 #[test]
 fn two_devices_conflicts_tombstones_and_rollback() {
     let temp = tempfile::tempdir().unwrap();
@@ -898,6 +1250,7 @@ fn simultaneous_initial_catalogs_adopt_the_winning_confirmed_legacy_ids() {
             },
         )]),
         legacy_notes: BTreeMap::from([(note_id.clone(), winner_id.clone())]),
+        deleted_folders: BTreeSet::new(),
     };
     let winner = Revision::seal_record(
         &key,
@@ -1183,4 +1536,85 @@ fn deletion_during_fetch_does_not_recreate_the_deleted_path() {
     e2.run(&remote, &c2, &key, &s2, &[]).unwrap();
     e1.run(&remote, &c1, &key, &s1, &[]).unwrap();
     assert!(!p1.exists());
+}
+
+#[test]
+fn closing_during_upload_stops_the_remaining_outbox_without_deleting_or_forgetting_notes() {
+    struct CloseAfterUpload<'a> {
+        remote: &'a Memory,
+        service: crate::control::Service,
+        path: PathBuf,
+        closed: std::cell::Cell<bool>,
+    }
+    impl Remote for CloseAfterUpload<'_> {
+        fn changes(&self, c: u64, t: Option<u64>) -> io::Result<Changes> {
+            self.remote.changes(c, t)
+        }
+        fn upload(&self, r: &Revision) -> io::Result<Option<u64>> {
+            let result = self.remote.upload(r)?;
+            if !self.closed.replace(true) {
+                self.service.pause_folder(&self.path)?;
+            }
+            Ok(result)
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (vault, key, _) = Vault::create(&a, "a long enough test passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut engine, config, settings) = setup(temp.path(), "device", &a, &vault);
+    fs::write(
+        temp.path().join("device/sync/config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    fs::write(config.folders[0].join("one"), "one").unwrap();
+    fs::write(config.folders[0].join("two"), "two").unwrap();
+    let service =
+        crate::control::Service::new_session_only(&temp.path().join("device/settings.json"));
+    let closing = CloseAfterUpload {
+        remote: &remote,
+        service: service.clone(),
+        path: config.folders[0].clone(),
+        closed: Default::default(),
+    };
+    assert_eq!(
+        engine
+            .run(&closing, &config, &key, &settings, &[])
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::Interrupted
+    );
+    assert_eq!(engine.state.outgoing.len(), 1);
+    let count = remote.revisions.borrow().len();
+    let paused = service.saved_config().unwrap().unwrap();
+    engine.run(&remote, &paused, &key, &settings, &[]).unwrap();
+    assert_eq!(remote.revisions.borrow().len(), count);
+    assert_eq!(engine.state.outgoing.len(), 1);
+    assert_eq!(
+        fs::read_to_string(config.folders[0].join("one")).unwrap(),
+        "one"
+    );
+    assert_eq!(
+        fs::read_to_string(config.folders[0].join("two")).unwrap(),
+        "two"
+    );
+    let other = temp.path().join("Other");
+    fs::create_dir(&other).unwrap();
+    let mut closed_settings = Settings::new(other);
+    engine.folder_settings(&paused, &mut closed_settings);
+    assert!(!closed_settings.note_folders.contains(&config.folders[0]));
+    // Explicit selection resumes the same identities and durable pending edit.
+    fs::write(
+        temp.path().join("device/sync/config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    assert!(engine.state.outgoing.is_empty());
+    assert_eq!(remote.revisions.borrow().len(), count + 1);
 }

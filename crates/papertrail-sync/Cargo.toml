@@ -16,6 +16,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 oauth2 = { version = "5", default-features = false, features = ["reqwest", "reqwest-blocking", "rustls-tls"] }
 zeroize = "1"
 fs2 = "0.4"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
 webbrowser = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]

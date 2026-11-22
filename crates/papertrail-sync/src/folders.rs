@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! An encrypted, conditional folder catalog. The server never sees folder names,
-//! folder membership or device-local paths. The vault ID reserves its catalog ID.
+//! folder membership during normal sync, or device-local paths. Explicit erasure
+//! discloses which opaque note IDs are erased together. The vault ID reserves its catalog ID.
 use crate::{
     engine::{Engine, Remote},
     error, Config,
@@ -65,6 +66,7 @@ impl Engine {
         let previous = self.state.catalog.clone();
         let mut catalog = previous.clone();
         let mut head = self.state.catalog_head.clone();
+        let mut latest_folders = self.state.remote_folders.clone();
         let mut legacy: BTreeMap<String, LegacyNote> = self
             .state
             .notes
@@ -119,7 +121,8 @@ impl Engine {
                             ));
                         }
                         if catalog.as_ref().is_some_and(|old| {
-                            old.folders.keys().any(|id| !value.folders.contains_key(id))
+                            !old.deleted_folders.is_subset(&value.deleted_folders)
+                                || old.folders.keys().any(|id| !value.folders.contains_key(id))
                                 || old
                                     .legacy_notes
                                     .iter()
@@ -131,15 +134,22 @@ impl Engine {
                         catalog = Some(value);
                         self.remember(&change.revision, change.sequence)?;
                     }
-                    Record::Note(n) if n.folder_id.is_none() => {
-                        legacy.insert(
-                            change.revision.note_id.clone(),
-                            LegacyNote {
-                                id: change.revision.note_id.clone(),
-                                filename: n.filename,
-                                folder: n.folder,
-                            },
-                        );
+                    Record::Note(n) => {
+                        if let Some(folder) = n.folder_id {
+                            latest_folders.insert(change.revision.note_id.clone(), folder);
+                        } else {
+                            legacy.insert(
+                                change.revision.note_id.clone(),
+                                LegacyNote {
+                                    id: change.revision.note_id.clone(),
+                                    filename: n.filename,
+                                    folder: n.folder,
+                                },
+                            );
+                        }
+                    }
+                    Record::Erased { folder_id, .. } => {
+                        latest_folders.insert(change.revision.note_id.clone(), folder_id);
                     }
                     _ => (),
                 }
@@ -159,6 +169,46 @@ impl Engine {
             .map_err(|_| error("Local note access unavailable"))?;
         self.relocate_pending()?;
         self.check_config(c)?;
+        // Keep bindings, including local-only paths, so a configured local path
+        // can never silently become a new folder identity after remote erasure.
+        if let Some(confirmed) = &catalog {
+            self.state.catalog = Some(confirmed.clone());
+            let deleted = &confirmed.deleted_folders;
+            let mut removed = BTreeSet::new();
+            for (id, tracked) in &self.state.notes {
+                if latest_folders
+                    .get(id)
+                    .or_else(|| tracked.baseline.as_ref().and_then(|n| n.folder_id.as_ref()))
+                    .is_some_and(|folder| deleted.contains(folder))
+                {
+                    removed.insert(id.clone());
+                }
+            }
+            let mut removed_outgoing = BTreeSet::new();
+            for r in &self.state.outgoing {
+                if let Record::Note(n) = r.open_record(key, self.account()?).map_err(error)? {
+                    if n.folder_id.as_ref().is_some_and(|id| deleted.contains(id)) {
+                        removed_outgoing.insert(r.id.clone());
+                    }
+                }
+            }
+            self.state
+                .outgoing
+                .retain(|r| !removed.contains(&r.note_id) && !removed_outgoing.contains(&r.id));
+            self.state
+                .deferred
+                .retain(|r| !removed.contains(&r.revision.note_id));
+            self.state
+                .folder_conflicts
+                .retain(|id| !deleted.contains(id));
+            if self.state.applying.as_ref().is_some_and(|pending| {
+                self.state.bindings.iter().any(|(id, b)| {
+                    deleted.contains(id) && pending.path.parent() == Some(b.path.as_path())
+                })
+            }) {
+                self.state.applying = None;
+            }
+        }
         // If another device won the initial catalog CAS, adopt its confirmed
         // membership IDs rather than registering a second identity for the same
         // already-known legacy notes.
@@ -246,7 +296,7 @@ impl Engine {
             }
         }
         for (id, path) in &c.folder_mappings {
-            if c.excluded_folders.contains(id) {
+            if c.excluded_folders.contains(id) || desired.deleted_folders.contains(id) {
                 continue;
             }
             if !desired.folders.contains_key(id) {
@@ -408,6 +458,7 @@ impl Engine {
         }
         drop(activity);
         if catalog.as_ref() != Some(&desired) {
+            self.check_config(c)?;
             let revision = Revision::seal_record(
                 key,
                 self.account()?,
@@ -417,7 +468,7 @@ impl Engine {
                 &Record::FolderCatalog(desired.clone()),
             )
             .map_err(error)?;
-            if let Some(sequence) = remote.upload(&revision)? {
+            if let Some(sequence) = remote.upload_checked(&revision, head.as_deref())? {
                 self.state.through = self.state.through.max(sequence);
                 self.remember(&revision, sequence)?;
                 head = Some(revision.id);
@@ -444,7 +495,8 @@ impl Engine {
             .map_err(|_| error("Local note access unavailable"))?;
         self.check_config(c)?;
         for (id, data) in &desired.folders {
-            if c.excluded_folders.contains(id)
+            if desired.deleted_folders.contains(id)
+                || c.excluded_folders.contains(id)
                 || (!c.auto_download
                     && !c.selected_folders.contains(id)
                     && !c.folder_mappings.contains_key(id))
@@ -576,7 +628,12 @@ impl Engine {
         Ok(())
     }
     pub(crate) fn folder_enabled(&self, id: &str, c: &Config) -> bool {
-        !c.excluded_folders.contains(id)
+        !self
+            .state
+            .catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog.deleted_folders.contains(id))
+            && !c.excluded_folders.contains(id)
             && self.state.bindings.get(id).is_some_and(|b| {
                 (b.managed && c.auto_download)
                     || c.selected_folders.contains(id)

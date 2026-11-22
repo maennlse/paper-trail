@@ -77,6 +77,7 @@ impl Paths {
 pub struct Preferences {
     pub hide_numbers: bool,
     pub folder_width: u16,
+    pub note_width: Option<u16>,
     pub editor: EditorBackend,
     pub nvim_clean: bool,
 }
@@ -93,7 +94,8 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             hide_numbers: false,
-            folder_width: 16,
+            folder_width: 7,
+            note_width: None,
             editor: EditorBackend::Builtin,
             nvim_clean: false,
         }
@@ -106,7 +108,8 @@ impl Preferences {
             Ok(bytes) => {
                 let mut preferences: Self =
                     serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-                preferences.folder_width = preferences.folder_width.clamp(10, 30);
+                preferences.folder_width = preferences.folder_width.clamp(7, 30);
+                preferences.note_width = preferences.note_width.map(|width| width.clamp(10, 80));
                 Ok(preferences)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::default()),

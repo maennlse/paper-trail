@@ -313,11 +313,20 @@ pub struct FolderCatalog {
     pub version: u32,
     pub folders: std::collections::BTreeMap<String, FolderData>,
     pub legacy_notes: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub deleted_folders: std::collections::BTreeSet<String>,
 }
 impl FolderCatalog {
     pub fn validate(&self) -> Result<()> {
         if self.version != FOLDER_FORMAT {
             return Err(Error::Version);
+        }
+        if self
+            .deleted_folders
+            .iter()
+            .any(|id| !self.folders.contains_key(id))
+        {
+            return Err(Error::Format);
         }
         if self.folders.iter().any(|(id, f)| {
             !valid_id(id) || f.name.trim().is_empty() || f.name.len() > 1024 || f.color.len() > 64
@@ -342,6 +351,11 @@ pub enum Record {
     Note(NoteData),
     FolderCatalog(FolderCatalog),
     DeletedNote,
+    /// Authenticated replacement for an erased payload, retaining no note content.
+    Erased {
+        original_digest: String,
+        folder_id: String,
+    },
 }
 impl Revision {
     fn aad(&self, a: &Account) -> Vec<u8> {
@@ -410,7 +424,7 @@ impl Revision {
         match self.open_record(key, account)? {
             Record::Note(note) => Ok(Some(note)),
             Record::DeletedNote => Ok(None),
-            Record::FolderCatalog(_) => Err(Error::Format),
+            Record::FolderCatalog(_) | Record::Erased { .. } => Err(Error::Format),
         }
     }
     pub fn seal_record(
@@ -441,6 +455,7 @@ impl Revision {
                     return Err(Error::Format);
                 }
             }
+            Record::Erased { .. } => return Err(Error::Format),
         }
         let mut r = Self {
             version: FOLDER_FORMAT,
@@ -488,6 +503,21 @@ impl Revision {
                         return Err(Error::Format);
                     }
                 }
+                Record::Erased {
+                    original_digest,
+                    folder_id,
+                } => {
+                    if self.note_id == self.vault_id
+                        || !valid_id(folder_id)
+                        || B64
+                            .decode(original_digest)
+                            .map_err(|_| Error::Format)?
+                            .len()
+                            != 32
+                    {
+                        return Err(Error::Format);
+                    }
+                }
             }
             return Ok(record);
         }
@@ -500,6 +530,39 @@ impl Revision {
         }
         Ok(data.map(Record::Note).unwrap_or(Record::DeletedNote))
     }
+    pub fn erase(&self, key: &Secret, account: &Account, folder_id: &str) -> Result<Self> {
+        self.open_record(key, account)?;
+        if self.note_id == self.vault_id || !valid_id(folder_id) {
+            return Err(Error::Format);
+        }
+        let record = Record::Erased {
+            original_digest: digest(&serde_json::to_vec(self).map_err(|_| Error::Format)?),
+            folder_id: folder_id.into(),
+        };
+        let mut erased = self.clone();
+        erased.version = FOLDER_FORMAT;
+        erased.deleted = false;
+        erased.blob = encrypt(
+            key,
+            &erased.aad(account),
+            &serde_json::to_vec(&record).map_err(|_| Error::Format)?,
+        )?;
+        Ok(erased)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Erasure {
+    pub through: u64,
+    pub catalog: Revision,
+    pub replacements: Vec<ErasedRevision>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErasedRevision {
+    pub original_digest: String,
+    pub revision: Revision,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

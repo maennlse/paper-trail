@@ -79,12 +79,16 @@ pub fn init(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 pub(crate) mod tests {
     use std::{
+        cell::RefCell,
         io::{self, Write},
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, Once},
     };
 
     #[derive(Clone)]
     struct Buffer(Arc<Mutex<Vec<u8>>>);
+    thread_local! {
+        static CAPTURE: RefCell<Option<Buffer>> = const { RefCell::new(None) };
+    }
     impl Write for Buffer {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             self.0.lock().unwrap().extend_from_slice(bytes);
@@ -95,17 +99,59 @@ pub(crate) mod tests {
         }
     }
     pub(crate) fn capture(run: impl FnOnce()) -> String {
+        // Keep one stable subscriber so parallel tests cannot invalidate cached
+        // callsite interest by installing/dropping scoped subscribers. Only the
+        // current capture thread's output is collected.
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .without_time()
+                .with_ansi(false)
+                .with_max_level(tracing::Level::DEBUG)
+                .with_writer(|| -> Box<dyn Write> {
+                    CAPTURE.with(|capture| -> Box<dyn Write> {
+                        match capture.borrow().clone() {
+                            Some(buffer) => Box::new(buffer),
+                            None => Box::new(io::sink()),
+                        }
+                    })
+                })
+                .finish();
+            tracing::subscriber::set_global_default(subscriber).unwrap();
+        });
         let buffer = Buffer(Arc::new(Mutex::new(Vec::new())));
-        let writer = buffer.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_max_level(tracing::Level::DEBUG)
-            .with_writer(move || writer.clone())
-            .finish();
-        tracing::subscriber::with_default(subscriber, run);
+        struct Restore(Option<Buffer>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                CAPTURE.with(|capture| capture.replace(self.0.take()));
+            }
+        }
+        let restore = Restore(CAPTURE.with(|capture| capture.replace(Some(buffer.clone()))));
+        run();
+        drop(restore);
         let bytes = buffer.0.lock().unwrap().clone();
         String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn captures_are_isolated_across_parallel_threads() {
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let workers: Vec<_> = (0..2)
+            .map(|id| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let logs = capture(|| {
+                        barrier.wait();
+                        tracing::warn!(capture_id = id, "capture isolation");
+                    });
+                    assert!(logs.contains(&format!("capture_id={id}")));
+                    assert!(!logs.contains(&format!("capture_id={}", 1 - id)));
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
     }
 
     #[test]

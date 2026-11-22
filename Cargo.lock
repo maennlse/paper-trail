@@ -2470,7 +2470,7 @@ dependencies = [
 
 [[package]]
 name = "papertrail-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2479,7 +2479,7 @@ dependencies = [
 
 [[package]]
 name = "papertrail-crypto"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -2494,7 +2494,7 @@ dependencies = [
 
 [[package]]
 name = "papertrail-desktop"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "glib-build-tools",
@@ -2511,7 +2511,7 @@ dependencies = [
 
 [[package]]
 name = "papertrail-server"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aws-lc-rs",
  "axum",
@@ -2533,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "papertrail-storage"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "fs2",
@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "papertrail-sync"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "fs2",
@@ -2563,7 +2563,7 @@ dependencies = [
 
 [[package]]
 name = "papertrail-tui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "crossterm",
  "dirs",
