@@ -414,7 +414,12 @@ pub fn access_with_persistence(
     }
     Ok(tokens.access.clone())
 }
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 fn entry(config: &Config) -> io::Result<keyring::Entry> {
     let id = papertrail_crypto::digest(
         format!("{}\n{}\n{}", config.server, config.issuer, config.client_id).as_bytes(),
@@ -424,7 +429,12 @@ fn entry(config: &Config) -> io::Result<keyring::Entry> {
 }
 pub fn save(config: &Config, tokens: &Tokens) -> io::Result<()> {
     let json = Zeroizing::new(serde_json::to_string(tokens).map_err(error)?);
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    ))]
     {
         let entry = entry(config)?;
         entry.set_password(&json).map_err(|_| {
@@ -433,14 +443,24 @@ pub fn save(config: &Config, tokens: &Tokens) -> io::Result<()> {
         crate::credentials::set_label(&entry, config, "Sync login");
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    )))]
     {
         let _ = (config, json);
         Err(error("Use platform secure storage"))
     }
 }
 pub fn load(config: &Config) -> io::Result<Tokens> {
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    ))]
     {
         let entry = entry(config)?;
         let json = Zeroizing::new(entry.get_password().map_err(|_| error("Sign in to sync"))?);
@@ -449,21 +469,36 @@ pub fn load(config: &Config) -> io::Result<Tokens> {
         crate::credentials::set_label(&entry, config, "Sync login");
         Ok(tokens)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    )))]
     {
         let _ = config;
         Err(error("Use platform secure storage"))
     }
 }
 pub fn logout(config: &Config) -> io::Result<()> {
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    ))]
     {
         match entry(config)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(error("Could not remove stored credentials")),
         }
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    )))]
     {
         let _ = config;
         Ok(())

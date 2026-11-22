@@ -12,3 +12,7 @@ super-linter.log
 repo/
 .mypy_cache/
 target/
+ios/build/
+ios/Generated/
+ios/PaperTrail.xcodeproj/
+ios/Info.plist

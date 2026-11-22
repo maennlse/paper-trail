@@ -71,10 +71,16 @@ fn launch(mut command: std::process::Command, cancel: &Cancellation) -> io::Resu
     wait_for_launch(rx, cancel)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "ios")))]
 pub(super) fn open(url: &str, cancel: &Cancellation) -> io::Result<()> {
     check_login_cancelled(cancel)?;
     webbrowser::open(url).map_err(|_| io::Error::other("Could not open the system browser"))
+}
+
+#[cfg(target_os = "ios")]
+pub(super) fn open(_: &str, cancel: &Cancellation) -> io::Result<()> {
+    check_login_cancelled(cancel)?;
+    Err(io::Error::other("Use native iOS web authentication"))
 }
 
 #[cfg(test)]

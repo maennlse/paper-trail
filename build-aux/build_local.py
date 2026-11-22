@@ -299,7 +299,11 @@ def execute(build: Build) -> Path:
 
 def parser() -> argparse.ArgumentParser:
     """Keep unattended and preview invocations explicit and discoverable."""
-    result = argparse.ArgumentParser(description=__doc__)
+    result = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="For unsigned iOS app bundles use build-aux/build_ios.py on an Apple Silicon Mac, "
+        "or the manual Unsigned iOS GitHub Actions workflow. No signing account is required.",
+    )
     result.add_argument(
         "--components",
         help="gtk,tui,server or all (default: all supported for this host/mode)",

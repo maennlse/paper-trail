@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/papertrail-core", "crates/papertrail-storage", "crates/papertrail-desktop", "crates/papertrail-tui", "crates/papertrail-crypto", "crates/papertrail-sync", "crates/papertrail-server"]
+members = ["crates/papertrail-core", "crates/papertrail-storage", "crates/papertrail-desktop", "crates/papertrail-tui", "crates/papertrail-crypto", "crates/papertrail-sync", "crates/papertrail-server", "crates/papertrail-ffi"]
 resolver = "2"
 
 [workspace.package]
