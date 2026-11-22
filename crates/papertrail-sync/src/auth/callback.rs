@@ -130,6 +130,7 @@ mod tests {
         );
         let response = String::from_utf8(bytes).unwrap();
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        let rendered = response.split_whitespace().collect::<Vec<_>>().join(" ");
         for expected in [
             "Content-Type: text/html; charset=utf-8",
             "Cache-Control: no-store",
@@ -143,7 +144,7 @@ mod tests {
             "Paper Trail logo",
             "prefers-color-scheme: dark",
         ] {
-            assert!(response.contains(expected), "missing {expected}");
+            assert!(rendered.contains(expected), "missing {expected}");
         }
         assert!(!response.contains("ACCESS_TOKEN_PRIVATE"));
         assert!(!response.contains("<button"));

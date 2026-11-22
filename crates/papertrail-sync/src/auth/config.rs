@@ -265,7 +265,15 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
-        let err = fetch_with(&client(), &format!("http://{address}/PRIVATE_PATH"))
+        // Windows can take longer than the stalled-server fixture's 200 ms to
+        // report connection refusal. Test refusal, not that fixture's deadline.
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let err = fetch_with(&client, &format!("http://{address}/PRIVATE_PATH"))
             .unwrap_err()
             .to_string();
         assert!(err.contains("connection failed"), "{err}");

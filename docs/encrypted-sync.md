@@ -473,7 +473,7 @@ cargo run --locked -p papertrail-sync --example check_discovery -- https://sync.
 ```
 
 The check fetches the public authentication configuration and validates the
-advertised OIDC metadata; success does not constitute a trust decision. Curl
+advertised OIDC metadata; success does not constitute a trust decision. `curl`
 success alone does not establish that the application's Rust TLS client works.
 Flatpak network access already covers discovery and the browser's loopback
 callback; broad filesystem permissions are not needed to fix network failures.
@@ -543,10 +543,10 @@ caller-selected account. IDs do not contain titles or filenames.
 | `GET /v1/identity`                        | Validated account identity                                         |
 | `GET /v1/vault`                           | Current encrypted wrapping envelopes                               |
 | `PUT /v1/vault`                           | `If-Match: 0` creates; current generation conditionally updates    |
-| `GET /v1/changes?cursor=N[&through=T]`    | Ordered revisions/erasure receipts, stable page boundary            |
+| `GET /v1/changes?cursor=N[&through=T]`    | Ordered revisions/erasure receipts, stable page boundary           |
 | `POST /v1/notes/{id}/revisions`           | Conditional append using authenticated parent revision             |
 | `GET /v1/notes/{id}/revisions/{revision}` | Read encrypted historical revision or its erasure receipt          |
-| `POST /v1/erase-folder`                  | Atomic confirmed catalog update and permanent note-payload erasure |
+| `POST /v1/erase-folder`                   | Atomic confirmed catalog update and permanent note-payload erasure |
 | `GET /v1/export`                          | Account ciphertext/envelopes/history/metadata export               |
 | `DELETE /v1/account`                      | Explicit deletion; requires `X-Papertrail-Confirm: delete-account` |
 

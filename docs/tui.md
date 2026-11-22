@@ -171,30 +171,30 @@ completed further with another Tab. Suggestions appear above the prompt and
 never execute a command; Enter is still required. Typing, pasting, or Backspace
 starts a new completion cycle. Tab switches panes only when no prompt is open.
 
-| Command                               | Action                                              |
-| ------------------------------------- | --------------------------------------------------- |
-| `:w`, `:q`, `:wq`                     | Save / save and quit; failed saves prevent quitting |
-| `:q!`                                 | Explicitly discard pending edits and quit           |
-| `:new [NAME]`, `:rename NAME`         | Create / rename a note                              |
-| `:move PATH` or `:move NUMBER`        | Move into an existing folder                        |
-| `:folder PATH` or `:folder NUMBER`    | Add / select an existing folder                     |
-| `:all`, `:search TEXT`                | Show all notes / search across folders              |
+| Command                               | Action                                                            |
+| ------------------------------------- | ----------------------------------------------------------------- |
+| `:w`, `:q`, `:wq`                     | Save / save and quit; failed saves prevent quitting               |
+| `:q!`                                 | Explicitly discard pending edits and quit                         |
+| `:new [NAME]`, `:rename NAME`         | Create / rename a note                                            |
+| `:move PATH` or `:move NUMBER`        | Move into an existing folder                                      |
+| `:folder PATH` or `:folder NUMBER`    | Add / select an existing folder                                   |
+| `:all`, `:search TEXT`                | Show all notes / search across folders                            |
 | `:close-folder`                       | Close active folder and pause its sync on this device; keep files |
-| `:folder-up`, `:folder-down`          | Reorder the highlighted folder                      |
-| `:pin`, `:color #rrggbb`              | Toggle current note pin / set active folder color   |
-| `:color preset-0` through `preset-11` | Use a built-in folder color                         |
-| `:delete`                             | Delete current note after typing `yes` and Enter    |
-| `:replace 'OLD' 'NEW'`                | Undoable replacement of all literal matches         |
-| `:edit`                               | Save and launch an external editor                  |
-| `:refresh`, `:reload`                 | Rescan notes / reload a clean current note          |
-| `:saveas PATH`                        | Save pending text into a new file, never overwrite  |
-| `:reload!`                            | Explicitly discard edits and load the disk version  |
-| `:set number`, `:set nonumber`        | TUI-only line-number preference                     |
-| `:set folder-width N`                 | TUI-only folder width, 7–30 terminal cells          |
-| `:set note-width N` or `auto`          | TUI-only note width, 10–80 cells, or automatic sizing |
-| `:set editor builtin/neovim`          | Choose the built-in or embedded Neovim editor       |
-| `:set nvim-config clean/user`         | Choose Neovim defaults or personal config/plugins   |
-| `:path`                               | Show the full highlighted folder/current note path  |
+| `:folder-up`, `:folder-down`          | Reorder the highlighted folder                                    |
+| `:pin`, `:color #rrggbb`              | Toggle current note pin / set active folder color                 |
+| `:color preset-0` through `preset-11` | Use a built-in folder color                                       |
+| `:delete`                             | Delete current note after typing `yes` and Enter                  |
+| `:replace 'OLD' 'NEW'`                | Undoable replacement of all literal matches                       |
+| `:edit`                               | Save and launch an external editor                                |
+| `:refresh`, `:reload`                 | Rescan notes / reload a clean current note                        |
+| `:saveas PATH`                        | Save pending text into a new file, never overwrite                |
+| `:reload!`                            | Explicitly discard edits and load the disk version                |
+| `:set number`, `:set nonumber`        | TUI-only line-number preference                                   |
+| `:set folder-width N`                 | TUI-only folder width, 7–30 terminal cells                        |
+| `:set note-width N` or `auto`         | TUI-only note width, 10–80 cells, or automatic sizing             |
+| `:set editor builtin/neovim`          | Choose the built-in or embedded Neovim editor                     |
+| `:set nvim-config clean/user`         | Choose Neovim defaults or personal config/plugins                 |
+| `:path`                               | Show the full highlighted folder/current note path                |
 
 Paths after `:folder`, `:move`, `:rename`, and `:saveas` can contain spaces without
 quotes. `:replace` arguments use shell-style quotes. Moves and renames resolve
