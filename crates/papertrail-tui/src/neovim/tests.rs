@@ -30,6 +30,39 @@ pub(crate) fn available() -> bool {
 }
 
 #[test]
+fn note_switches_and_reloads_leave_no_unnamed_placeholder_buffers() {
+    if !available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("first.txt");
+    let mut editor = Neovim::start_isolated(true, Some(&path), "first", root.path()).unwrap();
+    for path in [
+        path.clone(),
+        root.path().join("second.txt"),
+        root.path().join("second.txt"),
+        path,
+    ] {
+        let listed = editor.rpc.call("nvim_exec_lua", vec![
+            "local r={}; for _,b in ipairs(vim.api.nvim_list_bufs()) do if vim.bo[b].buflisted then table.insert(r,b) end end; return r".into(),
+            Value::Array(vec![]),
+        ]).unwrap();
+        assert_eq!(listed.as_array().unwrap(), &[Value::from(editor.buffer)]);
+        editor.load(Some(&path), "replacement").unwrap();
+    }
+    // User/plugin-created unnamed buffers must survive host note transitions.
+    let custom = editor
+        .rpc
+        .call("nvim_create_buf", vec![true.into(), false.into()])
+        .unwrap();
+    editor
+        .load(Some(&root.path().join("third.txt")), "third")
+        .unwrap();
+    let valid = editor.rpc.call("nvim_buf_is_valid", vec![custom]).unwrap();
+    assert_eq!(valid.as_bool(), Some(true));
+}
+
+#[test]
 fn real_neovim_edits_undoes_redoes_and_pastes_without_writing_directly() {
     if !available() {
         return;

@@ -3,6 +3,23 @@
 Run commands from the repository root. Paper Trail uses Rust; Python is only
 needed for packaging helpers, not to run either client.
 
+## Make shortcuts
+
+With Make installed, build native release binaries from the repository root:
+
+```sh
+make tui       # Terminal client (no GTK required)
+make desktop   # Desktop client (requires the GNOME libraries below)
+make server    # Sync server (no GTK required)
+make all       # Both clients and server; also the default for plain make
+```
+
+These run Cargo with `--release --locked`. Executables are
+`target/release/paper-trail-tui`, `target/release/paper-trail`, and
+`target/release/paper-trail-server` (`.exe` on
+Windows), unless you configure a different Cargo target/output directory.
+Nothing is installed or packaged. The prerequisites below still apply.
+
 ## Local build artifacts (interactive)
 
 ```sh
@@ -159,6 +176,10 @@ GTK tests require a display and isolated temporary notes/settings:
 cargo test --locked -p papertrail-desktop -- --test-threads=1
 ```
 
+To run only sync menu, password/recovery dialog, configuration, and discovery
+regressions without editor-focus checks, set `PAPERTRAIL_TEST_SCOPE=sync` for that
+command. The default still runs the full desktop workflow.
+
 For headless testing, install Xvfb, xdotool, and D-Bus, then run:
 
 ```sh
@@ -168,6 +189,37 @@ dbus-run-session -- sh build-aux/test-desktop.sh
 This also tests search-button clicks and shortcuts-dialog dismissal through X11
 input events. Set `PAPERTRAIL_SCREENSHOT` to a PNG path to capture the rendered UI.
 Compatibility fixtures protect existing notes and legacy settings.
+
+### GTK frame-timing warnings
+
+On GTK 4.24.1/Wayland, opening ordinary popovers can emit
+`Duplicate call to gdk_frame_timings_presented()` or
+`gdk_frame_timings_presented() called on discarded frame`. These are GDK
+presentation-feedback diagnostics, not authentication or Flatpak permission
+errors. The duplicate-presentation warning was reproduced in a standalone
+`Gtk.Window`/`Gtk.Popover` without Paper Trail code or its sync animation.
+A debugger trace in the application reached
+`gdk_wayland_presentation_feedback_presented` while opening the rename popover,
+before the sync-animation tests ran.
+
+Opening the sync menu and hovering over its entries can trigger the same
+diagnostics: hover styling redraws the native popover surface. Regression tests
+check that unchanged status refreshes and native menu hover styling do not mutate
+the application menu model, status label, or tooltip. These guards avoid redundant
+application updates, but are not a fix for GTK's frame bookkeeping.
+
+GTK upstream's [frame-clock rework](https://gitlab.gnome.org/GNOME/gtk/-/merge_requests/10242)
+includes changes to duplicate-presentation and discarded-frame bookkeeping.
+Prefer a distribution/runtime GTK update or backport containing the relevant
+fixes; no specific released version has been verified here. Paper Trail does
+not suppress these warnings, disable animations, or force a renderer.
+Renderer overrides are diagnostic tools, not a confirmed workaround: the
+headless X11/Cairo comparison also produced a GDK timing warning and crashed.
+
+When comparing headless backends, explicitly set `GDK_BACKEND=x11`: starting
+Xvfb alone does not stop GTK from connecting to an inherited Wayland display.
+Do not use `G_DEBUG=fatal-warnings` for normal operation; it is only useful
+under a debugger to capture the warning's stack trace.
 
 ### Refresh readme screenshots
 

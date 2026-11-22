@@ -1,4 +1,42 @@
 use papertrail_crypto::*;
+
+#[test]
+fn erasure_authenticates_original_identity_without_retaining_note_data() {
+    let account = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let key = Secret::random();
+    let vault = opaque_id();
+    let folder = opaque_id();
+    let note = NoteData {
+        version: FOLDER_FORMAT,
+        filename: "private.txt".into(),
+        folder: "Private".into(),
+        folder_id: Some(folder.clone()),
+        body: "secret body".into(),
+        modified_ms: 1,
+        pinned: false,
+        language: None,
+    };
+    let original = Revision::seal(&key, &account, &vault, &opaque_id(), None, Some(&note)).unwrap();
+    let erased = original.erase(&key, &account, &folder).unwrap();
+    assert_eq!(erased.id, original.id);
+    assert_eq!(erased.parent, original.parent);
+    let record = erased.open_record(&key, &account).unwrap();
+    assert!(
+        matches!(&record, Record::Erased { original_digest, folder_id }
+        if *original_digest == digest(&serde_json::to_vec(&original).unwrap()) && *folder_id == folder)
+    );
+    let plaintext = serde_json::to_string(&record).unwrap();
+    assert!(!plaintext.contains("secret body"));
+    assert!(!plaintext.contains("private.txt"));
+    assert!(!plaintext.contains("Private"));
+    assert!(erased.open(&key, &account).is_err());
+    let mut altered = erased;
+    altered.id = opaque_id();
+    assert!(altered.open_record(&key, &account).is_err());
+}
 fn account() -> Account {
     Account {
         iss: "https://issuer.example".into(),
@@ -104,6 +142,7 @@ fn v2_folder_catalog_and_note_membership_are_authenticated_and_versioned() {
             },
         )]),
         legacy_notes: std::collections::BTreeMap::from([(id.clone(), folder.clone())]),
+        deleted_folders: Default::default(),
     };
     let revision = Revision::seal_record(
         &key,

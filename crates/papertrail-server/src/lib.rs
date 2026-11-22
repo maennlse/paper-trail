@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
     Extension, Json, Router,
 };
-use papertrail_crypto::{Account, Change, Changes, Revision, Vault, MAX_BLOB};
+use papertrail_crypto::{digest, Account, Change, Changes, Erasure, Revision, Vault, MAX_BLOB};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -52,15 +52,16 @@ impl Server {
     ) -> rusqlite::Result<Self> {
         let db = Connection::open(path)?;
         let version: u32 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(rusqlite::Error::InvalidQuery);
         }
         db.busy_timeout(std::time::Duration::from_secs(10))?;
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON;
             CREATE TABLE IF NOT EXISTS vaults (iss TEXT NOT NULL, sub TEXT NOT NULL, generation INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(iss,sub));
             CREATE TABLE IF NOT EXISTS revisions (iss TEXT NOT NULL, sub TEXT NOT NULL, sequence INTEGER NOT NULL, note TEXT NOT NULL, revision TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(iss,sub,revision), UNIQUE(iss,sub,sequence));
             CREATE INDEX IF NOT EXISTS note_history ON revisions(iss,sub,note,sequence);
-            PRAGMA user_version=1;")?;
+            CREATE TABLE IF NOT EXISTS erased_notes (iss TEXT NOT NULL, sub TEXT NOT NULL, note TEXT NOT NULL, PRIMARY KEY(iss,sub,note));
+            PRAGMA user_version=2;")?;
         Ok(Self {
             db: Mutex::new(db),
             auth,
@@ -118,6 +119,7 @@ fn routes(server: Arc<Server>) -> Router {
         .route("/v1/notes/{note}/revisions", post(append))
         .route("/v1/notes/{note}/revisions/{revision}", get(revision))
         .route("/v1/export", get(export))
+        .route("/v1/erase-folder", post(erase_folder))
         .route("/v1/account", axum::routing::delete(delete_account))
         .layer(DefaultBodyLimit::max(MAX_BLOB * 2))
         .with_state(server)
@@ -227,6 +229,7 @@ async fn append(
     State(s): State<Arc<Server>>,
     Extension(a): Extension<Account>,
     Path(note): Path<String>,
+    headers: HeaderMap,
     Json(r): Json<Revision>,
 ) -> ApiResult<(StatusCode, [(&'static str, String); 1])> {
     r.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -245,6 +248,37 @@ async fn append(
         .map_err(database_error)?;
     if parse::<Vault>(&vault.ok_or(StatusCode::NOT_FOUND)?)?.id != r.vault_id {
         return Err(StatusCode::BAD_REQUEST);
+    }
+    let erased: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM erased_notes WHERE iss=? AND sub=? AND note=?)",
+            params![a.iss, a.sub, note],
+            |row| row.get(0),
+        )
+        .map_err(database_error)?;
+    if erased && note != r.vault_id {
+        return Err(StatusCode::GONE);
+    }
+    // After the first erasure, legacy or stale clients must not publish even new
+    // note IDs until they have reconciled the authenticated folder catalog.
+    let guarded: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM erased_notes WHERE iss=? AND sub=?)",
+            params![a.iss, a.sub],
+            |row| row.get(0),
+        )
+        .map_err(database_error)?;
+    if guarded {
+        let head: String = tx.query_row(
+            "SELECT revision FROM revisions WHERE iss=? AND sub=? AND note=? ORDER BY sequence DESC LIMIT 1",
+            params![a.iss, a.sub, r.vault_id], |row| row.get(0)).map_err(database_error)?;
+        if headers
+            .get("x-papertrail-catalog-head")
+            .and_then(|v| v.to_str().ok())
+            != Some(&head)
+        {
+            return Err(StatusCode::PRECONDITION_FAILED);
+        }
     }
     let data = serde_json::to_string(&r).unwrap();
     let existing: Option<(u64, String)> = tx
@@ -286,6 +320,124 @@ async fn append(
         StatusCode::CREATED,
         [("x-papertrail-sequence", seq.to_string())],
     ))
+}
+async fn erase_folder(
+    State(s): State<Arc<Server>>,
+    Extension(a): Extension<Account>,
+    headers: HeaderMap,
+    Json(request): Json<Erasure>,
+) -> ApiResult<StatusCode> {
+    if headers
+        .get("x-papertrail-confirm")
+        .and_then(|v| v.to_str().ok())
+        != Some("erase-folder")
+    {
+        return Err(StatusCode::PRECONDITION_REQUIRED);
+    }
+    let catalog = &request.catalog;
+    catalog.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
+    if catalog.note_id != catalog.vault_id || catalog.deleted {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut db = s.db.lock().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let tx = db.transaction().map_err(database_error)?;
+    let vault: String = tx
+        .query_row(
+            "SELECT data FROM vaults WHERE iss=? AND sub=?",
+            params![a.iss, a.sub],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(database_error)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if parse::<Vault>(&vault)?.id != catalog.vault_id {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let latest: u64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(sequence),0) FROM revisions WHERE iss=? AND sub=?",
+            params![a.iss, a.sub],
+            |r| r.get(0),
+        )
+        .map_err(database_error)?;
+    let head: Option<String> = tx.query_row(
+        "SELECT revision FROM revisions WHERE iss=? AND sub=? AND note=? ORDER BY sequence DESC LIMIT 1",
+        params![a.iss, a.sub, catalog.vault_id], |r| r.get(0)).optional().map_err(database_error)?;
+    if latest != request.through || head != catalog.parent {
+        return Err(StatusCode::CONFLICT);
+    }
+    let mut notes = std::collections::BTreeMap::<String, usize>::new();
+    let mut ids = std::collections::BTreeSet::new();
+    for replacement in &request.replacements {
+        let r = &replacement.revision;
+        r.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
+        if r.vault_id != catalog.vault_id || r.note_id == catalog.vault_id || !ids.insert(&r.id) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let data: String = tx
+            .query_row(
+                "SELECT data FROM revisions WHERE iss=? AND sub=? AND note=? AND revision=?",
+                params![a.iss, a.sub, r.note_id, r.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(database_error)?
+            .ok_or(StatusCode::CONFLICT)?;
+        let old: Revision = parse(&data)?;
+        if digest(data.as_bytes()) != replacement.original_digest || old.parent != r.parent {
+            return Err(StatusCode::CONFLICT);
+        }
+        *notes.entry(r.note_id.clone()).or_default() += 1;
+    }
+    for (note, count) in &notes {
+        let total: usize = tx
+            .query_row(
+                "SELECT COUNT(*) FROM revisions WHERE iss=? AND sub=? AND note=?",
+                params![a.iss, a.sub, note],
+                |row| row.get(0),
+            )
+            .map_err(database_error)?;
+        if total != *count {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO erased_notes VALUES (?,?,?)",
+            params![a.iss, a.sub, note],
+        )
+        .map_err(database_error)?;
+    }
+    // Also guard empty-folder erasures without exposing the encrypted folder ID.
+    tx.execute(
+        "INSERT OR IGNORE INTO erased_notes VALUES (?,?,?)",
+        params![a.iss, a.sub, catalog.vault_id],
+    )
+    .map_err(database_error)?;
+    for replacement in &request.replacements {
+        let r = &replacement.revision;
+        tx.execute(
+            "UPDATE revisions SET data=? WHERE iss=? AND sub=? AND revision=?",
+            params![serde_json::to_string(r).unwrap(), a.iss, a.sub, r.id],
+        )
+        .map_err(database_error)?;
+    }
+    tx.execute(
+        "INSERT INTO revisions VALUES (?,?,?,?,?,?)",
+        params![
+            a.iss,
+            a.sub,
+            latest + 1,
+            catalog.note_id,
+            catalog.id,
+            serde_json::to_string(catalog).unwrap()
+        ],
+    )
+    .map_err(database_error)?;
+    tx.commit().map_err(database_error)?;
+    // Remove superseded encrypted payloads from the WAL as well. Backups made
+    // outside this server remain the operator's responsibility.
+    db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .map_err(database_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 #[derive(Deserialize)]
 struct Cursor {
@@ -416,6 +568,11 @@ async fn delete_account(
     .map_err(database_error)?;
     tx.execute(
         "DELETE FROM vaults WHERE iss=? AND sub=?",
+        params![a.iss, a.sub],
+    )
+    .map_err(database_error)?;
+    tx.execute(
+        "DELETE FROM erased_notes WHERE iss=? AND sub=?",
         params![a.iss, a.sub],
     )
     .map_err(database_error)?;

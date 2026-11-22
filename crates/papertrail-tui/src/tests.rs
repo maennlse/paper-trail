@@ -10,13 +10,16 @@ use ratatui::{backend::TestBackend, Terminal};
 use std::{fs, path::Path};
 
 fn app(root: &Path) -> App {
-    App::new(Paths {
-        home: root.to_owned(),
-        settings: root.join("config/settings.json"),
-        default_notes: root.join("notes"),
-        folder: None,
-        no_mouse: false,
-    })
+    App::with_startup_sync(
+        Paths {
+            home: root.to_owned(),
+            settings: root.join("config/settings.json"),
+            default_notes: root.join("notes"),
+            folder: None,
+            no_mouse: false,
+        },
+        false,
+    )
     .unwrap()
 }
 fn key(app: &mut App, code: KeyCode) {
@@ -142,6 +145,107 @@ fn sync_secret_prompts_are_masked_and_never_completed_or_written_to_settings() {
     assert!(app.prompt.is_none());
     let settings = fs::read_to_string(temp.path().join("config/sync/config.json")).unwrap();
     assert!(!settings.contains("private vault passphrase"));
+}
+
+#[test]
+fn remember_password_toggle_is_explicit_masked_and_not_used_for_recovery_keys() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    for command in ["unlock", "create-vault", "change-passphrase"] {
+        app.command(command).unwrap();
+        // Exercise the graphical-session option without mutating process-wide
+        // DISPLAY/SSH variables or contacting a real credential store.
+        app.prompt.as_mut().unwrap().remember = Some(false);
+        type_text(&mut app, "private password");
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.prompt.as_ref().unwrap().remember, Some(true));
+        assert_eq!(app.prompt.as_ref().unwrap().text, "private password");
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| ui::render(frame, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains("[x] Remember password in keyring"));
+        assert!(!screen.contains("private password"));
+        key(&mut app, KeyCode::BackTab);
+        assert_eq!(app.prompt.as_ref().unwrap().remember, Some(false));
+        key(&mut app, KeyCode::Esc);
+        assert!(app.prompt.is_none());
+        assert!(app.sync_job.is_none());
+    }
+    app.command("recover-vault").unwrap();
+    assert_eq!(app.prompt.as_ref().unwrap().remember, None);
+    assert!(!temp.path().join("config/sync/config.json").exists());
+}
+
+#[test]
+fn lock_queued_during_startup_restore_prevents_automatic_sync() {
+    use papertrail_sync::control::Outcome;
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.sync_job = Some(rx);
+    app.sync_restoring = true;
+    // Simulate a startup worker completing after a lock request.
+    app.command("lock").unwrap();
+    tx.send(Ok(Outcome {
+        message: "Signed in automatically; vault unlocked".into(),
+        warning: None,
+        recovery: None,
+        synced: false,
+        unlocked: true,
+        settings_update: None,
+        local_changed: false,
+    }))
+    .unwrap();
+    app.tick().unwrap();
+    assert!(!app.sync_unlocked);
+    let result = app
+        .sync_job
+        .take()
+        .unwrap()
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    assert!(!result.unlocked);
+    assert!(result.message.starts_with("Vault locked"));
+}
+
+#[test]
+fn startup_restore_does_not_block_edits_or_replace_a_password_prompt() {
+    use papertrail_sync::control::Outcome;
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    app.command("new during-startup.txt").unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.sync_job = Some(rx);
+    app.sync_restoring = true;
+    type_text(&mut app, "edits during startup");
+    assert_eq!(app.session.text, "edits during startup");
+    assert!(app.session.is_dirty());
+    app.command("unlock").unwrap();
+    type_text(&mut app, "a private passphrase");
+    tx.send(Ok(Outcome {
+        message: "Signed in automatically; vault unlocked".into(),
+        warning: None,
+        recovery: None,
+        synced: false,
+        unlocked: true,
+        settings_update: None,
+        local_changed: false,
+    }))
+    .unwrap();
+    app.tick().unwrap();
+    assert!(
+        app.sync_job.is_none(),
+        "Do not start sync over an active prompt"
+    );
+    assert_eq!(app.prompt.as_ref().unwrap().text, "a private passphrase");
+    assert_eq!(app.session.text, "edits during startup");
 }
 
 #[test]
@@ -315,6 +419,7 @@ fn completing_device_login_does_not_reload_the_editor_or_unlock_the_vault() {
     });
     tx.send(Ok(Outcome {
         message: "Signed in for this session".into(),
+        warning: None,
         recovery: None,
         synced: false,
         unlocked: false,
@@ -960,6 +1065,7 @@ fn legacy_tui_preferences_keep_builtin_editor_until_explicitly_selected() {
     assert!(!preferences.nvim_clean);
     assert!(preferences.hide_numbers);
     assert_eq!(preferences.folder_width, 20);
+    assert_eq!(preferences.note_width, None);
 }
 
 #[test]
@@ -1029,6 +1135,37 @@ fn folder_colors_share_gtk_presets_custom_colors_and_readable_selection() {
 }
 
 #[test]
+fn compact_folders_and_note_text_have_no_leading_gutters() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = browse_app(temp.path(), 1);
+    app.command("pin").unwrap();
+    for focus in [Focus::Notes, Focus::Folders, Focus::Editor] {
+        app.focus = focus;
+        let mut terminal = Terminal::new(TestBackend::new(110, 25)).unwrap();
+        terminal.draw(|frame| ui::render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = |x, y, width| {
+            (x..x + width)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        };
+        let folder = app.panes[0];
+        assert_eq!(folder.width, 7);
+        assert_eq!(text(folder.x + 1, folder.y + 1, 5), "[All]");
+        assert_eq!(text(folder.x + 1, folder.y + 2, 5), "[NO] ");
+        let notes = app.panes[1];
+        let width = notes.width - 2;
+        assert_eq!(
+            text(notes.x + 1, notes.y + 1, width).trim_end(),
+            "Note 0 ● *"
+        );
+        assert_eq!(text(notes.x + 1, notes.y + 2, width).trim_end(), "00.txt");
+    }
+    app.command("set folder-width 7").unwrap();
+    assert!(app.command("set folder-width 6").is_err());
+}
+
+#[test]
 fn folder_badges_and_note_rows_use_the_same_rgb_colors_in_all_and_search_views() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = browse_app(temp.path(), 1);
@@ -1052,7 +1189,7 @@ fn folder_badges_and_note_rows_use_the_same_rgb_colors_in_all_and_search_views()
                 if index == app.note_index {
                     cell.bg == color
                 } else {
-                    cell.symbol() == "▎" && cell.fg == color
+                    cell.symbol() != " " && cell.fg == color
                 }
             }));
         }
@@ -1064,7 +1201,7 @@ fn folder_badges_and_note_rows_use_the_same_rgb_colors_in_all_and_search_views()
             let row = app.panes[1].y + 1 + index as u16 * 2;
             assert!((app.panes[1].x + 1..app.panes[1].right() - 1).any(|x| {
                 let cell = buffer.cell((x, row)).unwrap();
-                cell.symbol() == "▎" && cell.fg == color
+                cell.symbol() != " " && cell.fg == color
             }));
         }
         let screen: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -1166,6 +1303,416 @@ fn sync_folder_checklist_saves_or_cancels_without_touching_notes_or_editor() {
     key(&mut app, KeyCode::Char(' '));
     key(&mut app, KeyCode::Enter);
     assert!(app.sync.saved_config().unwrap().unwrap().folders.is_empty());
+}
+
+fn sync_folder_server_fixture(root: &std::path::Path, deleted: bool) -> App {
+    let mut app = browse_app(root, 1);
+    let other = root.join("other");
+    fs::create_dir(&other).unwrap();
+    app.settings.add_folder(other.clone(), false);
+    app.command("sync-configure https://sync.example https://issuer.example native")
+        .unwrap();
+    let first = "AAAAAAAAAAAAAAAAAAAAAA";
+    let second = "AQEBAQEBAQEBAQEBAQEBAQ";
+    let mut state = papertrail_sync::engine::State {
+        version: 3,
+        vault_id: "AgICAgICAgICAgICAgICAg".into(),
+        account: Some(
+            serde_json::from_value(serde_json::json!({
+                "iss": "https://issuer.example", "sub": "alice"
+            }))
+            .unwrap(),
+        ),
+        catalog: Some(
+            serde_json::from_value(serde_json::json!({
+                "version": 2, "folders": {
+                    (first): { "name": "Notes", "color": "preset-0" },
+                    (second): { "name": "Other", "color": "preset-2" }
+                }, "legacy_notes": {}
+            }))
+            .unwrap(),
+        ),
+        ..Default::default()
+    };
+    if deleted {
+        state
+            .catalog
+            .as_mut()
+            .unwrap()
+            .deleted_folders
+            .insert(first.into());
+    }
+    for (id, path) in [(first, app.settings.notes_dir.clone()), (second, other)] {
+        state.bindings.insert(
+            id.into(),
+            papertrail_sync::folders::Binding {
+                observed_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+                observed_color: None,
+                path,
+                managed: false,
+            },
+        );
+    }
+    fs::write(
+        root.join("config/sync/state.json"),
+        serde_json::to_vec(&state).unwrap(),
+    )
+    .unwrap();
+    app
+}
+
+fn sync_picker_screen(app: &mut App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| ui::render(frame, app)).unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect()
+}
+
+#[test]
+fn closing_a_synced_folder_pauses_only_this_device_and_reopening_does_not_resume_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = sync_folder_server_fixture(temp.path(), false);
+    let first = "AAAAAAAAAAAAAAAAAAAAAA";
+    let folder = app.settings.notes_dir.clone();
+    let note = fs::read(folder.join("00.txt")).unwrap();
+    let path = temp.path().join("config/sync/state.json");
+    let journal = fs::read(&path).unwrap();
+    app.command("close-folder").unwrap();
+    let paused = app.sync.saved_config().unwrap().unwrap();
+    assert!(paused.excluded_folders.contains(first));
+    assert!(!paused.selected_folders.contains(first));
+    assert!(!paused.folders.contains(&folder));
+    assert!(!app.settings.note_folders.contains(&folder));
+    assert_eq!(fs::read(&path).unwrap(), journal);
+    assert_eq!(fs::read(folder.join("00.txt")).unwrap(), note);
+    assert!(app.command("close-folder").is_err()); // Last accessible folder.
+    assert!(app.sync.saved_config().unwrap().unwrap() == paused);
+    app.command(&format!("folder {}", folder.display()))
+        .unwrap();
+    assert!(app
+        .settings
+        .note_folders
+        .iter()
+        .any(|path| papertrail_sync::same_directory(path, &folder)));
+    app.command("sync-folders").unwrap();
+    let picker = app.sync_folders.as_mut().unwrap();
+    let index = picker
+        .choices
+        .iter()
+        .position(|c| c.id.as_deref() == Some(first))
+        .unwrap();
+    assert!(!picker.choices[index].selected);
+    picker.state.select(Some(index));
+    key(&mut app, KeyCode::Char(' '));
+    key(&mut app, KeyCode::Enter);
+    let resumed = app.sync.saved_config().unwrap().unwrap();
+    assert!(!resumed.excluded_folders.contains(first));
+    assert!(resumed.selected_folders.contains(first));
+    assert_eq!(fs::read(&path).unwrap(), journal);
+}
+
+#[test]
+fn sync_folder_deletion_confirmation_defaults_to_cancel_and_requires_unlock() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = sync_folder_server_fixture(temp.path(), false);
+    let before = fs::read(temp.path().join("config/sync/state.json")).unwrap();
+    app.command("sync-folders").unwrap();
+    key(&mut app, KeyCode::Char('d'));
+    assert!(
+        !app.sync_folders
+            .as_ref()
+            .unwrap()
+            .confirmation
+            .as_ref()
+            .unwrap()
+            .accept
+    );
+    for (width, height) in [(100, 32), (40, 12), (20, 6)] {
+        let screen = sync_picker_screen(&mut app, width, height);
+        assert!(!screen.is_empty());
+    }
+    key(&mut app, KeyCode::Enter); // Default is Cancel, not Delete.
+    assert!(app.sync_folders.as_ref().unwrap().confirmation.is_none());
+    assert!(app.sync_job.is_none());
+    key(&mut app, KeyCode::Char('d'));
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Enter);
+    assert!(app.sync_job.is_none());
+    assert!(app
+        .sync_folders
+        .as_ref()
+        .unwrap()
+        .message
+        .as_ref()
+        .unwrap()
+        .contains("Sign in and unlock"));
+    assert_eq!(
+        fs::read(temp.path().join("config/sync/state.json")).unwrap(),
+        before
+    );
+    assert!(app.settings.notes_dir.join("00.txt").exists());
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.sync_folders.as_ref().unwrap().choices.len(), 2); // No tombstone tab.
+    key(&mut app, KeyCode::Char('s')); // Existing identities cannot be republished.
+    assert!(app.sync_folders.as_ref().unwrap().confirmation.is_none());
+}
+
+#[test]
+fn sync_folder_deletion_completion_preserves_picker_draft_and_local_editor() {
+    use papertrail_sync::control::Outcome;
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = sync_folder_server_fixture(temp.path(), false);
+    app.command("sync-folders").unwrap();
+    let first = "AAAAAAAAAAAAAAAAAAAAAA";
+    let other = "AQEBAQEBAQEBAQEBAQEBAQ";
+    app.sync_folders
+        .as_mut()
+        .unwrap()
+        .choices
+        .iter_mut()
+        .find(|c| c.id.as_deref() == Some(other))
+        .unwrap()
+        .selected = true;
+    let text = app.session.text.clone();
+    let before = app.sync.saved_config().unwrap().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.sync_job = Some(rx);
+    app.sync_folder_deleting = true;
+    app.sync_unlocked = true;
+    app.sync_folders.as_mut().unwrap().busy = true;
+    key(&mut app, KeyCode::Enter);
+    assert!(app.sync_folders.is_some()); // Save disabled while deleting.
+    tx.send(Err(std::io::Error::other("Deletion unavailable")))
+        .unwrap();
+    app.tick().unwrap();
+    assert!(app.sync_unlocked); // Network errors do not silently lock the vault.
+    let picker = app.sync_folders.as_ref().unwrap();
+    assert!(!picker.busy);
+    assert!(picker
+        .message
+        .as_ref()
+        .unwrap()
+        .contains("Deletion unavailable"));
+    assert!(
+        picker
+            .choices
+            .iter()
+            .find(|c| c.id.as_deref() == Some(other))
+            .unwrap()
+            .selected
+    );
+    let path = temp.path().join("config/sync/state.json");
+    let mut state: papertrail_sync::engine::State =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    state
+        .catalog
+        .as_mut()
+        .unwrap()
+        .deleted_folders
+        .insert(first.into());
+    fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.sync_job = Some(rx);
+    app.sync_folder_deleting = true;
+    app.sync_folders.as_mut().unwrap().busy = true;
+    tx.send(Ok(Outcome {
+        message: "Folder deleted from server".into(),
+        warning: None,
+        recovery: None,
+        synced: false,
+        unlocked: true,
+        settings_update: None,
+        local_changed: false,
+    }))
+    .unwrap();
+    app.tick().unwrap();
+    let picker = app.sync_folders.as_ref().unwrap();
+    assert_eq!(picker.choices.len(), 2);
+    assert!(picker.choices[0].selected);
+    assert_eq!(picker.choices[1].id.as_deref(), Some(first));
+    assert!(picker.local_only(1));
+    assert!(app.sync.saved_config().unwrap().unwrap() == before);
+    assert_eq!(app.session.text, text);
+    assert!(app.settings.notes_dir.join("00.txt").exists());
+    app.sync_folders.as_mut().unwrap().state.select(Some(1));
+    let screen = sync_picker_screen(&mut app, 100, 24);
+    assert!(screen.contains("Sync as New Folder"));
+    assert!(!screen.contains("Removed from Sync"));
+    key(&mut app, KeyCode::Char(' '));
+    assert!(!app.sync_folders.as_ref().unwrap().choices[1].selected);
+    key(&mut app, KeyCode::Enter);
+    let saved = app.sync.saved_config().unwrap().unwrap();
+    assert!(saved.excluded_folders.contains(first));
+    assert!(saved.selected_folders.contains(other));
+    assert!(!saved.folders.contains(&app.settings.notes_dir));
+}
+
+#[test]
+fn sync_folder_resync_is_explicit_uses_new_identity_and_preserves_other_draft_toggles() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = sync_folder_server_fixture(temp.path(), true);
+    let first = "AAAAAAAAAAAAAAAAAAAAAA";
+    app.command("sync-folders").unwrap();
+    let before = app.sync.saved_config().unwrap().unwrap();
+    key(&mut app, KeyCode::Char(' ')); // Select the unrelated Other folder in the draft.
+    key(&mut app, KeyCode::Down); // The retained local-only folder is in the same list.
+    key(&mut app, KeyCode::Char('s'));
+    key(&mut app, KeyCode::Enter); // Cancel is the default for resync as well.
+    assert!(app.sync.saved_config().unwrap().unwrap() == before);
+    key(&mut app, KeyCode::Char('s'));
+    assert!(sync_picker_screen(&mut app, 100, 24).contains("fresh folder and note identities"));
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Enter);
+    let picker = app.sync_folders.as_ref().unwrap();
+    assert!(!(0..picker.choices.len()).any(|i| picker.local_only(i)));
+    assert!(picker.choices.iter().all(|c| c.selected));
+    let state = app.sync.snapshot().unwrap().unwrap();
+    assert!(state
+        .catalog
+        .as_ref()
+        .unwrap()
+        .deleted_folders
+        .contains(first));
+    assert!(!state.bindings.contains_key(first));
+    let new_id = state
+        .bindings
+        .iter()
+        .find(|(_, b)| b.path == app.settings.notes_dir)
+        .unwrap()
+        .0;
+    assert_ne!(new_id, first);
+    assert!(app
+        .sync
+        .saved_config()
+        .unwrap()
+        .unwrap()
+        .selected_folders
+        .contains(new_id));
+    assert!(app.settings.notes_dir.join("00.txt").exists());
+    key(&mut app, KeyCode::Enter);
+    assert!(app.sync_folders.is_none());
+    assert!(app
+        .sync
+        .saved_config()
+        .unwrap()
+        .unwrap()
+        .selected_folders
+        .contains("AQEBAQEBAQEBAQEBAQEBAQ"));
+}
+
+#[test]
+fn sync_folder_resync_rejects_a_stale_draft_without_resetting_local_identities() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = sync_folder_server_fixture(temp.path(), true);
+    let path = temp.path().join("config/sync/state.json");
+    let before = fs::read(&path).unwrap();
+    app.command("sync-folders").unwrap();
+    let mut config = app.sync.saved_config().unwrap().unwrap();
+    config.scopes = "openid changed-elsewhere".into();
+    app.sync.configure(config.clone()).unwrap();
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Char('s'));
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Enter);
+    assert!(app
+        .sync_folders
+        .as_ref()
+        .unwrap()
+        .message
+        .as_ref()
+        .unwrap()
+        .contains("configuration changed"));
+    assert_eq!(fs::read(path).unwrap(), before);
+    assert!(app.sync.saved_config().unwrap().unwrap() == config);
+}
+
+#[test]
+fn closing_a_busy_sync_folder_picker_does_not_cancel_or_lock_the_operation() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = sync_folder_server_fixture(temp.path(), false);
+    app.command("sync-folders").unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.sync_job = Some(rx);
+    app.sync_folder_deleting = true;
+    app.sync_unlocked = true;
+    app.sync_folders.as_mut().unwrap().busy = true;
+    key(&mut app, KeyCode::Esc);
+    assert!(app.sync_folders.is_none());
+    assert!(app.sync_job.is_some());
+    assert!(app.status.contains("not undone"));
+    tx.send(Err(std::io::Error::other("Deletion failed")))
+        .unwrap();
+    app.tick().unwrap();
+    assert!(app.sync_unlocked);
+    assert!(app.sync_job.is_none());
+    assert!(app.status.contains("Deletion failed"));
+}
+
+#[test]
+fn sync_folder_hides_server_only_markers_and_rejects_unpublished_deletion() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = sync_folder_server_fixture(temp.path(), true);
+    let local = temp.path().join("local-only");
+    fs::create_dir(&local).unwrap();
+    app.settings.add_folder(local, false);
+    // The removed collection exists only on another device.
+    let path = temp.path().join("config/sync/state.json");
+    let mut state: papertrail_sync::engine::State =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    state.bindings.remove("AAAAAAAAAAAAAAAAAAAAAA");
+    fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+    let before = fs::read(&path).unwrap();
+    app.command("sync-folders").unwrap();
+    let picker = app.sync_folders.as_mut().unwrap();
+    assert!(picker
+        .choices
+        .iter()
+        .all(|c| c.id.as_deref() != Some("AAAAAAAAAAAAAAAAAAAAAA")));
+    picker
+        .state
+        .select(picker.choices.iter().position(|c| c.id.is_none()));
+    key(&mut app, KeyCode::Char('d'));
+    let picker = app.sync_folders.as_ref().unwrap();
+    assert!(picker.confirmation.is_none());
+    assert!(picker
+        .message
+        .as_ref()
+        .unwrap()
+        .contains("not been published"));
+    key(&mut app, KeyCode::Char('s'));
+    let picker = app.sync_folders.as_ref().unwrap();
+    assert!(picker.confirmation.is_none());
+    assert!(picker
+        .message
+        .as_ref()
+        .unwrap()
+        .contains("not been published"));
+    assert_eq!(fs::read(path).unwrap(), before);
+}
+
+#[test]
+fn sync_folder_hides_deleted_identities_when_their_local_directory_is_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = sync_folder_server_fixture(temp.path(), true);
+    let path = temp.path().join("config/sync/state.json");
+    let journal = fs::read(&path).unwrap();
+    let backup = temp.path().join("retained-files");
+    fs::rename(&app.settings.notes_dir, &backup).unwrap();
+    app.command("sync-folders").unwrap();
+    let picker = app.sync_folders.as_ref().unwrap();
+    assert_eq!(picker.choices.len(), 1);
+    assert_eq!(picker.choices[0].name, "Other");
+    assert!(!picker.local_only(0));
+    let screen = sync_picker_screen(&mut app, 100, 24);
+    assert!(!screen.contains("Removed from Sync"));
+    assert!(!screen.contains("[local]"));
+    assert_eq!(fs::read(path).unwrap(), journal);
+    assert!(backup.join("00.txt").is_file());
 }
 
 #[test]
@@ -1436,11 +1983,58 @@ fn preview_failure_keeps_keyboard_and_mouse_selection_and_unsaved_text() {
 }
 
 #[test]
+fn note_width_is_configurable_persistent_and_safe_on_narrow_terminals() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = browse_app(temp.path(), 1);
+    render_app(&mut app, 120, 25);
+    assert_eq!(app.panes[1].width, 30);
+    app.command("set note-width 42").unwrap();
+    render_app(&mut app, 120, 25);
+    assert_eq!(app.panes[1].width, 42);
+    assert_eq!(self::app(temp.path()).preferences.note_width, Some(42));
+    for value in ["9", "81", "-1", "invalid", ""] {
+        assert!(app.command(&format!("set note-width {value}")).is_err());
+        assert_eq!(app.preferences.note_width, Some(42));
+    }
+    app.command("set note-width 80").unwrap();
+    app.command("set folder-width 30").unwrap();
+    for width in [55, 79, 80, 100, 160] {
+        render_app(&mut app, width, 25);
+        assert!(app.panes[2].width >= 20);
+        assert_eq!(app.preferences.note_width, Some(80));
+        assert_eq!(app.panes.iter().map(|pane| pane.width).sum::<u16>(), width);
+    }
+    app.command("set note-width auto").unwrap();
+    assert_eq!(self::app(temp.path()).preferences.note_width, None);
+    render_app(&mut app, 120, 25);
+    assert_eq!(app.panes[1].width, 30);
+}
+
+#[test]
+fn note_width_completion_supports_numbers_and_auto() {
+    use crate::completion::candidates;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    assert_eq!(
+        candidates("set note-w", 0, root, root).unwrap(),
+        ["set note-width "]
+    );
+    assert_eq!(
+        candidates("set note-width a", 0, root, root).unwrap(),
+        ["set note-width auto"]
+    );
+    assert_eq!(
+        candidates("set note-width 8", 0, root, root).unwrap(),
+        ["set note-width 80"]
+    );
+}
+
+#[test]
 fn narrow_configurable_folder_pane_and_path_dialog_preserve_preferences() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = browse_app(temp.path(), 1);
     render_app(&mut app, 120, 25);
-    assert_eq!(app.panes[0].width, 16);
+    assert_eq!(app.panes[0].width, 7);
     app.command("set folder-width 14").unwrap();
     render_app(&mut app, 120, 25);
     assert_eq!(app.panes[0].width, 14);

@@ -61,8 +61,8 @@ fn fetch_with(client: &reqwest::blocking::Client, server: &str) -> io::Result<Pu
     let response = client
         .get(format!("{}/v1/auth/config", server.trim_end_matches('/')))
         .send()
-        .map_err(|_| {
-            error("Authentication configuration request failed or timed out; check the sync server")
+        .map_err(|e| {
+            crate::http_error::discovery_error("Authentication configuration request failed", e)
         })?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Err(error("Server does not offer authentication discovery; use manual issuer/client/scopes configuration"));
@@ -259,6 +259,26 @@ mod tests {
             .to_string()
             .contains("timed out"));
         worker.join().unwrap();
+    }
+    #[test]
+    fn refused_connection_is_reported_without_the_request_url() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        // Windows can take longer than the stalled-server fixture's 200 ms to
+        // report connection refusal. Test refusal, not that fixture's deadline.
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let err = fetch_with(&client, &format!("http://{address}/PRIVATE_PATH"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("connection failed"), "{err}");
+        assert!(!err.contains("PRIVATE_PATH"));
+        assert!(!err.contains(&address.to_string()));
     }
     #[test]
     fn untrusted_urls_and_invalid_public_settings_are_rejected() {
