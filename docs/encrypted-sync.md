@@ -46,8 +46,17 @@ keys and plaintext working files do not need conversion or replacement.
 GTK: open the **Sync icon at the bottom-left** → Configure Sync → Sign In → Create Vault or
 Unlock Vault. Setup uses native dialogs; creating/changing credentials requires
 saving and confirming a recovery key before publishing the new envelopes.
-Sync Now, Recover Vault, Change Passphrase, Lock Vault, and Sign Out are in that
-dedicated menu. Status appears directly in the menu/tooltip without a duplicate
+Create Vault is hidden once the signed-in account's existing vault is confirmed.
+Successful manual sign-in opens Unlock Vault automatically if the vault is still
+locked, or Create Vault if the server confirmed no vault exists. An unknown vault
+state uses Unlock Vault, never assumed creation. Automatic session restoration,
+cancelled/failed sign-in, and an already unlocked vault do not trigger this prompt.
+Network failures and cancellation do not count as a missing vault. **Recover
+Vault** is available inside **Unlock Vault** via **Use Recovery Key Instead**,
+with **Use Passphrase Instead** to return. Switching clears the entered secret;
+the recovery-key prompt never offers password remembering.
+Sync Now, Change Passphrase, Lock Vault, and Sign Out are in the dedicated menu.
+Status appears directly in the menu/tooltip without a duplicate
 status dialog. The circular-arrow icon rotates while working, stopping when done
 or on failure; disabled system animations are respected. Menus stay accessible.
 
@@ -79,7 +88,33 @@ New passphrases require at least 16 characters; prefer several randomly chosen
 words. GTK requires confirmation of newly entered passphrases. The TUI
 currently prompts once, so verify the passphrase carefully before setup.
 
-After each launch the key is locked; unlock triggers sync. Unlocked Linux clients
+GTK and graphical-session TUI prompts offer **Remember encryption password on this
+device** (TUI: Tab toggles the keyring option beneath the masked password prompt).
+It is off by default. When enabled, a successful unlock saves the password in
+the system credential store; create/change saves it only after recovery-key
+confirmation and successful publication. Leave the option enabled when changing
+the password to remember the replacement. A successful manual unlock/change with
+the option off removes the previously saved password. Recovery keys are never saved.
+On Linux, the login tokens and remembered password are separate entries in Secret
+Service, visible in Seahorse (Passwords and Keys) as **Paper Trail — Sync login
+(server)** and **Paper Trail — Encryption password (server)**. Existing entries
+receive these readable titles when next loaded or saved; their internal lookup
+identifiers remain unchanged. No password is written to settings.
+Anyone with access to the unlocked desktop keyring can unlock sync.
+
+At launch, GTK and graphical-session TUI restore saved login tokens, refresh them
+as needed, and automatically unlock and sync when a remembered password matches
+the authenticated account and current vault version. Without a saved password,
+unlock manually. An unavailable/locked keyring, expired login, changed password or
+offline server produces a status message, not a browser launch or repeated password
+dialog; manual sign-in/unlock remains available. Startup restoration is asynchronous.
+Lock Vault / `:lock` drops the in-memory key and prevents automatic unlocking for
+the rest of that session, retaining the saved password for the next launch.
+Sign Out / `:logout` removes both saved login and encryption credentials.
+SSH/headless TUI sessions never read or save desktop credentials and continue to
+use manual, session-only login/unlock.
+
+Unlock triggers sync. Unlocked Linux clients
 sync periodically; GTK also debounces saved edits and foreground activation.
 GTK keeps menus, navigation and editing enabled while HTTP runs. Short local file
 leases serialize note writes and navigation, never network requests; the worker
@@ -106,7 +141,11 @@ Local saves continue without network access.
 
 Application renames retain opaque note identity via local mapping updates. External
 renames cannot be identified reliably without filesystem metadata: they may appear
-as a deletion plus creation. Removing a folder bookmark is not a remote deletion;
+as a deletion plus creation. **Close Folder** (TUI: `:close-folder`) removes the
+bookmark and pauses that folder's sync on this device. Local files, server data,
+other devices, stable IDs and pending edits are kept. Reopening the folder only
+restores local access: explicitly check it again in Configure Sync / `:sync-folders`
+to resume syncing. Closing is not a remote deletion;
 an unavailable selected folder stops sync rather than uploading deletions. Symlinks
 are not imported by the sync scanner. Initial import of an existing second working
 tree can produce duplicates; use an empty folder on a new device when possible.
@@ -119,7 +158,9 @@ encrypts the ID-to-name/color table and confirmed legacy note membership. Catalo
 revisions are immutable and conditionally appended just like note revisions. A
 single conditional catalog prevents two first-upgrade devices from independently
 publishing incompatible legacy folder identities. The server never reads the table
-or learns folder membership from API paths.
+or learns folder membership from normal sync API paths. Explicit permanent folder
+deletion groups the affected opaque note IDs in one request, so the server can
+infer that those erased notes belonged together; it still cannot read names or content.
 It can recognize the catalog's reserved opaque ID and infer metadata-update activity
 from its size/timing; this does not hide all usage information.
 
@@ -147,7 +188,63 @@ still pass through the account cursor (membership is encrypted), and remain defe
 until re-enabled. Switching an existing mapping copies the current working notes to
 the new location without removing old files. Close notes in that collection before
 remapping. Missing/unavailable directories stop sync rather than becoming mass
-deletions. Global folder deletion is not exposed; unchecking is always device-local.
+deletions. Unchecking is always device-local.
+
+### Permanently removing a synced folder
+
+In GTK **Configure Sync → Folders**, the direct trash-can button beside a published
+folder opens **Delete from Server…**. Sign in and unlock first; the button is
+unavailable during another sync operation. The native confirmation defaults to
+Cancel and uses a red **Delete from Server** confirmation button.
+Configure Sync stays open during deletion, preserving unsaved configuration edits.
+The affected row and Save button are disabled while the request runs. Success
+changes the retained folder's row to **Local only**, with **Sync as New Folder…**;
+failure keeps the row and shows the error.
+
+In TUI **`:sync-folders`**, press **`d`/Delete** on a published folder, then explicitly
+select **Delete from Server** in the confirmation (Cancel is the default).
+Retained local folders stay in the same list marked **local**; **`s`** offers
+**Sync as New Folder** for those rows.
+The picker stays open and preserves other draft selections; confirmed remote
+operations are not undone by cancelling the selection draft. See the
+[TUI guide](tui.md) for keyboard controls and scrolling the confirmation.
+
+Deletion permanently removes the current collection's notes (including already
+deleted notes) and their stored note revision payloads from the live server.
+Local folders, files, open buffers and offline edits on every device are kept.
+An authenticated deleted-folder marker retains the stable folder ID, so other
+devices stop uploading/downloading that collection on their next sync. Pending
+uploads and deferred applications for it are discarded, not turned into conflict
+copies. Removing a bookmark or unchecking a folder never invokes this operation.
+
+The server atomically compares the full snapshot checkpoint, replaces the erased
+note payloads with encrypted, content-free receipts, and appends the encrypted
+catalog marker. Opaque revision IDs, parent links, sequence positions and original
+digests remain so replicas can validate existing checkpoints without resetting
+their journals. Encrypted folder catalog metadata is retained; note bodies and
+filenames are not retained in the erasure receipts. Notes already moved into
+another collection are not erased. The server uses SQLite secure deletion and
+truncates its WAL, but independent exports, filesystem snapshots, server backups,
+and copies already downloaded to other devices are outside this operation.
+Concurrent server edits abort deletion rather than deleting an incomplete set.
+Very large histories exceeding the server's 32 MiB atomic-request limit fail
+without deleting anything.
+
+**Upgrade the server and all clients before using deletion.** The server upgrades
+SQLite schema 1 to 2 on opening; older server binaries then fail closed rather than
+ignoring the erasure upload guards. After the first
+erasure, the server requires the current catalog-head precondition on uploads,
+including new note IDs and catalog changes. Old or stale clients fail closed;
+they cannot silently resurrect erased folders. The new client reconciles the
+marker before scanning local files. An in-flight stale upload fails rather than
+creating a new note identity.
+
+There is no user-facing list of server deletion markers. Only folders still
+available locally appear in the normal folder list, with the explicit
+**Sync as New Folder…** action. Its confirmation opts into publishing the retained
+local files under fresh folder and note IDs; it does not restore the erased
+history. Other devices may download a separate copy. No background job invokes
+this action automatically.
 
 Legacy migration preserves note IDs, vault keys, history, cursors, and files. Known
 note IDs are assigned using their existing local paths, not ambiguous names. Unknown
@@ -271,10 +368,22 @@ authorization-response issuer, when supplied, must match. ID tokens are not used
 as credentials or decoded as the source of account identity: the authenticated
 API returns the access token's validated `(iss, sub)` identity.
 
+GTK opens browser login through the native GTK URI launcher on its main thread,
+including portal dispatch inside Flatpak, and reports discovery/launch/callback
+stages in the sync menu. Linux TUI `:login-browser` uses `xdg-open` (from
+`xdg-utils`) and checks its exit status; failed launch requests do not silently
+become a three-minute wait for a callback. Browser dispatch has a 30-second
+timeout and remains cancellable in GTK. Desktop-launcher output and OAuth URLs
+are not included in error messages.
+TUI `:login` is device-code authentication: it does not visit or serve this
+loopback callback page, even after successful approval in a browser.
+
 Linux browser login registers `http://127.0.0.1:{ephemeral-port}/callback` per RFC 8252.
-The callback page tries to close its tab after three seconds once the authorization-code
-exchange succeeds. Browser security may block closing a system-browser tab; a
-manual-close message remains visible. Error pages do not auto-close, and no tokens
+The branded callback page includes the embedded Paper Trail logo and light/dark
+styling. It tries to close its tab after five seconds once the authorization-code
+exchange succeeds. Browser security may block automatic closing of a
+system-browser tab; a manual-close message remains visible, without a close button.
+Error pages do not auto-close, and no tokens
 or provider error details are included in the page. The successful page attempts
 to remove OAuth query parameters from its address bar before the timer starts.
 This loopback redirect is the narrow HTTP exception; all issuer and API requests require
@@ -321,8 +430,11 @@ access/refresh tokens in memory (including refresh); sign-out clears that sessio
 without deleting other graphical sessions' stored credentials. Device requests are
 limited to a one-hour lifetime; verification URLs must use HTTPS. Secrets/provider
 response bodies are never echoed in diagnostics. The unlocked vault key is memory-only
-on all clients: no persistent key cache is implemented. Lock drops keys and pending
-wrappers; sign-out also removes stored tokens when using persistent storage.
+on all clients: no persistent key cache is implemented. The optional remembered
+passphrase is held only in the platform credential store and checked against the
+authenticated account, vault ID and envelope generation before startup unlock.
+Lock drops keys and pending wrappers; sign-out also removes stored tokens and
+the remembered passphrase when using persistent storage.
 Neither action erases local plaintext notes, local
 comparison baselines, swap, terminal history maintained by the terminal itself,
 or other programs' copies. Sign-out is local credential removal, not provider-wide
@@ -330,6 +442,41 @@ session logout or OAuth token revocation.
 
 Flatpak now requests network access and access to `org.freedesktop.secrets`.
 Browser/loopback and secret-service portal behavior require manual Flatpak checks.
+
+GTK's sync menu shows one action per pair: **Sign In / Sign Out** follows the
+login session, **Unlock Vault / Lock Vault** follows vault state, and **Sync Now**
+becomes **Cancel Operation** during cancellable work. While cancellation is
+pending it displays a disabled **Cancelling…** item. Operations without a safe
+cancel checkpoint display a disabled **Operation Running…** item instead.
+
+In GTK, choose **Cancel Operation** in the sync menu to stop browser sign-in or a
+running sync. Cancellation keeps the worker attached until it reaches a safe
+checkpoint; in-flight HTTP requests retain their normal timeouts. Completed
+uploads/download pages and pending changes remain journaled for the next run.
+Cancelling sign-in before credential commit does not save its tokens or replace
+an existing session. If credential storage has already started, the UI reports
+that sign-in was already approved instead of claiming it was cancelled.
+Cancellation pauses automatic sync for this app session; **Sync Now** resumes it.
+
+### Troubleshooting authentication discovery
+
+Discovery failures distinguish timeouts, recognized DNS errors, TLS certificate
+verification failures, recognized TLS handshake errors, and other connection or
+request failures. Unknown backend errors use a generic category. Diagnostics do
+not include request URLs, credentials, or backend error text.
+
+From a source checkout, test the application's HTTP client without signing in,
+saving configuration, accessing the credential store, or accepting an issuer:
+
+```sh
+cargo run --locked -p papertrail-sync --example check_discovery -- https://sync.example
+```
+
+The check fetches the public authentication configuration and validates the
+advertised OIDC metadata; success does not constitute a trust decision. `curl`
+success alone does not establish that the application's Rust TLS client works.
+Flatpak network access already covers discovery and the browser's loopback
+callback; broad filesystem permissions are not needed to fix network failures.
 
 ## Versioned crypto/key format
 
@@ -396,9 +543,10 @@ caller-selected account. IDs do not contain titles or filenames.
 | `GET /v1/identity`                        | Validated account identity                                         |
 | `GET /v1/vault`                           | Current encrypted wrapping envelopes                               |
 | `PUT /v1/vault`                           | `If-Match: 0` creates; current generation conditionally updates    |
-| `GET /v1/changes?cursor=N[&through=T]`    | Ordered immutable revisions, stable page boundary                  |
+| `GET /v1/changes?cursor=N[&through=T]`    | Ordered revisions/erasure receipts, stable page boundary           |
 | `POST /v1/notes/{id}/revisions`           | Conditional append using authenticated parent revision             |
-| `GET /v1/notes/{id}/revisions/{revision}` | Read immutable encrypted historical revision                       |
+| `GET /v1/notes/{id}/revisions/{revision}` | Read encrypted historical revision or its erasure receipt          |
+| `POST /v1/erase-folder`                   | Atomic confirmed catalog update and permanent note-payload erasure |
 | `GET /v1/export`                          | Account ciphertext/envelopes/history/metadata export               |
 | `DELETE /v1/account`                      | Explicit deletion; requires `X-Papertrail-Confirm: delete-account` |
 

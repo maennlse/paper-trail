@@ -4,9 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, Borders, Clear, HighlightSpacing, List, ListItem, ListState, Paragraph, Wrap,
-    },
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -24,8 +22,8 @@ p                     Toggle highlighted note's pin
 Ctrl-N / Ctrl-S       New note / save
 Ctrl-Q                Save, persist settings, and quit
 Esc                   Normal mode / cancel prompt / clear list search
-› marks selection; ● marks the displayed note; ▎ marks the active folder.
-Folder badges/note accents match GTK colors; cyan border marks focus.
+● marks the displayed note; * marks pinned notes (after the title).
+Colored badges/text match GTK colors; cyan border marks focus.
 
 VIM SUBSET (not a full Vim emulator)
 i a I A o O           Insert / append / new line
@@ -50,7 +48,8 @@ COMMANDS (: opens the prompt; Enter executes)
 :saveas PATH          Save edits to a new file (never overwrites)
 :reload!              Explicitly discard edits and load disk version
 :set number           Or :set nonumber (TUI-only preference)
-:set folder-width 16  Folder column width, 10–30; hidden below 80 columns
+:set folder-width 7   Folder column width, 7–30; hidden below 80 columns
+:set note-width 24    Note column width, 10–80; auto restores automatic sizing
 :set editor neovim    Real Neovim embedded in the editor pane (nvim 0.9+)
 :set editor builtin   Return to the built-in editor
 :set nvim-config clean/user  Isolated defaults / your normal config/plugins
@@ -70,7 +69,8 @@ F6 / Shift-F6         Next/previous pane; Neovim keeps Tab, H/L and :
 :change-passphrase    Rewrap vault; save replacement recovery key
 :lock :logout         Clear vault key / credentials; files stay plaintext
 :sync-status          Show synchronization status
-:sync-folders         Choose sync folders: Space/click toggles, Enter saves
+:sync-folders         Space/click toggles; Enter saves; d deletes with confirmation
+                      s syncs a retained local-only folder as new (with confirmation)
 :sync-add-folder PATH / :sync-remove-folder PATH  Compatibility shortcuts
 :sync-map-folder ID PATH / :sync-download-dir PATH  Device-local directories
 :sync-map-legacy NOTE_ID FOLDER_ID  Confirm an ambiguous legacy assignment
@@ -93,15 +93,19 @@ fn block(title: String, active: bool) -> Block<'static> {
         .border_style(Style::default().fg(if active { Color::Cyan } else { Color::DarkGray }))
 }
 
-pub fn panes(area: Rect, folder_width: u16) -> [Rect; 3] {
+pub fn panes(area: Rect, folder_width: u16, note_width: Option<u16>) -> [Rect; 3] {
     let folders = if area.width >= 80 {
-        folder_width.clamp(10, 30)
+        folder_width.clamp(7, 30)
     } else {
         0
     };
+    let notes = note_width
+        .map(|width| width.clamp(10, 80))
+        .unwrap_or_else(|| (area.width / 4).clamp(20, 36))
+        .min(area.width.saturating_sub(folders).saturating_sub(20));
     let columns = Layout::horizontal([
         Constraint::Length(folders),
-        Constraint::Length((area.width / 4).clamp(20, 36)),
+        Constraint::Length(notes),
         Constraint::Min(20),
     ])
     .split(area);
@@ -149,7 +153,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(2 + login_height)])
         .split(area);
-    let columns = panes(vertical[0], app.preferences.folder_width);
+    let columns = panes(
+        vertical[0],
+        app.preferences.folder_width,
+        app.preferences.note_width,
+    );
     app.panes = columns;
     app.folders_visible = columns[0].width > 0;
     if !app.folders_visible && app.focus == Focus::Folders {
@@ -180,9 +188,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 color
             };
             let pin = if app.settings.pinned_notes.contains(&note.path) {
-                "* "
+                " *"
             } else {
-                "  "
+                ""
             };
             let opened = if app
                 .session
@@ -190,31 +198,23 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 .as_ref()
                 .is_some_and(|n| n.path == note.path)
             {
-                "● "
+                " ●"
             } else {
-                "  "
+                ""
             };
-            let folder = note
-                .path
-                .parent()
-                .map(|p| app.settings.folder_name(p))
-                .unwrap_or_default();
             ListItem::new(vec![
-                Line::from(vec![
-                    Span::styled("▎ ", Style::default().fg(accent)),
-                    Span::raw(format!("{opened}{pin}{}", note.title)),
-                ]),
-                Line::from(vec![
-                    Span::styled("▎ ", Style::default().fg(accent)),
-                    Span::styled(folder, Style::default().fg(accent)),
-                    Span::styled(
-                        format!(
-                            "/{}",
-                            note.path.file_name().unwrap_or_default().to_string_lossy()
-                        ),
-                        Style::default().fg(if selected { accent } else { Color::DarkGray }),
-                    ),
-                ]),
+                Line::from(Span::styled(
+                    format!("{}{opened}{pin}", note.title),
+                    Style::default().fg(accent),
+                )),
+                Line::from(Span::styled(
+                    note.path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    Style::default().fg(if selected { accent } else { Color::DarkGray }),
+                )),
             ])
             .style(style)
         })
@@ -238,7 +238,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     frame.render_stateful_widget(
         List::new(notes)
             .block(block(title, app.focus == Focus::Notes))
-            .highlight_symbol("› ")
             .highlight_style(Style::default().add_modifier(Modifier::BOLD)),
         columns[1],
         &mut app.note_state,
@@ -387,6 +386,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let hints = if let Some(prompt) = &app.prompt {
         if prompt.kind == PromptKind::Command {
             "COMMAND · Tab/Shift-Tab complete · Enter run · Esc cancel".into()
+        } else if let Some(remember) = prompt.remember {
+            format!(
+                "Tab: [{}] Remember password in keyring (auto-sync) · Enter confirm · Esc cancel",
+                if remember { "x" } else { " " }
+            )
         } else {
             "PROMPT · Enter confirm · Esc cancel".into()
         }
@@ -520,7 +524,6 @@ pub(crate) fn selection_style(color: Color) -> Style {
 fn render_folders(frame: &mut Frame, app: &mut App, area: Rect) {
     let cursor = app.folder_cursor();
     let focused = app.focus == Focus::Folders;
-    let digits = app.settings.note_folders.len().to_string().len();
     let items: Vec<_> = std::iter::once(None)
         .chain(app.settings.note_folders.iter().map(Some))
         .enumerate()
@@ -556,53 +559,24 @@ fn render_folders(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 app.all
             };
-            let number = if area.width >= 16 {
-                if row == 0 {
-                    " ".repeat(digits + 1)
-                } else {
-                    format!("{row:>digits$} ")
-                }
-            } else {
-                String::new()
-            };
             let badge = path
                 .map(|_| ellipsize(&papertrail_core::colors::badge(&name), 2))
                 .unwrap_or_else(|| "All".into());
-            let padding = " ".repeat(2usize.saturating_sub(badge.width()));
-            let prefix = format!(
-                "{number}{}[{badge}{padding}] ",
-                if unavailable {
-                    "!"
-                } else if active {
-                    "▎"
+            let badge_style = Style::default()
+                .fg(accent)
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(if active {
+                    Modifier::UNDERLINED
                 } else {
-                    " "
-                }
-            );
-            let label = if path.is_some() {
-                ellipsize(
-                    &name,
-                    usize::from(area.width.saturating_sub(4)).saturating_sub(prefix.width()),
-                )
-            } else {
-                String::new()
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    prefix,
-                    Style::default().fg(accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(label),
-            ]))
-            .style(style)
+                    Modifier::empty()
+                });
+            ListItem::new(Line::from(Span::styled(format!("[{badge}]"), badge_style))).style(style)
         })
         .collect();
     app.folder_state.select(Some(cursor));
     frame.render_stateful_widget(
         List::new(items)
-            .block(block("Folders".into(), focused))
-            .highlight_symbol(if focused { "› " } else { "  " })
-            .highlight_spacing(HighlightSpacing::Always)
+            .block(block("Dirs".into(), focused))
             .highlight_style(Style::default().add_modifier(Modifier::BOLD)),
         area,
         &mut app.folder_state,
@@ -615,9 +589,67 @@ fn render_sync_folders(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let popup = area.inner(ratatui::layout::Margin::new(1, 0));
     frame.render_widget(Clear, popup);
-    let block = Block::bordered().title("Sync folders · selection does not delete notes");
+    let block = Block::bordered().title("Sync folders · unchecking does not delete notes");
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    if let Some(confirm) = &picker.confirmation {
+        let parts = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+        let text = if confirm.resync {
+            format!("Sync “{}” as a new folder?\n\nUploads retained local notes with fresh folder and note identities. Deleted history will not be restored. Other devices may download a separate copy.", confirm.name)
+        } else {
+            format!("Delete “{}” from the server?\n\nPermanently deletes this folder’s synced notes and revision history. Local files and offline edits on all devices are kept.\n\nOther devices stop syncing the folder when they next connect. It will not be uploaded again automatically.\n\nServer backups are managed separately by the server operator.", confirm.name)
+        };
+        frame.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .scroll((confirm.scroll, 0)),
+            parts[0],
+        );
+        let cancel = if !confirm.accept {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default()
+        };
+        let accept = if confirm.accept {
+            Style::default().fg(Color::White).bg(if confirm.resync {
+                Color::Blue
+            } else {
+                Color::Red
+            })
+        } else {
+            Style::default().fg(if confirm.resync {
+                Color::Cyan
+            } else {
+                Color::Red
+            })
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" Cancel ", cancel),
+                Span::raw("  "),
+                Span::styled(
+                    if confirm.resync {
+                        " Sync as New Folder "
+                    } else {
+                        " Delete from Server "
+                    },
+                    accept,
+                ),
+            ])),
+            parts[1],
+        );
+        frame.render_widget(
+            Paragraph::new("Tab/←/→ choose · Enter confirm · Esc back · ↑↓ scroll")
+                .wrap(Wrap { trim: false }),
+            parts[2],
+        );
+        return;
+    }
     if picker.details {
         let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
         picker.area = parts[0];
@@ -633,12 +665,13 @@ fn render_sync_folders(frame: &mut Frame, app: &mut App, area: Rect) {
     let parts = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(3),
-        Constraint::Length(1),
+        Constraint::Length(if picker.message.is_some() { 2 } else { 0 }),
+        Constraint::Length(2),
     ])
     .split(inner);
     picker.area = parts[0];
     let items: Vec<_> = picker
-        .choices
+        .visible_choices()
         .iter()
         .enumerate()
         .map(|(index, choice)| {
@@ -655,14 +688,25 @@ fn render_sync_folders(frame: &mut Frame, app: &mut App, area: Rect) {
                 color
             };
             ListItem::new(Line::from(vec![
-                Span::raw(if choice.selected { "[x] " } else { "[ ] " }),
+                Span::raw(if picker.local_only(index) {
+                    "[local] "
+                } else if choice.selected {
+                    "[x] "
+                } else {
+                    "[ ] "
+                }),
                 Span::styled(
                     format!("[{}] ", papertrail_core::colors::badge(&choice.name)),
                     Style::default().fg(accent),
                 ),
                 Span::raw(format!(
-                    "{}{}",
+                    "{}{}{}",
                     choice.name,
+                    if picker.local_only(index) {
+                        " · Sync as New Folder (s)"
+                    } else {
+                        ""
+                    },
                     if choice.conflict {
                         " ! metadata conflict"
                     } else {
@@ -687,8 +731,24 @@ fn render_sync_folders(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|line| Line::raw(ellipsize(line, usize::from(parts[1].width))))
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(details), parts[1]);
-    frame.render_widget(
-        Paragraph::new("Space toggle · Enter save · Esc cancel · i details"),
-        parts[2],
-    );
+    if let Some(message) = &picker.message {
+        frame.render_widget(
+            Paragraph::new(message.as_str())
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: false }),
+            parts[2],
+        );
+    }
+    let footer = if picker.busy {
+        "Deleting from server… Selection/Save paused · Esc closes picker (deletion continues)"
+    } else if picker
+        .state
+        .selected()
+        .is_some_and(|i| picker.local_only(i))
+    {
+        "s sync as new folder · Enter save · Esc cancel draft · i details"
+    } else {
+        "Space toggle · d delete from server · Enter save · Esc cancel draft · i details"
+    };
+    frame.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[3]);
 }

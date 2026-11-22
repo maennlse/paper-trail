@@ -13,6 +13,10 @@
   V2 note payloads reference those IDs, never directory names. Local bindings map
   IDs to selected directories; unmatched folders get separate app-managed directories
   or require an explicit mapping on collision. Unchecking never deletes notes.
+  Closing a folder also excludes its stable ID from this device's sync selection;
+  reopening is local-only until the user explicitly re-enables syncing. In-flight
+  workers recheck configuration before subsequent writes, and stale GTK metadata
+  cannot restore a closed bookmark. Pending work and remote data are retained.
   Empty folders sync through the catalog. Physical directory names may differ by
   device; logical names/colors appear in the clients' existing folder lists.
 - **Crypto:** shared RustCrypto XChaCha20-Poly1305 with fresh random nonces and a
@@ -36,12 +40,21 @@
   tokens using separate server-only API credentials, validating active status,
   Bearer type, issuer, expiry and audience. Every account is `(iss, sub)`.
 - **API:** identity; get/conditionally replace vault envelopes; changes since a
-  cursor; immutable revision fetch; conditional revision append; encrypted export;
-  explicitly confirmed account deletion. All data routes are account-scoped.
+  cursor; revision fetch; conditional revision append; encrypted export;
+  explicitly confirmed folder erasure and account deletion. All data routes are
+  account-scoped. Revisions are immutable except for explicit erasure, which replaces
+  note payloads with authenticated, content-free receipts at the same IDs/sequences.
 - **Conflicts/deletions:** stale-parent writes conflict. Preserve local edits as a
   new conflict-copy ID; retain the remote version at its original ID. Authenticated
   tombstones stop resurrection. The server does not merge ciphertext. No automatic
   history/tombstone expiry is defined or implemented.
+  GTK's direct trash button and TUI's `:sync-folders` deletion confirmation offer
+  permanent server erasure while keeping local files. Both keep the configuration
+  dialog/picker open and preserve other draft selections. An encrypted, monotonic
+  deleted-folder marker disables the collection on every updated replica. After
+  erasure, uploads require the current
+  catalog head, so stale/legacy clients fail closed even for newly generated note
+  IDs. Explicitly syncing retained files again creates fresh folder/note identities.
 - **Rollback:** retain acknowledged upload sequences, cursor high-water marks,
   envelope generation, and known revision digests/sequences. Reject detected
   backwards/replayed/non-descendant history. This cannot guarantee detection of
@@ -56,7 +69,8 @@
   Device login shows only the verification URL/user code, can be cancelled without
   losing edits, and never stores tokens on SSH/headless sessions (even on refresh).
 - **Exposure and recovery:** the server sees account identity, opaque IDs, sizes,
-  revision links, deletions and activity. Offline passphrase guessing, compromised
+  revision links, deletions and activity, including which opaque note IDs are erased
+  together by a folder-erasure request. Offline passphrase guessing, compromised
   endpoints, plaintext local files and denial of service remain risks. Recovery
   requires the passphrase, saved recovery key, or an unlocked device. Passphrase
   changes rewrap keys and rotate the recovery secret, not all note revisions.
