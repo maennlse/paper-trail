@@ -66,6 +66,14 @@ needed. TUI downloads need no GTK, Python, or Rust installation.
 [Desktop installation guide](docs/desktop-release.md) ·
 [Terminal guide & keybindings](docs/tui.md)
 
+### Experimental iOS client
+
+A native iOS 17+ SwiftUI client shares the Rust core through UniFFI. Build an
+**unsigned IPA** using the manual **Unsigned iOS** GitHub Actions workflow, then
+sign/install it with a sideloading tool such as iLoader. No Apple signing
+credentials are needed in CI. See the [iOS build and sideloading guide](docs/ios.md).
+The iOS app is not part of the tagged release package set yet.
+
 ## Plain files, lasting notes
 
 New notes are UTF-8 `.txt` files, stored in `~/Documents/Paper Trail` by default.

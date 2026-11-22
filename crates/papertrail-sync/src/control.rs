@@ -414,17 +414,16 @@ impl Service {
         Ok(())
     }
     pub fn relocate(&self, old: &Path, new: &Path) -> io::Result<()> {
-        if !self.root.join("state.json").exists() {
-            return Ok(());
+        if self.root.join("state.json").exists() {
+            crate::local::relocations(&self.root, |entries| {
+                entries.push(crate::local::Relocation {
+                    id: papertrail_crypto::opaque_id(),
+                    old: old.into(),
+                    new: new.into(),
+                });
+                Ok(())
+            })?;
         }
-        crate::local::relocations(&self.root, |entries| {
-            entries.push(crate::local::Relocation {
-                id: papertrail_crypto::opaque_id(),
-                old: old.into(),
-                new: new.into(),
-            });
-            Ok(())
-        })?;
         if let Some(mut config) = self.saved_config()? {
             let rewrite = |path: &PathBuf| {
                 path.strip_prefix(old)
@@ -438,6 +437,7 @@ impl Service {
                     .unwrap_or_else(|_| path.clone())
             };
             config.folders = config.folders.iter().map(rewrite).collect();
+            config.download_dir = config.download_dir.as_ref().map(rewrite);
             config.folder_mappings = config
                 .folder_mappings
                 .iter()

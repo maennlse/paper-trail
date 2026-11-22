@@ -8,6 +8,10 @@ the GTK application split into desktop, sidebar, editor, actions, and dialogs.
 `crates/papertrail-tui/` contains the Ratatui terminal frontend, with separate
 application state, Vim-style editor input, rendering, configuration, and tests.
 Build/run it with `cargo run --locked --bin paper-trail-tui`; it requires no GTK.
+`crates/papertrail-ffi/` exposes shared Rust behavior through UniFFI for the
+native SwiftUI app in `ios/`. See `docs/ios.md`; unsigned IPA builds use the
+manual macOS `ios.yml` workflow or `build-aux/build_ios.py`, not the Linux build
+helper. Generated bindings, Xcode projects, and app outputs are ignored.
 See `docs/tui.md` for portable standalone build targets and terminal behavior.
 UI/CSS assets in `crates/papertrail-desktop/resources/` are embedded into the
 Rust binary. The legacy Python app and custom editor schemes have been removed;

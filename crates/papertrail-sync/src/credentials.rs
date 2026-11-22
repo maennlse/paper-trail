@@ -17,7 +17,12 @@ pub(crate) struct Platform;
 /// Secret Service's default label includes the opaque lookup username. Change
 /// only presentation metadata, leaving service/username lookup attributes intact.
 /// Cosmetic failures must never prevent saving or using valid credentials.
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 pub(crate) fn set_label(entry: &keyring::Entry, config: &Config, purpose: &str) {
     #[cfg(target_os = "linux")]
     {
@@ -103,7 +108,12 @@ impl Remembered {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 fn entry(config: &Config) -> io::Result<keyring::Entry> {
     let id = papertrail_crypto::digest(
         format!("{}\n{}\n{}", config.server, config.issuer, config.client_id).as_bytes(),
@@ -112,7 +122,12 @@ fn entry(config: &Config) -> io::Result<keyring::Entry> {
         .map_err(|_| error("Secure vault password storage unavailable"))
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 impl Store for Platform {
     fn load(&self, config: &Config) -> io::Result<Option<Zeroizing<String>>> {
         let entry = entry(config)?;
@@ -232,7 +247,12 @@ mod label_tests {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+)))]
 impl Store for Platform {
     fn load(&self, _: &Config) -> io::Result<Option<Zeroizing<String>>> {
         Err(error("Secure vault password storage unavailable"))
