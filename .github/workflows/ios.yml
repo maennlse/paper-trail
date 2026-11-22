@@ -2,6 +2,14 @@
 name: Unsigned iOS
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "ios/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build-aux/*ios*"
+      - ".github/workflows/ios.yml"
 permissions:
   contents: read
 

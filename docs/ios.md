@@ -20,8 +20,9 @@ tool, subject to Apple's device/app limits and expiration rules. These limitatio
 are not bypassed by this project. No paid Apple Developer account or signing
 secrets are required to **build** the workflow artifacts.
 
-The workflow is manual, has read-only repository permissions, and never creates
-a release or tag. It also produces an Apple Silicon simulator app archive and
+The workflow runs manually or on pull requests that change iOS/Rust build inputs,
+has read-only repository permissions, and never creates a release or tag.
+It also produces an Apple Silicon simulator app archive and
 runs a simulator smoke test. Workflow execution and physical-device/iCloud
 behavior still need verification on Apple's platforms.
 
