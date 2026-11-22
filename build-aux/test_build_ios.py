@@ -27,6 +27,7 @@ class IOSBuildTests(unittest.TestCase):
             commands = output.getvalue()
             self.assertIn("aarch64-apple-ios-sim", commands)
             self.assertIn("CODE_SIGNING_ALLOWED=NO", commands)
+            self.assertIn("ARCHS=arm64", commands)
             self.assertNotIn("-allowProvisioningUpdates", commands)
 
     def test_linux_fails_before_writing_outputs(self) -> None:

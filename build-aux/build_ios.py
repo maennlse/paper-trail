@@ -51,6 +51,7 @@ def xcode_command(root: Path, sdk: str, action: str = "build") -> list[str]:
         "CODE_SIGNING_REQUIRED=NO",
         "CODE_SIGN_IDENTITY=",
         "DEVELOPMENT_TEAM=",
+        "ARCHS=arm64",
     ]
 
 
