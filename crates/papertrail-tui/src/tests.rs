@@ -1394,7 +1394,11 @@ fn closing_a_synced_folder_pauses_only_this_device_and_reopening_does_not_resume
     assert!(app.sync.saved_config().unwrap().unwrap() == paused);
     app.command(&format!("folder {}", folder.display()))
         .unwrap();
-    assert!(app.settings.note_folders.contains(&folder));
+    assert!(app
+        .settings
+        .note_folders
+        .iter()
+        .any(|path| papertrail_sync::same_directory(path, &folder)));
     app.command("sync-folders").unwrap();
     let picker = app.sync_folders.as_mut().unwrap();
     let index = picker
