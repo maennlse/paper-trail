@@ -322,16 +322,12 @@ fn browser_callback(
                 if !peer.ip().is_loopback() {
                     continue;
                 }
+                stream.set_nonblocking(false)?;
                 stream.set_read_timeout(Some(Duration::from_secs(2)))?;
                 stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-                let mut bytes = [0; 8192];
-                let n = stream.read(&mut bytes).unwrap_or(0);
-                let line = std::str::from_utf8(&bytes[..n])
-                    .unwrap_or("")
-                    .lines()
-                    .next()
-                    .unwrap_or("");
-                if let Some(code) = callback::code(line, state, issuer) {
+                if let Some(code) = callback_request_line(&mut stream, cancel, deadline)?
+                    .and_then(|line| callback::code(&line, state, issuer))
+                {
                     return Ok((code, stream));
                 }
                 let _ = callback::invalid(&mut stream);
@@ -340,6 +336,36 @@ fn browser_callback(
                 std::thread::sleep(Duration::from_millis(50))
             }
             Err(e) => return Err(e),
+        }
+    }
+}
+fn callback_request_line(
+    stream: &mut TcpStream,
+    cancel: &device::Cancellation,
+    deadline: Instant,
+) -> io::Result<Option<String>> {
+    // TCP reads can split anywhere. Consume the bounded headers before replying;
+    // closing a socket with unread request bytes can reset a browser's response.
+    let mut bytes = [0; 8192];
+    let mut used = 0;
+    loop {
+        check_login_cancelled(cancel)?;
+        if Instant::now() >= deadline {
+            return Err(error("Browser sign-in timed out"));
+        }
+        if used == bytes.len() {
+            return Ok(None);
+        }
+        match stream.read(&mut bytes[used..]) {
+            Ok(0) => return Ok(None),
+            Ok(n) => used += n,
+            Err(_) => return Ok(None),
+        }
+        if bytes[..used].windows(4).any(|chunk| chunk == b"\r\n\r\n") {
+            return Ok(std::str::from_utf8(&bytes[..used])
+                .ok()
+                .and_then(|request| request.lines().next())
+                .map(str::to_owned));
         }
     }
 }
@@ -475,6 +501,48 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains("Paper Trail logo"));
         assert!(!response.contains("<button"));
+        assert!(response.contains("window.setTimeout(closeTab, 5000)"));
+        assert!(!response.contains("PRIVATE_CODE"));
+    }
+
+    #[test]
+    fn browser_callback_waits_for_fragmented_headers_before_replying() {
+        use std::{io::Write, sync::mpsc};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let (code, mut stream) = browser_callback(
+                &listener,
+                "expected",
+                "https://issuer.example",
+                &device::Cancellation::default(),
+            )
+            .unwrap();
+            tx.send(code).unwrap();
+            callback::finish(&mut stream, Ok(())).unwrap();
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        client
+            .write_all(b"GET /callback?state=expected&code=PRIVATE_CODE HTTP/1.1\r\n")
+            .unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        client.write_all(b"Host: localhost\r\n\r\n").unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            "PRIVATE_CODE"
+        );
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        worker.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains("window.setTimeout(closeTab, 5000)"));
         assert!(!response.contains("PRIVATE_CODE"));
     }
