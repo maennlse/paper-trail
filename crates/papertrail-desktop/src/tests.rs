@@ -679,9 +679,23 @@ fn capture(d: &Desktop, suffix: &str) {
         path.with_extension(format!("{suffix}.png"))
     };
     let paintable = gtk::WidgetPaintable::new(Some(&d.window));
-    let snapshot = gtk::Snapshot::new();
-    paintable.snapshot(&snapshot, d.window.width() as f64, d.window.height() as f64);
-    let node = snapshot.to_node().unwrap();
+    // A newly attached paintable may not have received its first rendered frame,
+    // especially on loaded CI runners. Wait for actual content, not a fixed delay.
+    d.window.queue_draw();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let node = loop {
+        let snapshot = gtk::Snapshot::new();
+        paintable.snapshot(&snapshot, d.window.width() as f64, d.window.height() as f64);
+        if let Some(node) = snapshot.to_node() {
+            break node;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "No GTK screenshot frame for {}",
+            path.display()
+        );
+        settle();
+    };
     d.window
         .renderer()
         .unwrap()
