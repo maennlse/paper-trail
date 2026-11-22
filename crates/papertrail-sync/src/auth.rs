@@ -8,13 +8,24 @@ use oauth2::{
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, Read},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+mod browser;
 mod callback;
 pub mod config;
 pub mod device;
+
+/// Browser sign-in stays in the worker; native frontends launch the URI on their
+/// main thread and acknowledge the result. URLs must never be logged.
+pub enum BrowserEvent {
+    Progress(&'static str),
+    Open {
+        url: String,
+        reply: std::sync::mpsc::Sender<io::Result<()>>,
+    },
+}
 
 pub struct LoginFlow {
     verifier: oauth2::PkceCodeVerifier,
@@ -157,7 +168,7 @@ fn discover_issuer(issuer: &str) -> io::Result<Discovery> {
             issuer.trim_end_matches('/')
         ))
         .send()
-        .map_err(|_| error("OIDC discovery failed"))?;
+        .map_err(|e| crate::http_error::discovery_error("OIDC discovery failed", e))?;
     if !response.status().is_success() {
         return Err(error(
             "OIDC discovery status failed (redirects are not allowed)",
@@ -184,7 +195,51 @@ fn now() -> u64 {
         .as_secs()
 }
 pub fn login(config: &Config) -> io::Result<Tokens> {
-    let d = discover(config)?;
+    login_cancellable(config, &device::Cancellation::default())
+}
+pub fn login_cancellable(config: &Config, cancel: &device::Cancellation) -> io::Result<Tokens> {
+    login_with_browser(config, cancel, |url| browser::open(url, cancel), |_| {})
+}
+
+pub fn login_notified(
+    config: &Config,
+    cancel: &device::Cancellation,
+    events: &std::sync::mpsc::Sender<BrowserEvent>,
+) -> io::Result<Tokens> {
+    login_with_browser(
+        config,
+        cancel,
+        |url| {
+            let (reply, result) = std::sync::mpsc::channel();
+            events
+                .send(BrowserEvent::Open {
+                    url: url.into(),
+                    reply,
+                })
+                .map_err(|_| error("Browser launch window closed"))?;
+            browser::wait_for_launch(result, cancel)
+        },
+        |message| {
+            let _ = events.send(BrowserEvent::Progress(message));
+        },
+    )
+}
+
+fn login_with_browser(
+    config: &Config,
+    cancel: &device::Cancellation,
+    open: impl FnOnce(&str) -> io::Result<()>,
+    progress: impl Fn(&'static str),
+) -> io::Result<Tokens> {
+    let check = || check_login_cancelled(cancel);
+    check()?;
+    config.validate()?;
+    progress("Checking sync server authentication…");
+    config::check(config)?;
+    check()?;
+    progress("Checking identity provider…");
+    let d = discover_issuer(&config.issuer)?;
+    check()?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let redirect = format!(
@@ -208,9 +263,57 @@ pub fn login(config: &Config) -> io::Result<Tokens> {
         request = request.add_scope(Scope::new(scope.into()));
     }
     let (url, state) = request.url();
-    webbrowser::open(url.as_str()).map_err(|_| error("Could not open the system browser"))?;
+    check()?;
+    progress("Opening the system browser…");
+    open(url.as_str())?;
+    check()?;
+    progress("Waiting for browser sign-in… Use Cancel Operation to stop.");
+    let (code, mut stream) = browser_callback(&listener, state.secret(), &config.issuer, cancel)?;
+    progress("Completing browser authorization…");
+    let response = callback::finish(
+        &mut stream,
+        http().and_then(|http| {
+            check()?;
+            let response = client
+                .exchange_code(AuthorizationCode::new(code))
+                .set_pkce_verifier(verifier)
+                .request(&http)
+                .map_err(|_| error("Authorization code exchange failed"))?;
+            check()?;
+            Ok(response)
+        }),
+    )?;
+    Ok(Tokens {
+        access: response.access_token().secret().clone(),
+        refresh: response.refresh_token().map(|r| r.secret().clone()),
+        expires: now()
+            + response
+                .expires_in()
+                .unwrap_or(Duration::from_secs(300))
+                .as_secs(),
+    })
+}
+
+fn check_login_cancelled(cancel: &device::Cancellation) -> io::Result<()> {
+    if cancel.is_cancelled() {
+        Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Sign-in cancelled",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn browser_callback(
+    listener: &TcpListener,
+    state: &str,
+    issuer: &str,
+    cancel: &device::Cancellation,
+) -> io::Result<(String, TcpStream)> {
     let deadline = Instant::now() + Duration::from_secs(180);
-    let (code, mut stream) = loop {
+    loop {
+        check_login_cancelled(cancel)?;
         if Instant::now() >= deadline {
             return Err(error("Browser sign-in timed out"));
         }
@@ -228,8 +331,8 @@ pub fn login(config: &Config) -> io::Result<Tokens> {
                     .lines()
                     .next()
                     .unwrap_or("");
-                if let Some(code) = callback::code(line, state.secret(), &config.issuer) {
-                    break (code, stream);
+                if let Some(code) = callback::code(line, state, issuer) {
+                    return Ok((code, stream));
                 }
                 let _ = callback::invalid(&mut stream);
             }
@@ -238,26 +341,7 @@ pub fn login(config: &Config) -> io::Result<Tokens> {
             }
             Err(e) => return Err(e),
         }
-    };
-    let response = callback::finish(
-        &mut stream,
-        http().and_then(|http| {
-            client
-                .exchange_code(AuthorizationCode::new(code))
-                .set_pkce_verifier(verifier)
-                .request(&http)
-                .map_err(|_| error("Authorization code exchange failed"))
-        }),
-    )?;
-    Ok(Tokens {
-        access: response.access_token().secret().clone(),
-        refresh: response.refresh_token().map(|r| r.secret().clone()),
-        expires: now()
-            + response
-                .expires_in()
-                .unwrap_or(Duration::from_secs(300))
-                .as_secs(),
-    })
+    }
 }
 pub fn refresh(config: &Config, tokens: &Tokens) -> io::Result<Tokens> {
     let d = discover(config)?;
@@ -316,9 +400,12 @@ pub fn save(config: &Config, tokens: &Tokens) -> io::Result<()> {
     let json = Zeroizing::new(serde_json::to_string(tokens).map_err(error)?);
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
-        entry(config)?.set_password(&json).map_err(|_| {
+        let entry = entry(config)?;
+        entry.set_password(&json).map_err(|_| {
             error("Secure credential storage unavailable; signed in for this session only")
-        })
+        })?;
+        crate::credentials::set_label(&entry, config, "Sync login");
+        Ok(())
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
@@ -329,12 +416,12 @@ pub fn save(config: &Config, tokens: &Tokens) -> io::Result<()> {
 pub fn load(config: &Config) -> io::Result<Tokens> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
-        let json = Zeroizing::new(
-            entry(config)?
-                .get_password()
-                .map_err(|_| error("Sign in to sync"))?,
-        );
-        serde_json::from_str(&json).map_err(|_| error("Invalid stored credentials; sign in again"))
+        let entry = entry(config)?;
+        let json = Zeroizing::new(entry.get_password().map_err(|_| error("Sign in to sync"))?);
+        let tokens = serde_json::from_str(&json)
+            .map_err(|_| error("Invalid stored credentials; sign in again"))?;
+        crate::credentials::set_label(&entry, config, "Sync login");
+        Ok(tokens)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
@@ -360,6 +447,70 @@ pub fn logout(config: &Config) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_callback_serves_branded_page_over_the_loopback_socket() {
+        use std::io::Write;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            let (code, mut stream) = browser_callback(
+                &listener,
+                "expected",
+                "https://issuer.example",
+                &device::Cancellation::default(),
+            )
+            .unwrap();
+            assert_eq!(code, "PRIVATE_CODE");
+            callback::finish(&mut stream, Ok(())).unwrap();
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        client.write_all(b"GET /callback?state=expected&code=PRIVATE_CODE HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        worker.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains("Paper Trail logo"));
+        assert!(!response.contains("<button"));
+        assert!(response.contains("window.setTimeout(closeTab, 5000)"));
+        assert!(!response.contains("PRIVATE_CODE"));
+    }
+
+    #[test]
+    fn cancelled_browser_login_does_not_start_discovery() {
+        let cancel = device::Cancellation::default();
+        cancel.cancel();
+        let error = login_cancellable(&Config::default(), &cancel)
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn cancelling_browser_wait_closes_listener_without_waiting_for_login_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let cancel = device::Cancellation::default();
+        let signal = cancel.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = browser_callback(&listener, "state", "https://issuer.example", &signal);
+            drop(listener);
+            tx.send(result.err().unwrap().kind()).unwrap();
+        });
+        assert!(cancel.cancel());
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            io::ErrorKind::Interrupted
+        );
+        worker.join().unwrap();
+        assert!(TcpStream::connect(address).is_err());
+    }
+
     #[test]
     fn oidc_metadata_requires_exact_advertised_issuer_and_secure_endpoints() {
         let valid = serde_json::json!({"issuer":"https://issuer.example/tenant", "authorization_endpoint":"https://issuer.example/authorize", "token_endpoint":"https://issuer.example/token", "device_authorization_endpoint":"https://issuer.example/device", "code_challenge_methods_supported":["S256"]});

@@ -9,7 +9,7 @@ use papertrail_storage::{
     startup::{check_notes_folder, prepare_startup_folder},
     Repository, SettingsFile,
 };
-use papertrail_sync::control::{Command as SyncCommand, Outcome, Service};
+use papertrail_sync::control::{Command as SyncCommand, Outcome, PassphraseAction, Service};
 use ratatui::{
     layout::{Position, Rect},
     widgets::ListState,
@@ -54,6 +54,7 @@ pub struct Prompt {
     pub kind: PromptKind,
     pub text: String,
     pub completion: crate::completion::Completion,
+    pub remember: Option<bool>,
 }
 
 struct DiscoveryJob {
@@ -66,6 +67,8 @@ pub struct App {
     pub(crate) pending_auth: Option<(papertrail_sync::Config, Option<papertrail_sync::Config>)>,
     pub sync: Service,
     pub sync_job: Option<std::sync::mpsc::Receiver<io::Result<Outcome>>>,
+    pub(crate) sync_restoring: bool,
+    pub(crate) sync_folder_deleting: bool,
     pub sync_unlocked: bool,
     pub sync_last: Instant,
     pub recovery_key: Option<Zeroizing<String>>,
@@ -110,6 +113,9 @@ pub struct App {
 
 impl App {
     pub fn new(paths: Paths) -> io::Result<Self> {
+        Self::with_startup_sync(paths, true)
+    }
+    pub(crate) fn with_startup_sync(paths: Paths, restore: bool) -> io::Result<Self> {
         let file = SettingsFile {
             path: paths.settings,
         };
@@ -131,6 +137,8 @@ impl App {
                 Service::new(&file.path)
             },
             sync_job: None,
+            sync_restoring: false,
+            sync_folder_deleting: false,
             sync_unlocked: false,
             sync_last: Instant::now(),
             recovery_key: None,
@@ -190,6 +198,9 @@ impl App {
             if let Err(error) = app.start_neovim(app.preferences.nvim_clean) {
                 app.status = format!("{error}. Built-in editor active for this session; F2 opens Paper Trail commands");
             }
+        }
+        if restore && app.sync.configured() && !session_only_login() {
+            app.sync_start(SyncCommand::Restore)?;
         }
         Ok(app)
     }
@@ -282,6 +293,7 @@ impl App {
         if self.sync_unlocked
             && self.sync_job.is_none()
             && self.sync_folders.is_none()
+            && self.prompt.is_none()
             && self.sync_last.elapsed() > std::time::Duration::from_secs(30)
         {
             self.sync_now()?;
@@ -736,6 +748,11 @@ impl App {
             kind,
             text: String::new(),
             completion: crate::completion::Completion::default(),
+            remember: (matches!(
+                kind,
+                PromptKind::Unlock | PromptKind::CreateVault | PromptKind::ChangePassphrase
+            ) && !session_only_login())
+            .then_some(false),
         });
     }
     fn finish(&mut self, force: bool) -> io::Result<()> {
@@ -760,12 +777,23 @@ impl App {
                 crate::sync_folders::Action::Save => {
                     self.sync_folders.as_ref().unwrap().save(&self.sync)?;
                     self.sync_folders = None;
-                    self.status =
-                        "Sync folder selection saved; local and remote notes were kept".into();
+                    self.status = "Sync folder selection saved".into();
                 }
                 crate::sync_folders::Action::Cancel => {
                     self.sync_folders = None;
-                    self.status = "Sync folder selection cancelled; configuration unchanged".into();
+                    self.status = "Draft folder selection cancelled; confirmed server operations are not undone".into();
+                }
+                crate::sync_folders::Action::Delete(id) => {
+                    if let Err(error) = self.sync_folder_operation(&id, false) {
+                        self.status = error.to_string();
+                        self.sync_folders.as_mut().unwrap().message = Some(self.status.clone());
+                    }
+                }
+                crate::sync_folders::Action::Resync(id) => {
+                    if let Err(error) = self.sync_folder_operation(&id, true) {
+                        self.status = error.to_string();
+                        self.sync_folders.as_mut().unwrap().message = Some(self.status.clone());
+                    }
                 }
                 crate::sync_folders::Action::None => (),
             }
@@ -993,6 +1021,8 @@ impl App {
                     &std::env::current_dir()?,
                     &self.home,
                 )?;
+            } else if let Some(remember) = &mut prompt.remember {
+                *remember = !*remember;
             }
             return Ok(());
         }
@@ -1032,11 +1062,18 @@ impl App {
                 | PromptKind::RecoverVault
                 | PromptKind::ChangePassphrase => {
                     let secret = Zeroizing::new(prompt.text);
-                    let command = match prompt.kind {
-                        PromptKind::Unlock => SyncCommand::Unlock(secret),
-                        PromptKind::CreateVault => SyncCommand::Create(secret),
-                        PromptKind::RecoverVault => SyncCommand::Recover(secret),
-                        _ => SyncCommand::ChangePassphrase(secret),
+                    let command = if prompt.kind == PromptKind::RecoverVault {
+                        SyncCommand::Recover(secret)
+                    } else {
+                        SyncCommand::Passphrase {
+                            action: match prompt.kind {
+                                PromptKind::Unlock => PassphraseAction::Unlock,
+                                PromptKind::CreateVault => PassphraseAction::Create,
+                                _ => PassphraseAction::Change,
+                            },
+                            passphrase: secret,
+                            remember: prompt.remember.unwrap_or(false),
+                        }
                     };
                     self.sync_start(command)?;
                 }
@@ -1156,7 +1193,7 @@ impl App {
                 )?);
                 self.help = false;
                 self.path_details = None;
-                self.status = "Choose sync folders: Space/click toggles, Enter saves, Esc cancels. No notes are deleted.".into();
+                self.status = "Space/click toggles · d deletes from server · s syncs local-only folders as new · Enter saves · Esc cancels draft".into();
             }
             "sync-auto-download" => {
                 let mut config = self
@@ -1314,9 +1351,12 @@ impl App {
             "logout" => {
                 self.sync_unlocked = false;
                 self.recovery_key = None;
-                if self.device_cancel.is_some() {
-                    self.cancel_device_login();
+                if self.sync_job.is_some() {
+                    if self.device_cancel.is_some() {
+                        self.cancel_device_login();
+                    }
                     self.after_login = Some(SyncCommand::Logout);
+                    self.status = "Finishing the current sync operation, then signing out…".into();
                 } else {
                     self.sync_start(SyncCommand::Logout)?;
                 }
@@ -1324,9 +1364,12 @@ impl App {
             "lock" => {
                 self.sync_unlocked = false;
                 self.recovery_key = None;
-                if self.device_cancel.is_some() {
-                    self.cancel_device_login();
+                if self.sync_job.is_some() {
+                    if self.device_cancel.is_some() {
+                        self.cancel_device_login();
+                    }
                     self.after_login = Some(SyncCommand::Lock);
+                    self.status = "Finishing the current sync operation, then locking…".into();
                 } else {
                     self.sync_start(SyncCommand::Lock)?;
                 }
@@ -1407,6 +1450,7 @@ impl App {
                     .cloned()
                     .ok_or_else(|| io::Error::other("Cannot close the last available folder"))?;
                 self.flush()?;
+                self.sync.pause_folder(&folder)?;
                 self.settings.remove_folder(&folder);
                 self.settings.notes_dir = next;
                 self.folder_index = 0;
@@ -1414,6 +1458,9 @@ impl App {
                 self.focus = Focus::Notes;
                 self.refresh()?;
                 self.persist()?;
+                self.status =
+                    "Folder closed; sync paused on this device. Re-enable it in :sync-folders."
+                        .into();
             }
             "folder-up" | "folder-down" => {
                 if self.folder_all_selected {
@@ -1513,14 +1560,26 @@ impl App {
                             .trim()
                             .parse::<u16>()
                             .ok()
-                            .filter(|n| (10..=30).contains(n))
+                            .filter(|n| (7..=30).contains(n))
                             .ok_or_else(|| {
-                                io::Error::other("Use :set folder-width 10 through 30")
+                                io::Error::other("Use :set folder-width 7 through 30")
                             })?;
+                    }
+                    _ if arg.starts_with("note-width ") => {
+                        let width = arg[11..].trim();
+                        self.preferences.note_width = if width == "auto" {
+                            None
+                        } else {
+                            Some(width.parse::<u16>().ok()
+                                .filter(|n| (10..=80).contains(n))
+                                .ok_or_else(|| io::Error::other(
+                                    "Use :set note-width 10 through 80, or auto",
+                                ))?)
+                        };
                     }
                     _ => {
                         return Err(io::Error::other(
-                            "Use :set editor builtin/neovim, nvim-config clean/user, number/nonumber, or folder-width N (10–30)",
+                            "Use :set editor builtin/neovim, nvim-config clean/user, number/nonumber, folder-width N (7–30), or note-width N (10–80)/auto",
                         ))
                     }
                 }
@@ -1565,10 +1624,44 @@ impl App {
         Ok(())
     }
 
+    fn sync_folder_operation(&mut self, id: &str, resync: bool) -> io::Result<()> {
+        self.sync_folders
+            .as_ref()
+            .unwrap()
+            .check_current(&self.sync)?;
+        if self.sync_job.is_some() {
+            return Err(io::Error::other("Wait for the current sync operation"));
+        }
+        if resync {
+            self.flush()?;
+            self.persist()?;
+            self.sync.sync_as_new_folder(id)?;
+            self.sync_folders
+                .as_mut()
+                .unwrap()
+                .refresh(&self.sync, &self.settings, true)?;
+            self.status = "Local files queued as a new folder; deleted history is not restored. Close the picker, then unlock/sync if needed.".into();
+        } else {
+            if !self.sync_unlocked || !self.sync.signed_in() {
+                return Err(io::Error::other(
+                    "Sign in and unlock the vault before deleting from the server",
+                ));
+            }
+            self.sync_start(SyncCommand::DeleteFolder {
+                id: id.into(),
+                settings: Box::new(self.settings.clone()),
+            })?;
+            self.sync_folders.as_mut().unwrap().busy = true;
+        }
+        self.sync_folders.as_mut().unwrap().message = Some(self.status.clone());
+        Ok(())
+    }
+
     fn sync_start(&mut self, command: SyncCommand) -> io::Result<()> {
         if (self.discovery_job.is_some()
             || self.pending_auth.is_some()
-            || self.sync_folders.is_some())
+            || (self.sync_folders.is_some()
+                && !matches!(&command, SyncCommand::DeleteFolder { .. })))
             && !matches!(&command, SyncCommand::Lock | SyncCommand::Logout)
         {
             return Err(io::Error::other(if self.sync_folders.is_some() {
@@ -1594,15 +1687,20 @@ impl App {
         let message = match &command {
             SyncCommand::DeviceLogin { .. } => "Requesting a device login code…",
             SyncCommand::Login => "Opening the system browser for sign-in…",
+            SyncCommand::DeleteFolder { .. } => {
+                "Deleting folder from server… Local files are kept."
+            }
             _ => "Sync operation running…",
         };
+        self.sync_restoring = matches!(&command, SyncCommand::Restore);
+        self.sync_folder_deleting = matches!(&command, SyncCommand::DeleteFolder { .. });
         self.sync_job = Some(self.sync.submit(command));
         self.sync_last = Instant::now();
         self.status = message.into();
         Ok(())
     }
     fn sync_blocks_input(&self) -> bool {
-        self.sync_job.is_some() && self.device_cancel.is_none()
+        self.sync_job.is_some() && self.device_cancel.is_none() && !self.sync_restoring
     }
     fn login_device(&mut self) -> io::Result<()> {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1688,6 +1786,8 @@ impl App {
             return Ok(());
         };
         self.sync_job = None;
+        let folder_operation = std::mem::take(&mut self.sync_folder_deleting);
+        self.sync_restoring = false;
         let device = self.device_cancel.take();
         self.device_notifications = None;
         self.device_prompt = None;
@@ -1699,6 +1799,9 @@ impl App {
                 let was_unlocked = self.sync_unlocked;
                 self.sync_unlocked = result.unlocked && after_login.is_none();
                 self.status = result.message;
+                if let Some(warning) = &result.warning {
+                    self.status.push_str(&format!(". {warning}"));
+                }
                 if result.synced {
                     self.settings = self
                         .file
@@ -1719,12 +1822,15 @@ impl App {
                     && !was_unlocked
                     && device.is_none()
                     && after_login.is_none()
+                    && result.warning.is_none()
+                    && self.prompt.is_none()
+                    && self.sync_folders.is_none()
                 {
                     self.sync_now()?;
                 }
             }
             Err(e) => {
-                if device.is_none() {
+                if device.is_none() && !folder_operation {
                     self.sync_unlocked = false;
                 }
                 self.status = if device.as_ref().is_some_and(|cancel| cancel.is_cancelled()) {
@@ -1732,6 +1838,16 @@ impl App {
                 } else {
                     e.to_string()
                 };
+            }
+        }
+        if folder_operation {
+            if let Some(picker) = &mut self.sync_folders {
+                picker.busy = false;
+                picker.message = Some(self.status.clone());
+                if let Err(error) = picker.refresh(&self.sync, &self.settings, false) {
+                    self.status = error.to_string();
+                    picker.message = Some(self.status.clone());
+                }
             }
         }
         if let Some(command) = after_login {

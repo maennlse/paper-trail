@@ -36,6 +36,10 @@ impl Rpc {
         isolated_home: Option<&Path>,
     ) -> io::Result<Self> {
         command.args(["--embed", "-i", "NONE"]);
+        command.args([
+            "--cmd",
+            "lua vim.g.papertrail_startup_buffer = vim.api.nvim_get_current_buf()",
+        ]);
         command.env_remove("NVIM").env_remove("NVIM_LISTEN_ADDRESS");
         if clean {
             command.arg("--clean");

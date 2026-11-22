@@ -28,6 +28,282 @@ fn account(sub: &str) -> Account {
         sub: sub.into(),
     }
 }
+
+#[test]
+fn erasure_schema_enables_secure_deletion() {
+    {
+        let server = Server::open(std::path::Path::new(":memory:"), None).unwrap();
+        let db = server.db.lock().unwrap();
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            db.query_row("PRAGMA secure_delete", [], |r| r.get::<_, u32>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM erased_notes", [], |r| r
+                .get::<_, u32>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+async fn erase_call(
+    s: Arc<Server>,
+    a: Account,
+    request: &papertrail_crypto::Erasure,
+    confirm: bool,
+) -> StatusCode {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/v1/erase-folder")
+        .header("content-type", "application/json");
+    if confirm {
+        builder = builder.header("x-papertrail-confirm", "erase-folder");
+    }
+    let mut request = builder
+        .body(Body::from(serde_json::to_vec(request).unwrap()))
+        .unwrap();
+    request.extensions_mut().insert(a);
+    routes(s).oneshot(request).await.unwrap().status()
+}
+
+#[tokio::test]
+async fn folder_erasure_is_atomic_account_scoped_and_blocks_stale_uploads() {
+    use papertrail_crypto::{
+        ErasedRevision, Erasure, FolderCatalog, FolderData, Record, FOLDER_FORMAT,
+    };
+    let server = Arc::new(Server::open(std::path::Path::new(":memory:"), None).unwrap());
+    let a = account("alice");
+    let (vault, key, _) = Vault::create(&a, "a long enough test passphrase").unwrap();
+    assert_eq!(
+        call(
+            server.clone(),
+            a.clone(),
+            "PUT",
+            "/v1/vault",
+            serde_json::to_value(&vault).unwrap(),
+            Some(0)
+        )
+        .await
+        .0,
+        204
+    );
+    let folder = opaque_id();
+    let mut catalog = FolderCatalog {
+        version: FOLDER_FORMAT,
+        folders: std::collections::BTreeMap::from([(
+            folder.clone(),
+            FolderData {
+                name: "Secret".into(),
+                color: "preset-0".into(),
+            },
+        )]),
+        ..Default::default()
+    };
+    let initial = Revision::seal_record(
+        &key,
+        &a,
+        &vault.id,
+        &vault.id,
+        None,
+        &Record::FolderCatalog(catalog.clone()),
+    )
+    .unwrap();
+    let data = NoteData {
+        version: FOLDER_FORMAT,
+        filename: "secret".into(),
+        folder: "Secret".into(),
+        folder_id: Some(folder.clone()),
+        body: "private body".into(),
+        modified_ms: 1,
+        pinned: false,
+        language: None,
+    };
+    let id = opaque_id();
+    let first = Revision::seal(&key, &a, &vault.id, &id, None, Some(&data)).unwrap();
+    let second = Revision::seal(
+        &key,
+        &a,
+        &vault.id,
+        &id,
+        Some(first.id.clone()),
+        Some(&data),
+    )
+    .unwrap();
+    for r in [&initial, &first, &second] {
+        assert_eq!(
+            call(
+                server.clone(),
+                a.clone(),
+                "POST",
+                &format!("/v1/notes/{}/revisions", r.note_id),
+                serde_json::to_value(r).unwrap(),
+                None
+            )
+            .await
+            .0,
+            201
+        );
+    }
+    catalog.deleted_folders.insert(folder.clone());
+    let marker = Revision::seal_record(
+        &key,
+        &a,
+        &vault.id,
+        &vault.id,
+        Some(initial.id.clone()),
+        &Record::FolderCatalog(catalog),
+    )
+    .unwrap();
+    let mut request = Erasure {
+        through: 3,
+        catalog: marker.clone(),
+        replacements: [&first, &second]
+            .into_iter()
+            .map(|r| ErasedRevision {
+                original_digest: digest(&serde_json::to_vec(r).unwrap()),
+                revision: r.erase(&key, &a, &folder).unwrap(),
+            })
+            .collect(),
+    };
+    assert_eq!(
+        erase_call(server.clone(), a.clone(), &request, false).await,
+        428
+    );
+    let mut other_issuer = a.clone();
+    other_issuer.iss = "https://other-issuer.example".into();
+    assert_eq!(
+        erase_call(server.clone(), other_issuer, &request, true).await,
+        404
+    );
+    request.through = 2;
+    assert_eq!(
+        erase_call(server.clone(), a.clone(), &request, true).await,
+        409
+    );
+    request.through = 3;
+    let last = request.replacements.pop().unwrap();
+    assert_eq!(
+        erase_call(server.clone(), a.clone(), &request, true).await,
+        400
+    );
+    request.replacements.push(last);
+    request.replacements[0].original_digest = "altered".into();
+    assert_eq!(
+        erase_call(server.clone(), a.clone(), &request, true).await,
+        409
+    );
+    request.replacements[0].original_digest = digest(&serde_json::to_vec(&first).unwrap());
+    // Failed requests did not replace any ciphertext.
+    {
+        let db = server.db.lock().unwrap();
+        let stored: String = db
+            .query_row(
+                "SELECT data FROM revisions WHERE revision=?",
+                [&first.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, serde_json::to_string(&first).unwrap());
+    }
+    assert_eq!(
+        erase_call(server.clone(), a.clone(), &request, true).await,
+        204
+    );
+    assert_eq!(
+        erase_call(server.clone(), a.clone(), &request, true).await,
+        409
+    );
+    let (status, bytes) = call(
+        server.clone(),
+        a.clone(),
+        "GET",
+        "/v1/changes",
+        serde_json::Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, 200);
+    let changes: Changes = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(changes.through, 4);
+    assert_eq!(
+        changes
+            .changes
+            .iter()
+            .map(|c| c.sequence)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+    for change in &changes.changes[1..3] {
+        assert!(matches!(
+            change.revision.open_record(&key, &a).unwrap(),
+            Record::Erased { .. }
+        ));
+    }
+    let (_, export) = call(
+        server.clone(),
+        a.clone(),
+        "GET",
+        "/v1/export",
+        serde_json::Value::Null,
+        None,
+    )
+    .await;
+    let export = String::from_utf8(export).unwrap();
+    assert!(!export.contains(&first.blob.ciphertext));
+    assert!(!export.contains(&second.blob.ciphertext));
+    assert_eq!(
+        call(
+            server.clone(),
+            a.clone(),
+            "POST",
+            &format!("/v1/notes/{id}/revisions"),
+            serde_json::to_value(&second).unwrap(),
+            None
+        )
+        .await
+        .0,
+        410
+    );
+    let new = Revision::seal(&key, &a, &vault.id, &opaque_id(), None, Some(&data)).unwrap();
+    assert_eq!(
+        call(
+            server.clone(),
+            a.clone(),
+            "POST",
+            &format!("/v1/notes/{}/revisions", new.note_id),
+            serde_json::to_value(&new).unwrap(),
+            None
+        )
+        .await
+        .0,
+        412
+    );
+    for (head, status) in [(&initial.id, 412), (&marker.id, 201)] {
+        let mut upload = Request::builder()
+            .method("POST")
+            .uri(format!("/v1/notes/{}/revisions", new.note_id))
+            .header("content-type", "application/json")
+            .header("x-papertrail-catalog-head", head)
+            .body(Body::from(serde_json::to_vec(&new).unwrap()))
+            .unwrap();
+        upload.extensions_mut().insert(a.clone());
+        assert_eq!(
+            routes(server.clone())
+                .oneshot(upload)
+                .await
+                .unwrap()
+                .status(),
+            status
+        );
+    }
+}
 #[tokio::test]
 async fn same_subject_from_a_different_issuer_cannot_access_or_delete_a_vault() {
     let server = Arc::new(Server::open(std::path::Path::new(":memory:"), None).unwrap());
@@ -429,6 +705,7 @@ async fn encrypted_folder_catalogs_use_the_same_account_scoped_immutable_api() {
             },
         )]),
         legacy_notes: Default::default(),
+        deleted_folders: Default::default(),
     };
     let r = Revision::seal_record(
         &key,

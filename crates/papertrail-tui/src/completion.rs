@@ -142,16 +142,24 @@ pub fn candidates(
                 }
             }
             if let Some(prefix) = arg.strip_prefix("folder-width ") {
-                return Ok((10..=30)
+                return Ok((7..=30)
                     .map(|n| n.to_string())
                     .filter(|n| n.starts_with(prefix))
                     .map(|n| format!("set folder-width {n}"))
+                    .collect());
+            }
+            if let Some(prefix) = arg.strip_prefix("note-width ") {
+                return Ok(std::iter::once("auto".to_owned())
+                    .chain((10..=80).map(|n| n.to_string()))
+                    .filter(|value| value.starts_with(prefix))
+                    .map(|value| format!("set note-width {value}"))
                     .collect());
             }
             [
                 "number",
                 "nonumber",
                 "folder-width ",
+                "note-width ",
                 "editor ",
                 "nvim-config ",
             ]
