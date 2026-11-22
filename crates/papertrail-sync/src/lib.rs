@@ -2,8 +2,11 @@
 //! Opt-in encrypted synchronization; local note files intentionally remain plaintext.
 pub mod auth;
 pub mod control;
+mod credentials;
 pub mod engine;
+mod erasure;
 pub mod folders;
+mod http_error;
 pub mod local;
 use papertrail_crypto::{Account, Changes, Revision, Vault};
 use reqwest::blocking::{Client, Response};
@@ -239,13 +242,23 @@ impl Api {
         json(r)
     }
     pub fn upload(&self, r: &Revision) -> io::Result<Option<u64>> {
-        let response = Self::send(
-            self.request(
+        self.upload_checked(r, None)
+    }
+    pub fn upload_checked(
+        &self,
+        r: &Revision,
+        catalog_head: Option<&str>,
+    ) -> io::Result<Option<u64>> {
+        let mut request = self
+            .request(
                 reqwest::Method::POST,
                 &format!("/v1/notes/{}/revisions", r.note_id),
             )
-            .json(r),
-        )?;
+            .json(r);
+        if let Some(head) = catalog_head {
+            request = request.header("x-papertrail-catalog-head", head);
+        }
+        let response = Self::send(request)?;
         if response.status() == 409 {
             return Ok(None);
         }
@@ -260,5 +273,18 @@ impl Api {
             .filter(|n| *n > 0)
             .ok_or_else(|| error("Missing upload checkpoint"))?;
         Ok(Some(sequence))
+    }
+    pub fn erase_folder(&self, request: &papertrail_crypto::Erasure) -> io::Result<()> {
+        let response = Self::send(
+            self.request(reqwest::Method::POST, "/v1/erase-folder")
+                .header("x-papertrail-confirm", "erase-folder")
+                .json(request),
+        )?;
+        if !response.status().is_success() {
+            return Err(error(
+                "Server changed or does not support permanent deletion; sync and retry",
+            ));
+        }
+        Ok(())
     }
 }

@@ -34,24 +34,35 @@ pub(super) fn code(line: &str, state: &str, issuer: &str) -> Option<String> {
     fields.remove("code").filter(|code| !code.is_empty())
 }
 
-const CLOSE_SCRIPT: &str = "try { window.history.replaceState(null, '', '/callback'); } catch (_) {}\nwindow.setTimeout(() => window.close(), 3000);";
+const HISTORY_SCRIPT: &str =
+    "try { window.history.replaceState(null, '', '/callback'); } catch (_) {}";
+const CLOSE_FUNCTION: &str = "function closeTab() { try { window.close(); } catch (_) {} }";
+const CLOSE_SCRIPT: &str = "window.setTimeout(closeTab, 5000);";
+const LOGO: &str = include_str!("../../../../data/icons/io.github.maennlse.paper-trail.svg");
 
 fn respond(stream: &mut impl Write, status: &str, message: &str, close: bool) -> io::Result<()> {
-    // Only this freshly generated nonce is interpolated, never request parameters.
+    // Only static application content and a fresh nonce, never request parameters.
     let nonce = oauth2::CsrfToken::new_random();
     let nonce = nonce.secret();
     let script = if close {
-        format!("<script nonce=\"{nonce}\">{CLOSE_SCRIPT}</script>")
+        format!("{HISTORY_SCRIPT}\n{CLOSE_FUNCTION}\n{CLOSE_SCRIPT}")
     } else {
-        String::new()
+        HISTORY_SCRIPT.to_owned()
     };
-    let script_policy = if close {
-        format!("; script-src 'nonce-{nonce}'")
-    } else {
-        String::new()
-    };
-    let body = format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Paper Trail Sign-In</title></head><body><h1>Paper Trail</h1><p>{message}</p>{script}</body></html>");
-    write!(stream, "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'{script_policy}\r\nConnection: close\r\n\r\n{body}", body.len())
+    let body = include_str!("callback.html")
+        .replace("{{nonce}}", nonce)
+        .replace("{{logo}}", LOGO)
+        .replace(
+            "{{heading}}",
+            if close {
+                "You're all set"
+            } else {
+                "Sign-in needs attention"
+            },
+        )
+        .replace("{{message}}", message)
+        .replace("{{script}}", &script);
+    write!(stream, "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'\r\nConnection: close\r\n\r\n{body}", body.len())
 }
 
 pub(super) fn invalid(stream: &mut impl Write) -> io::Result<()> {
@@ -67,7 +78,7 @@ pub(super) fn invalid(stream: &mut impl Write) -> io::Result<()> {
 /// must not discard successfully received credentials (e.g. the tab already closed).
 pub(super) fn finish<T>(stream: &mut impl Write, result: io::Result<T>) -> io::Result<T> {
     let _ = if result.is_ok() {
-        respond(stream, "200 OK", "Browser authorization complete. Return to Paper Trail to finish signing in. This tab will try to close in 3 seconds. If it stays open, you can safely close it manually.", true)
+        respond(stream, "200 OK", "Browser authorization complete. Return to Paper Trail to finish signing in. This tab will try to close in 5 seconds.", true)
     } else {
         respond(stream, "500 Internal Server Error", "Sign-in could not be completed. Return to Paper Trail for details. You can close this tab.", false)
     };
@@ -126,13 +137,18 @@ mod tests {
             "X-Content-Type-Options: nosniff",
             "default-src 'none'",
             "frame-ancestors 'none'",
-            "window.setTimeout(() => window.close(), 3000)",
+            "window.setTimeout(closeTab, 5000)",
             "window.history.replaceState(null, '', '/callback')",
-            "close it manually",
+            "close this tab manually",
+            "Paper Trail logo",
+            "prefers-color-scheme: dark",
         ] {
             assert!(response.contains(expected), "missing {expected}");
         }
         assert!(!response.contains("ACCESS_TOKEN_PRIVATE"));
+        assert!(!response.contains("<button"));
+        assert!(!response.contains("close-tab"));
+        assert!(!response.contains("addEventListener"));
         let nonce = response
             .split("script-src 'nonce-")
             .nth(1)
@@ -141,6 +157,10 @@ mod tests {
             .next()
             .unwrap();
         assert!(response.contains(&format!("<script nonce=\"{nonce}\">")));
+        assert!(response.contains(&format!("style-src 'nonce-{nonce}'")));
+        assert!(response.contains(&format!("<style nonce=\"{nonce}\">")));
+        assert!(!response.contains("{{"));
+        assert!(!response.contains("https://"));
         let (headers, body) = response.split_once("\r\n\r\n").unwrap();
         assert!(headers.contains(&format!("Content-Length: {}\r\n", body.len())));
         let mut other = Vec::new();
@@ -157,8 +177,10 @@ mod tests {
         assert!(result.is_err());
         for bytes in [invalid_bytes, failed] {
             let response = String::from_utf8(bytes).unwrap();
-            assert!(!response.contains("<script"));
+            assert!(!response.contains("window.setTimeout"));
             assert!(!response.contains("window.close"));
+            assert!(!response.contains("<button"));
+            assert!(!response.contains("close-tab"));
             assert!(!response.contains("PROVIDER_ERROR_PRIVATE"));
             assert!(response.contains("You can close this tab"));
             assert!(response.contains("Cache-Control: no-store"));

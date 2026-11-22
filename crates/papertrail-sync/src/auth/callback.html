@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Paper Trail · Sign-In</title>
+  <style nonce="{{nonce}}">
+    :root {
+      font-family: system-ui, sans-serif;
+      color: #21304b;
+      background: #eef2f9;
+      color-scheme: light dark;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: radial-gradient(ellipse at top, #dae6fc, transparent 65%);
+    }
+    main {
+      width: min(100%, 460px);
+      padding: 40px 32px;
+      text-align: center;
+      border: 1px solid #ffffff;
+      border-radius: 24px;
+      background: #ffffff;
+      box-shadow: 0 16px 64px #193a6c14;
+    }
+    .logo svg { width: 96px; height: 96px; }
+    .brand { font-size: .85rem; font-weight: 650; letter-spacing: .08em; }
+    h1 { font-size: 1.8rem; line-height: 1.2; margin: 20px 0 12px; }
+    p { line-height: 1.65; }
+    .hint { font-size: .875rem; color: #5d6980; margin: 24px 0 0; }
+    @media (prefers-color-scheme: dark) {
+      :root { color: #edf2fc; background: #101827; }
+      body { background: radial-gradient(ellipse at top, #213958, transparent 65%); }
+      main { background: #1a2537; border-color: #314059; }
+      .hint { color: #b8c6dd; }
+    }
+    @media (max-width: 380px) { main { padding: 28px 20px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="logo" role="img" aria-label="Paper Trail logo">{{logo}}</div>
+    <p class="brand">PAPER TRAIL</p>
+    <h1>{{heading}}</h1>
+    <p>{{message}}</p>
+    <p class="hint">If your browser keeps this page open, you can safely close this tab manually.</p>
+  </main>
+  <script nonce="{{nonce}}">{{script}}</script>
+</body>
+</html>

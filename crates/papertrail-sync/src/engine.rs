@@ -84,8 +84,23 @@ pub struct Engine {
     pub local_changed: bool,
 }
 pub trait Remote {
+    fn check_cancelled(&self) -> io::Result<()> {
+        Ok(())
+    }
     fn changes(&self, cursor: u64, through: Option<u64>) -> io::Result<Changes>;
     fn upload(&self, revision: &Revision) -> io::Result<Option<u64>>;
+    fn upload_checked(
+        &self,
+        revision: &Revision,
+        _catalog_head: Option<&str>,
+    ) -> io::Result<Option<u64>> {
+        self.upload(revision)
+    }
+    fn erase_folder(&self, _request: &papertrail_crypto::Erasure) -> io::Result<()> {
+        Err(error(
+            "This server does not support permanent folder deletion",
+        ))
+    }
 }
 impl Remote for Api {
     fn changes(&self, c: u64, t: Option<u64>) -> io::Result<Changes> {
@@ -93,6 +108,12 @@ impl Remote for Api {
     }
     fn upload(&self, r: &Revision) -> io::Result<Option<u64>> {
         self.upload(r)
+    }
+    fn upload_checked(&self, r: &Revision, head: Option<&str>) -> io::Result<Option<u64>> {
+        self.upload_checked(r, head)
+    }
+    fn erase_folder(&self, request: &papertrail_crypto::Erasure) -> io::Result<()> {
+        self.erase_folder(request)
     }
 }
 impl Engine {
@@ -197,12 +218,8 @@ impl Engine {
         settings: &Settings,
         protected: &[PathBuf],
     ) -> io::Result<String> {
+        remote.check_cancelled()?;
         // Engine owns the cross-process journal lock throughout this operation.
-        for folder in &config.folders {
-            fs::read_dir(folder).map_err(|_| {
-                error("Selected sync folder unavailable; no changes or deletions uploaded")
-            })?;
-        }
         // Check the remembered high-water mark before making any remote writes.
         let live = remote.changes(self.state.cursor, None)?;
         self.validate_page(&live, None)?;
@@ -215,11 +232,33 @@ impl Engine {
         self.save()?;
         let mut initial = self.state.incoming.clone().unwrap_or_else(|| live.clone());
         self.validate_page(&initial, None)?;
+        let deleted_before = self
+            .state
+            .catalog
+            .as_ref()
+            .map(|c| c.deleted_folders.clone())
+            .unwrap_or_default();
         self.prepare_folders(remote, config, key, settings, &live)?;
-        if initial.through < self.state.through && self.state.incoming.is_some() {
+        if self
+            .state
+            .catalog
+            .as_ref()
+            .is_some_and(|c| c.deleted_folders != deleted_before)
+        {
+            // A cached page may still contain the payloads that were erased.
+            self.state.incoming = None;
+            initial = remote.changes(self.state.cursor, None)?;
+            self.save()?;
+        }
+        if self.state.incoming.is_some()
+            && (initial.through < self.state.through || !deleted_before.is_empty())
+        {
             let latest = remote.changes(self.state.cursor, None)?;
             for (old, new) in initial.changes.iter().zip(&latest.changes) {
-                if old.sequence != new.sequence || old.revision != new.revision {
+                if old.sequence != new.sequence
+                    || (old.revision != new.revision
+                        && !self.confirms_erasure(&old.revision, &new.revision, key))
+                {
                     return Err(error(
                         "Server altered journaled history during folder migration",
                     ));
@@ -230,6 +269,7 @@ impl Engine {
             self.save()?;
         }
         let access = self.local.clone();
+        remote.check_cancelled()?;
         {
             let activity = access
                 .lock()
@@ -253,12 +293,14 @@ impl Engine {
             .position(|r| self.note_enabled(&r.note_id, config))
         {
             let r = self.state.outgoing[index].clone();
+            remote.check_cancelled()?;
+            self.check_config(config)?;
             // Finish a previously journaled page before acknowledging newer writes,
             // otherwise its stable boundary could fall below our upload checkpoint.
             if self.state.incoming.is_some() {
                 break;
             }
-            if let Some(sequence) = remote.upload(&r)? {
+            if let Some(sequence) = remote.upload_checked(&r, self.state.catalog_head.as_deref())? {
                 self.state.through = self.state.through.max(sequence);
                 self.remember(&r, sequence)?;
                 let newer_remote = self
@@ -330,8 +372,10 @@ impl Engine {
             remote.changes(self.state.cursor, None)?
         });
         let mut boundary = None;
+        remote.check_cancelled()?;
         self.apply_deferred(config, key, protected)?;
         loop {
+            remote.check_cancelled()?;
             let page = match first.take() {
                 Some(p) => p,
                 None => remote.changes(self.state.cursor, boundary)?,
@@ -374,6 +418,22 @@ impl Engine {
             self.state.cursor,
             self.state.deferred.len()
         ))
+    }
+    fn confirms_erasure(&self, original: &Revision, replacement: &Revision, key: &Secret) -> bool {
+        if original.id != replacement.id
+            || original.note_id != replacement.note_id
+            || original.vault_id != replacement.vault_id
+            || original.parent != replacement.parent
+        {
+            return false;
+        }
+        let Some(account) = &self.state.account else {
+            return false;
+        };
+        matches!(replacement.open_record(key, account),
+            Ok(Record::Erased { original_digest, folder_id })
+                if serde_json::to_vec(original).is_ok_and(|bytes| digest(&bytes) == original_digest)
+                    && self.state.catalog.as_ref().is_some_and(|c| c.deleted_folders.contains(&folder_id)))
     }
     pub(crate) fn relocate_pending(&mut self) -> io::Result<()> {
         let root = self.state_path.parent().unwrap().to_owned();
@@ -702,6 +762,49 @@ impl Engine {
             return Err(error("Revision belongs to another vault"));
         }
         let record = r.open_record(key, self.account()?).map_err(error)?;
+        if let Record::Erased {
+            original_digest,
+            folder_id,
+        } = &record
+        {
+            if !self
+                .state
+                .catalog
+                .as_ref()
+                .is_some_and(|c| c.deleted_folders.contains(folder_id))
+            {
+                return Err(error(
+                    "Erased payload has no authenticated deleted-folder marker",
+                ));
+            }
+            if self
+                .state
+                .known
+                .get(&r.id)
+                .is_some_and(|hash| hash != original_digest)
+                || self
+                    .state
+                    .sequences
+                    .get(&r.id)
+                    .is_some_and(|old| *old != sequence)
+                || self
+                    .state
+                    .sequences
+                    .iter()
+                    .any(|(id, old)| *old == sequence && id != &r.id)
+            {
+                return Err(error("Erasure does not match previously observed history"));
+            }
+            self.state
+                .known
+                .insert(r.id.clone(), original_digest.clone());
+            self.state.sequences.insert(r.id.clone(), sequence);
+            self.state
+                .remote_heads
+                .insert(r.note_id.clone(), r.id.clone());
+            self.save()?;
+            return Ok(true);
+        }
         let hash = digest(&serde_json::to_vec(r).map_err(error)?);
         let replay_pending = self.state.remote_heads.get(&r.note_id) == Some(&r.id)
             && self
@@ -726,9 +829,11 @@ impl Engine {
                     return Err(error("Unexpected folder catalog parent"));
                 }
                 if self.state.catalog.as_ref().is_some_and(|old| {
-                    old.folders
-                        .keys()
-                        .any(|id| !catalog.folders.contains_key(id))
+                    !old.deleted_folders.is_subset(&catalog.deleted_folders)
+                        || old
+                            .folders
+                            .keys()
+                            .any(|id| !catalog.folders.contains_key(id))
                         || old
                             .legacy_notes
                             .iter()
@@ -749,6 +854,7 @@ impl Engine {
                 Some(data)
             }
             Record::DeletedNote => None,
+            Record::Erased { .. } => unreachable!(),
         };
         let tracked = self.state.notes.get(&r.note_id).cloned();
         let folder_id = data
@@ -771,6 +877,22 @@ impl Engine {
             if r.parent != expected {
                 return Err(error("Server supplied a non-descendant note revision"));
             }
+        }
+        if folder_id.as_ref().is_some_and(|id| {
+            self.state
+                .catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog.deleted_folders.contains(id))
+        }) {
+            self.remember(r, sequence)?;
+            self.state
+                .remote_heads
+                .insert(r.note_id.clone(), r.id.clone());
+            self.state
+                .remote_folders
+                .insert(r.note_id.clone(), folder_id.unwrap());
+            self.save()?;
+            return Ok(true);
         }
         if self.state.bootstrap_pending
             || folder_id

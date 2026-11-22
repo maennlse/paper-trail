@@ -3,16 +3,11 @@
 -- host's conditional filesystem adapter, never Neovim's direct file writer.
 local channel, path, lines = ...
 local previous = vim.g.papertrail_buffer
-if previous and vim.api.nvim_buf_is_valid(previous) then
-  -- The host saved the old note before requesting this transition.
-  vim.api.nvim_buf_delete(previous, { force = true })
-end
 local buffer = vim.api.nvim_create_buf(true, false)
 vim.g.papertrail_buffer = buffer
 vim.bo[buffer].buftype = 'acwrite'
 vim.bo[buffer].swapfile = false
-if path ~= '' then vim.api.nvim_buf_set_name(buffer, path) end
-local managed_name = vim.api.nvim_buf_get_name(buffer)
+local managed_name
 vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
 vim.bo[buffer].modified = false
 vim.api.nvim_create_autocmd('BufWriteCmd', {
@@ -36,6 +31,35 @@ vim.api.nvim_create_autocmd('BufWriteCmd', {
   end,
 })
 vim.api.nvim_set_current_buf(buffer)
+-- Install the replacement in every managed window before deleting the old
+-- buffer. Deleting the last displayed buffer first creates a listed [No Name].
+if previous and vim.api.nvim_buf_is_valid(previous) then
+  for _, window in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(window) == previous then
+      vim.api.nvim_win_set_buf(window, buffer)
+    end
+  end
+  -- The host saved the old note before requesting this transition.
+  vim.api.nvim_buf_delete(previous, { force = true })
+end
+-- Only remove the known startup placeholder, never arbitrary unnamed buffers
+-- belonging to the user's configuration/plugins.
+local startup = vim.g.papertrail_startup_buffer
+vim.g.papertrail_startup_buffer = nil
+if startup and startup ~= buffer and vim.api.nvim_buf_is_valid(startup)
+    and vim.api.nvim_buf_get_name(startup) == ''
+    and vim.bo[startup].buftype == '' and not vim.bo[startup].modified
+    and vim.deep_equal(vim.api.nvim_buf_get_lines(startup, 0, -1, false), { '' }) then
+  for _, window in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(window) == startup then
+      vim.api.nvim_win_set_buf(window, buffer)
+    end
+  end
+  vim.api.nvim_buf_delete(startup, { force = false })
+end
+-- Release the previous name before assigning it again on reload.
+if path ~= '' then vim.api.nvim_buf_set_name(buffer, path) end
+managed_name = vim.api.nvim_buf_get_name(buffer)
 if path ~= '' and vim.filetype and vim.filetype.match then
   local filetype = vim.filetype.match({ filename = path, buf = buffer })
   if filetype then vim.bo[buffer].filetype = filetype end

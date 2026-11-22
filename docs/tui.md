@@ -100,23 +100,30 @@ without moving keyboard focus. **Enter** focuses the editor; the note is already
 loaded. Pending edits are saved before a different note is shown, and a failed
 save leaves the original note, selection, and edits intact.
 
-The folder column defaults to **16 terminal cells**, configurable with
-`:set folder-width 10` through `:set folder-width 30`. Long names use an ellipsis;
+The folder column defaults to **7 terminal cells**, configurable with
+`:set folder-width 7` through `:set folder-width 30`. Existing custom widths are preserved;
 `:path` opens a wrapping, scrollable full-path dialog. Below 80 columns the folder
 pane hides automatically; pane navigation skips it. Folders remain accessible
 through `:folder PATH` or `:folder NUMBER`.
 
-The folder column has an **All** entry, GTK-style two-letter badges, and a colored
-active-folder bar. All stays first and does not change folder numbers used by
-`:folder NUMBER` or `:move NUMBER`. At narrow widths badges remain visible while
-labels shorten; `:path` shows full folder information. No special icon font is needed.
-Folder badges and note-row accents use GTK's exact shared RGB presets and custom
+The note column uses automatic sizing by default. Set a fixed width with
+`:set note-width N` (10–80 terminal cells), or restore automatic sizing with
+`:set note-width auto`. The preference is saved in `tui.json`; on narrow terminals
+the rendered width shrinks as needed to leave at least 20 cells for the editor.
+
+The folder column shows only **[All]** and GTK-style two-letter badges, without
+numbers, leading markers, or full names. The active folder badge is underlined.
+All stays first and does not change folder numbers used by
+`:folder NUMBER` or `:move NUMBER`; `:path` shows full folder information.
+No special icon font is needed.
+Folder badges and note titles use GTK's exact shared RGB presets and custom
 colors, including in All/search views. Focused rows use the folder color with
 contrasting text. Exact color matching needs a true-color terminal; the overall
 terminal background/theme is unchanged.
 
-A **›** marks the highlighted list item, **●** marks the displayed note, **▎** marks
-the active folder, and a cyan border identifies keyboard focus. A contextual footer shows
+Note rows show the title, then the filename only on an aligned second line.
+After the title, **●** marks the displayed note and **\*** marks a pinned note.
+Colored highlighting marks the focused list selection, and a cyan border identifies keyboard focus. A contextual footer shows
 navigation/editing shortcuts and editor mode.
 
 **Mouse support** is enabled by default: single-click notes to preview, click a
@@ -172,7 +179,7 @@ starts a new completion cycle. Tab switches panes only when no prompt is open.
 | `:move PATH` or `:move NUMBER`        | Move into an existing folder                        |
 | `:folder PATH` or `:folder NUMBER`    | Add / select an existing folder                     |
 | `:all`, `:search TEXT`                | Show all notes / search across folders              |
-| `:close-folder`                       | Remove active bookmark, never its files             |
+| `:close-folder`                       | Close active folder and pause its sync on this device; keep files |
 | `:folder-up`, `:folder-down`          | Reorder the highlighted folder                      |
 | `:pin`, `:color #rrggbb`              | Toggle current note pin / set active folder color   |
 | `:color preset-0` through `preset-11` | Use a built-in folder color                         |
@@ -183,7 +190,8 @@ starts a new completion cycle. Tab switches panes only when no prompt is open.
 | `:saveas PATH`                        | Save pending text into a new file, never overwrite  |
 | `:reload!`                            | Explicitly discard edits and load the disk version  |
 | `:set number`, `:set nonumber`        | TUI-only line-number preference                     |
-| `:set folder-width N`                 | TUI-only folder width, 10–30 terminal cells         |
+| `:set folder-width N`                 | TUI-only folder width, 7–30 terminal cells          |
+| `:set note-width N` or `auto`          | TUI-only note width, 10–80 cells, or automatic sizing |
 | `:set editor builtin/neovim`          | Choose the built-in or embedded Neovim editor       |
 | `:set nvim-config clean/user`         | Choose Neovim defaults or personal config/plugins   |
 | `:path`                               | Show the full highlighted folder/current note path  |
@@ -248,6 +256,13 @@ SSH sessions (detected by `SSH_CONNECTION`/`SSH_TTY`) and Linux terminals withou
 delete desktop-keyring credentials, including on refresh/sign-out, so no hidden
 keyring-unlock prompt is required. Other graphical sessions still use platform
 secure storage when available, with memory-only fallback and no plaintext token file.
+In a graphical session, Tab in the masked create/unlock/change-passphrase prompt
+toggles **Remember password in keyring** (off by default). Remembered passwords
+use Secret Service on Linux, visible in Seahorse. Anyone with access to your
+unlocked keyring can unlock sync. Subsequent launches restore login, unlock the
+vault, and sync automatically. `:lock` pauses auto-unlock until the next launch;
+`:logout` removes both the saved login and password. SSH/headless sessions do not
+offer this option. See [remembered credentials](encrypted-sync.md#user-flow).
 
 Device login authenticates the account only. Unlock separately with `:unlock` and
 the masked vault passphrase; **never enter that passphrase on the provider's
@@ -265,7 +280,7 @@ See [encrypted sync](encrypted-sync.md) for setup, threat boundaries, and limita
 
 Use **`:sync-folders`** to select collections interactively: arrows/`j`/`k` move,
 Space or a mouse click toggles a checkbox, Enter saves all selections, and Esc
-(or Ctrl-C) cancels without writing configuration. PageUp/PageDown scroll the
+(or Ctrl-C) cancels the selection draft. PageUp/PageDown scroll the
 list; `i` opens full, scrollable name/path/ID details and Esc returns to the list.
 Both bookmarked local folders and known remote folders appear. Unselecting keeps
 local and remote notes; selecting a remote-only folder uses its existing mapping
@@ -273,6 +288,30 @@ or the configured download root. Unchecking every folder is supported without
 resetting the vault, journal, or mappings. Automatic sync pauses while this dialog
 is open; saving a stale configuration is rejected instead of overwriting changes
 from another frontend. Editor contents are never replaced by selection changes.
+Closing a folder with `:close-folder` also pauses its sync on this device, so
+automatic sync will not reopen it. Reopening with `:folder PATH` does not resume
+sync: explicitly check it again in `:sync-folders`. Server copies, other devices
+and pending edits are unaffected.
+
+For a published folder, **`d` or Delete** opens **Delete from Server** confirmation
+(sign in and unlock first). **Cancel is selected by default**: use Tab/Left/Right
+to choose the destructive action, then Enter. Up/Down, PageUp/PageDown and the mouse
+wheel scroll the warning on small terminals. This permanently erases server note
+content/history while keeping local files and offline edits on every device.
+The retained deleted-folder marker prevents automatic re-upload. Server backups
+are managed separately; upgrade the server and clients before using deletion.
+
+Retained local folders whose previous sync identity was deleted stay in the normal
+list marked **local**, without a checkbox. Select one and press **`s`** to confirm
+**Sync as New Folder**; this assigns fresh folder/note identities and does not
+restore erased history. Server-only deletion markers and unavailable local
+directories are hidden. There is no separate tombstone list or tab.
+
+Both operations keep the picker open and preserve other unsaved selections.
+While deletion runs, toggling and Save are paused; errors appear inside the picker.
+Esc may close the picker, but **does not cancel a confirmed deletion or undo a
+confirmed resync**. Those operations take effect independently of saving/cancelling
+the selection draft. Automatic sync resumes after the picker closes.
 
 `:sync-add-folder PATH`, `:sync-remove-folder PATH`, `:sync-select-folder ID`, and
 `:sync-unselect-folder ID` remain compatibility shortcuts, not required for normal

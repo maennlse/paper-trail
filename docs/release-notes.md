@@ -1,24 +1,34 @@
-# Paper Trail 0.5.0
+# Paper Trail 0.6.0
 
 ## Highlights
 
-- Optional public OIDC configuration discovery in GTK and TUI, with explicit
-  issuer confirmation and pinning. Manual setup remains supported; existing
-  profiles do not silently change authentication providers or vault identities.
-- Real Neovim embedded in the TUI editor pane, using your normal configuration
-  or clean defaults. The built-in editor remains the default. Paper Trail keeps
-  ownership of managed-note saving, autosave, and external-edit conflict checks.
-- Interactive TUI sync-folder selection, an All notes folder row, improved folder
-  badges, and shared GTK/TUI RGB accents.
-- GTK sync-dialog lifecycle, folder-editing, and footer layout fixes.
-- Standalone sync-server downloads for all six TUI targets, checksum-verified
-  fourteen-package releases, and interactive local artifact builds.
+- Permanently erase a synced folder's server-side note content/history with an
+  explicit confirmation in GTK or TUI. Local files are kept, and authenticated
+  deletion markers prevent other devices from silently uploading the folder again.
+- Closing a folder now pauses its sync on that device. Reopening restores local
+  access only; explicitly re-enable sync to resume. Pending work and server copies
+  are retained, and late GTK sync results cannot reopen closed bookmarks.
+- Both sync configuration interfaces remain open after deletion and preserve other
+  draft selections. Retained local folders offer **Sync as New Folder** with fresh
+  folder/note IDs; server-only deletion markers are hidden.
+- Optional **Remember encryption password on this device** in graphical sessions,
+  with secure credential-store integration and asynchronous startup restoration.
+  SSH/headless sessions retain manual, session-only authentication.
+- Improved cancellable browser sign-in, Linux portal/browser launching, branded
+  callback pages, account/vault prompts, and privacy-preserving connection errors.
+- Embedded Neovim input, managed-buffer lifecycle and explicit-write fixes, plus
+  clearer TUI status/layout. The built-in editor remains the default.
+- Native release build shortcuts: `make tui`, `make desktop`, `make server`, or
+  `make all`. Downloads still include all fourteen checksum-verified packages.
 
 Sync is experimental and has not had an independent security audit. Local working
-files and comparison baselines remain plaintext. Encrypted formats, account binding,
-and token validation are unchanged. Update the server to use public authentication
-discovery; older servers can still use manual configuration.
-See [encrypted sync setup and security boundaries](https://github.com/maennlse/paper-trail/blob/v0.5.0/docs/encrypted-sync.md).
+files and comparison baselines remain plaintext. **Upgrade the server and all clients
+before using permanent folder deletion.** The server upgrades SQLite schema 1 to 2;
+older server binaries then refuse to open it. After erasure, legacy/stale clients
+fail closed instead of resurrecting data. Existing vault passphrases and recovery
+keys remain valid. Deletion retains encrypted catalog metadata and content-free
+history receipts; independent server backups and previously downloaded copies are
+not erased. See [encrypted sync setup and security boundaries](https://github.com/maennlse/paper-trail/blob/v0.6.0/docs/encrypted-sync.md).
 
 Embedded Neovim requires an installed `nvim` 0.9+ executable and is not bundled.
 Press F2, type `set editor neovim`, and Enter to enable it; F6 changes panes.

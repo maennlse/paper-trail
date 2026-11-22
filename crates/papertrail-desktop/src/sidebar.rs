@@ -657,6 +657,7 @@ impl Desktop {
             settings.notes_dir = next;
         }
         let next = settings.notes_dir.clone();
+        self.sync.pause_folder(path)?;
         self.model.borrow_mut().settings = settings;
         self.choose_active(Some(&next))
     }

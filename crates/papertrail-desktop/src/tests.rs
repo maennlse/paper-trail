@@ -690,6 +690,186 @@ fn capture(d: &Desktop, suffix: &str) {
         .unwrap();
 }
 
+fn remembered_password_dialogs(app: &adw::Application, root: &std::path::Path) {
+    let notes = root.join("notes");
+    let d = Desktop::with_settings(
+        app,
+        SettingsFile {
+            path: root.join("settings.json"),
+        },
+        Settings::new(notes.clone()),
+        &notes,
+    )
+    .unwrap();
+    d.window.present();
+    for action in ["sync-create", "sync-unlock", "sync-passphrase"] {
+        d.window.lookup_action(action).unwrap().activate(None);
+        settle();
+        let dialog = d
+            .window
+            .visible_dialog()
+            .unwrap()
+            .downcast::<adw::AlertDialog>()
+            .unwrap();
+        let remember = descendant(dialog.upcast_ref(), &|widget| {
+            widget
+                .downcast_ref::<adw::SwitchRow>()
+                .is_some_and(|row| row.title() == "Remember encryption password on this device")
+        });
+        let row = remember.unwrap().downcast::<adw::SwitchRow>().unwrap();
+        assert!(!row.is_active(), "Remembering must be opt-in");
+        row.set_active(true);
+        if action == "sync-unlock" {
+            let password = descendant(dialog.upcast_ref(), &|widget| {
+                widget.is::<adw::PasswordEntryRow>()
+            })
+            .unwrap()
+            .downcast::<adw::PasswordEntryRow>()
+            .unwrap();
+            password.set_text("discarded passphrase");
+            dialog.emit_by_name::<()>("response", &[&"recover"]);
+            settle();
+            assert!(password.text().is_empty());
+            let recovery = d
+                .window
+                .visible_dialog()
+                .unwrap()
+                .downcast::<adw::AlertDialog>()
+                .unwrap();
+            assert_eq!(recovery.heading().as_deref(), Some("Recover Vault"));
+            assert!(
+                descendant(recovery.upcast_ref(), &|widget| widget
+                    .is::<adw::SwitchRow>())
+                .is_none(),
+                "Recovery keys must never be remembered"
+            );
+            let key = descendant(recovery.upcast_ref(), &|widget| {
+                widget.is::<adw::PasswordEntryRow>()
+            })
+            .unwrap()
+            .downcast::<adw::PasswordEntryRow>()
+            .unwrap();
+            assert_eq!(key.title(), "Recovery key");
+            key.set_text("discarded recovery key");
+            recovery.emit_by_name::<()>("response", &[&"password"]);
+            settle();
+            assert!(key.text().is_empty());
+            let unlock = d
+                .window
+                .visible_dialog()
+                .unwrap()
+                .downcast::<adw::AlertDialog>()
+                .unwrap();
+            assert_eq!(unlock.heading().as_deref(), Some("Unlock Vault"));
+            let remember = descendant(unlock.upcast_ref(), &|widget| widget.is::<adw::SwitchRow>())
+                .unwrap()
+                .downcast::<adw::SwitchRow>()
+                .unwrap();
+            assert!(!remember.is_active());
+            unlock.emit_by_name::<()>("response", &[&"recover"]);
+            settle();
+            let recovery = d
+                .window
+                .visible_dialog()
+                .unwrap()
+                .downcast::<adw::AlertDialog>()
+                .unwrap();
+            recovery.emit_by_name::<()>("response", &[&"cancel"]);
+            recovery.close();
+        } else {
+            dialog.emit_by_name::<()>("response", &[&"cancel"]);
+            dialog.close();
+        }
+        settle();
+        assert!(d.sync_job.borrow().is_none());
+    }
+    assert!(!root.join("sync/config.json").exists());
+    d.window.close();
+    settle();
+}
+
+fn successful_login_prompts_for_unlock_only_when_needed(
+    app: &adw::Application,
+    root: &std::path::Path,
+) {
+    use papertrail_sync::control::Outcome;
+    let notes = root.join("notes");
+    let d = Desktop::with_settings(
+        app,
+        SettingsFile {
+            path: root.join("settings.json"),
+        },
+        Settings::new(notes.clone()),
+        &notes,
+    )
+    .unwrap();
+    d.window.present();
+    for (manual, unlocked, cancelled, failed) in [
+        (true, false, false, false),
+        (false, false, false, false), // Startup restore must stay non-interactive.
+        (true, true, false, false),
+        (true, false, true, false),
+        (true, false, false, true),
+    ] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        *d.sync_job.borrow_mut() = Some(rx);
+        d.sync_prompt_after_login.set(manual);
+        d.sync_interactive.set(manual);
+        d.sync_unlocked.set(unlocked);
+        let cancel = papertrail_sync::control::Cancellation::default();
+        if cancelled {
+            cancel.cancel();
+        }
+        *d.sync_cancel.borrow_mut() = Some(cancel);
+        tx.send(if failed {
+            Err(std::io::Error::other("Test sign-in failure"))
+        } else {
+            Ok(Outcome {
+                message: "Signed in".into(),
+                warning: None,
+                recovery: None,
+                synced: false,
+                unlocked,
+                settings_update: None,
+                local_changed: false,
+            })
+        })
+        .unwrap();
+        d.sync_poll();
+        assert!(!d.sync_prompt_after_login.get());
+        settle();
+        if manual && !unlocked && !cancelled {
+            let dialog = d
+                .window
+                .visible_dialog()
+                .unwrap()
+                .downcast::<adw::AlertDialog>()
+                .unwrap();
+            assert_eq!(
+                dialog.heading().as_deref(),
+                Some(if failed {
+                    "Could Not Complete Operation"
+                } else {
+                    "Unlock Vault"
+                })
+            );
+            dialog.emit_by_name::<()>("response", &[&"cancel"]);
+            dialog.close();
+            settle();
+        } else {
+            assert!(d.window.visible_dialog().is_none());
+        }
+        d.sync_poll();
+        assert!(
+            d.window.visible_dialog().is_none(),
+            "prompt must not repeat after dismissal"
+        );
+        assert!(d.sync_job.borrow().is_none());
+    }
+    d.window.close();
+    settle();
+}
+
 fn background_sync_is_non_intrusive(app: &adw::Application, root: &std::path::Path) {
     use papertrail_sync::control::Outcome;
     let gtk_settings = gtk::Settings::default().unwrap();
@@ -706,6 +886,52 @@ fn background_sync_is_non_intrusive(app: &adw::Application, root: &std::path::Pa
     )
     .unwrap();
     d.window.present();
+    // Repeated status refreshes must not rebuild menus or re-notify hover
+    // tooltips/status labels when no application state has changed.
+    let changes = Rc::new(std::cell::Cell::new(0));
+    for menu in [
+        d.widget::<gio::Menu>("sync_operation_menu"),
+        d.widget::<gio::Menu>("sync_actions_menu"),
+    ] {
+        let count = changes.clone();
+        menu.connect_items_changed(move |_, _, _, _| count.set(count.get() + 1));
+    }
+    let count = changes.clone();
+    d.widget::<gtk::MenuButton>("sync_menu_button")
+        .connect_notify_local(Some("tooltip-text"), move |_, _| count.set(count.get() + 1));
+    let count = changes.clone();
+    d.widget::<gtk::Label>("sync_status_label")
+        .connect_notify_local(Some("label"), move |_, _| count.set(count.get() + 1));
+    for _ in 0..20 {
+        d.sync_indicator();
+    }
+    assert_eq!(changes.get(), 0);
+    let operation_menu = d.widget::<gio::Menu>("sync_operation_menu");
+    let actions_menu = d.widget::<gio::Menu>("sync_actions_menu");
+    let menu_item = |menu: &gio::Menu, index: i32| {
+        let value = |attribute| {
+            menu.item_attribute_value(index, attribute, None)
+                .unwrap()
+                .get::<String>()
+                .unwrap()
+        };
+        (value("label"), value("action"))
+    };
+    assert_eq!(operation_menu.n_items(), 1);
+    assert_eq!(actions_menu.n_items(), 5);
+    assert!(d.window.lookup_action("sync-recover").is_none());
+    assert_eq!(
+        menu_item(&operation_menu, 0),
+        ("Sync Now".into(), "win.sync-now".into())
+    );
+    assert_eq!(
+        menu_item(&actions_menu, 1),
+        ("Sign In".into(), "win.sync-login".into())
+    );
+    assert_eq!(
+        menu_item(&actions_menu, 3),
+        ("Unlock Vault".into(), "win.sync-unlock".into())
+    );
     d.new_note().unwrap();
     let first = d.current_path().unwrap();
     d.buffer.set_text("Saved before the network request");
@@ -714,6 +940,21 @@ fn background_sync_is_non_intrusive(app: &adw::Application, root: &std::path::Pa
     *d.sync_job.borrow_mut() = Some(rx);
     d.sync_unlocked.set(true);
     d.sync_indicator();
+    assert_eq!(
+        menu_item(&operation_menu, 0),
+        ("Operation Running…".into(), "win.sync-now".into())
+    );
+    assert!(!d.window.lookup_action("sync-now").unwrap().is_enabled());
+    assert_eq!(
+        menu_item(&actions_menu, 3),
+        ("Lock Vault".into(), "win.sync-lock".into())
+    );
+    *d.sync_cancel.borrow_mut() = Some(papertrail_sync::control::Cancellation::default());
+    d.sync_indicator();
+    assert_eq!(
+        menu_item(&operation_menu, 0),
+        ("Cancel Operation".into(), "win.sync-cancel".into())
+    );
     assert!(d.window.content().unwrap().is_sensitive());
     assert!(d.view.is_sensitive());
     let sync = d.widget::<gtk::MenuButton>("sync_menu_button");
@@ -741,6 +982,31 @@ fn background_sync_is_non_intrusive(app: &adw::Application, root: &std::path::Pa
     sync.popup();
     settle();
     assert!(sync.popover().unwrap().is_visible());
+    let before_hover = changes.get();
+    let mut widgets = vec![sync.popover().unwrap().upcast::<gtk::Widget>()];
+    let mut entries = 0;
+    while let Some(widget) = widgets.pop() {
+        let mut child = widget.first_child();
+        while let Some(item) = child {
+            child = item.next_sibling();
+            widgets.push(item);
+        }
+        if widget.css_name() == "modelbutton" {
+            entries += 1;
+            widget.set_state_flags(gtk::StateFlags::PRELIGHT, false);
+            settle();
+            widget.unset_state_flags(gtk::StateFlags::PRELIGHT);
+        }
+    }
+    assert!(entries > 0, "exercise native menu hover styling");
+    for _ in 0..20 {
+        d.sync_indicator();
+    }
+    assert_eq!(
+        changes.get(),
+        before_hover,
+        "hover/unchanged refresh must not rewrite the menu or tooltip"
+    );
     capture(&d, "sync-menu");
     sync.popdown();
     // Navigation, local saves, renames and new typing all continue during a job.
@@ -768,6 +1034,11 @@ fn background_sync_is_non_intrusive(app: &adw::Application, root: &std::path::Pa
         .widget::<gtk::Image>("sync_icon")
         .has_css_class("sync-spinning"));
     assert!(d.window.lookup_action("sync-login").unwrap().is_enabled());
+    assert_eq!(
+        menu_item(&operation_menu, 0),
+        ("Sync Now".into(), "win.sync-now".into())
+    );
+    assert!(d.window.lookup_action("sync-now").unwrap().is_enabled());
     assert_eq!(d.model.borrow().session.text, "Still typing during sync");
     // A delayed result must merge metadata, not replace current preferences or text.
     let baseline = d.model.borrow().settings.clone();
@@ -786,6 +1057,7 @@ fn background_sync_is_non_intrusive(app: &adw::Application, root: &std::path::Pa
     *d.sync_job.borrow_mut() = Some(rx);
     tx.send(Ok(Outcome {
         message: "Synced quietly".into(),
+        warning: None,
         recovery: None,
         synced: true,
         unlocked: true,
@@ -803,7 +1075,80 @@ fn background_sync_is_non_intrusive(app: &adw::Application, root: &std::path::Pa
     assert_eq!(d.model.borrow().session.text, "Still typing during sync");
     assert!(d.model.borrow().session.is_dirty());
     assert!(d.window.visible_dialog().is_none());
+    // Cancellation keeps the worker attached until it acknowledges stopping,
+    // does not show an error dialog, and pauses timer/edit-triggered retries.
+    let (tx, rx) = std::sync::mpsc::channel();
+    *d.sync_job.borrow_mut() = Some(rx);
+    let cancel = papertrail_sync::control::Cancellation::default();
+    *d.sync_cancel.borrow_mut() = Some(cancel.clone());
+    d.sync_interactive.set(true);
+    d.sync_indicator();
+    assert!(d.window.lookup_action("sync-cancel").unwrap().is_enabled());
+    assert_eq!(
+        menu_item(&operation_menu, 0),
+        ("Cancel Operation".into(), "win.sync-cancel".into())
+    );
+    let (events, receiver) = std::sync::mpsc::channel();
+    *d.sync_browser_events.borrow_mut() = Some(receiver);
+    events
+        .send(papertrail_sync::auth::BrowserEvent::Progress(
+            "Checking identity provider…",
+        ))
+        .unwrap();
+    d.sync_poll();
+    assert_eq!(&*d.sync_status.borrow(), "Checking identity provider…");
+    d.window
+        .lookup_action("sync-cancel")
+        .unwrap()
+        .activate(None);
+    assert!(cancel.is_cancelled());
+    assert!(d.sync_job.borrow().is_some());
+    assert!(d.sync_status.borrow().contains("Cancelling"));
+    assert!(!d.window.lookup_action("sync-cancel").unwrap().is_enabled());
+    assert_eq!(
+        menu_item(&operation_menu, 0),
+        ("Cancelling…".into(), "win.sync-cancel".into())
+    );
+    // A launch request that was queued before Cancel must not open a browser.
+    let (reply, result) = std::sync::mpsc::channel();
+    events
+        .send(papertrail_sync::auth::BrowserEvent::Open {
+            url: "https://example.invalid/PRIVATE_AUTHORIZATION_URL".into(),
+            reply,
+        })
+        .unwrap();
+    d.sync_poll();
+    assert_eq!(
+        result.recv().unwrap().unwrap_err().kind(),
+        std::io::ErrorKind::Interrupted
+    );
+    assert!(d.sync_browser_launch.borrow().is_none());
+    tx.send(Err(std::io::Error::new(
+        std::io::ErrorKind::Interrupted,
+        "Sign-in cancelled",
+    )))
+    .unwrap();
+    d.sync_poll();
+    assert!(d.sync_job.borrow().is_none());
+    assert!(d.sync_cancel.borrow().is_none());
+    assert!(!d.sync_error.get());
+    assert!(d.sync_paused.get());
+    assert_eq!(
+        menu_item(&operation_menu, 0),
+        ("Sync Now".into(), "win.sync-now".into())
+    );
+    assert_eq!(operation_menu.n_items(), 1);
+    assert_eq!(actions_menu.n_items(), 5);
+    d.schedule_sync();
+    assert!(d.sync_requested.get().is_none());
+    assert!(d.window.visible_dialog().is_none());
+    assert_eq!(d.model.borrow().session.text, "Still typing during sync");
     d.sync_unlocked.set(false);
+    d.sync_indicator();
+    assert_eq!(
+        menu_item(&actions_menu, 3),
+        ("Unlock Vault".into(), "win.sync-unlock".into())
+    );
     capture(&d, "sync-idle");
     d.window.close();
     settle();
@@ -890,6 +1235,398 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
     assert_eq!(config.scopes, "openid offline_access changed-scope");
     assert_eq!(config.download_dir, Some(root.join("Downloads")));
     assert!(d.window.lookup_action("sync-status").is_none());
+    // Only published folders get a direct trash button, and deletion always
+    // opens a native destructive confirmation rather than firing immediately.
+    let folder_id = "AAAAAAAAAAAAAAAAAAAAAA".to_owned();
+    let draft_id = "AQEBAQEBAQEBAQEBAQEBAQ".to_owned();
+    {
+        let mut engine =
+            papertrail_sync::engine::Engine::open(root.join("sync/state.json")).unwrap();
+        engine.state.vault_id = "AgICAgICAgICAgICAgICAg".into();
+        engine.state.catalog = Some(
+            serde_json::from_value(serde_json::json!({
+                "version": 2,
+                "folders": { (&folder_id): { "name": "Personal", "color": "preset-0" } },
+                "legacy_notes": {}
+            }))
+            .unwrap(),
+        );
+        engine.state.catalog_draft = Some(
+            serde_json::from_value(serde_json::json!({
+                "version": 2,
+                "folders": {
+                    (&folder_id): { "name": "Personal", "color": "preset-0" },
+                    (&draft_id): { "name": "Work", "color": "preset-0" }
+                },
+                "legacy_notes": {}
+            }))
+            .unwrap(),
+        );
+        for (id, path) in [(&folder_id, &a), (&draft_id, &b)] {
+            engine.state.bindings.insert(
+                id.clone(),
+                papertrail_sync::folders::Binding {
+                    path: path.clone(),
+                    managed: false,
+                    observed_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+                    observed_color: None,
+                },
+            );
+        }
+        engine.save().unwrap();
+    }
+    d.window
+        .lookup_action("sync-configure")
+        .unwrap()
+        .activate(None);
+    settle();
+    let config_dialog = d.window.visible_dialog().unwrap();
+    let trash = descendant(config_dialog.upcast_ref(), &|w| {
+        w.is::<gtk::Button>()
+            && w.clone()
+                .downcast::<gtk::Button>()
+                .unwrap()
+                .icon_name()
+                .as_deref()
+                == Some("user-trash-symbolic")
+    })
+    .unwrap()
+    .downcast::<gtk::Button>()
+    .unwrap();
+    assert!(!trash.is_sensitive()); // Sign in and unlock first.
+    assert!(!trash.has_css_class("destructive-action"));
+    assert!(trash
+        .tooltip_text()
+        .unwrap()
+        .starts_with("Delete from Server"));
+    let work = descendant(config_dialog.upcast_ref(), &|widget| {
+        widget
+            .clone()
+            .downcast::<adw::ActionRow>()
+            .is_ok_and(|row| row.title() == "Work")
+    })
+    .unwrap();
+    assert!(descendant(&work, &|widget| widget
+        .clone()
+        .downcast::<gtk::Button>()
+        .is_ok_and(
+            |button| button.icon_name().as_deref() == Some("user-trash-symbolic")
+        ))
+    .is_none());
+    let mut ancestor = trash.parent();
+    while let Some(widget) = ancestor {
+        if let Some(scroll) = widget.downcast_ref::<gtk::ScrolledWindow>() {
+            let adjustment = scroll.vadjustment();
+            adjustment.set_value(adjustment.upper());
+        }
+        ancestor = widget.parent();
+    }
+    capture(&d, "sync-configure-trash-button");
+    trash.emit_by_name::<()>("clicked", &[]);
+    settle();
+    let confirm = d
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert!(confirm.heading().unwrap().contains("Personal"));
+    assert!(confirm
+        .body()
+        .contains("Local files on all devices are kept"));
+    assert!(confirm
+        .body()
+        .contains("won’t be uploaded again automatically"));
+    assert_eq!(
+        confirm.response_appearance("delete"),
+        adw::ResponseAppearance::Destructive
+    );
+    capture(&d, "sync-delete-folder-confirmation");
+    confirm.emit_by_name::<()>("response", &[&"cancel"]);
+    confirm.close();
+    settle();
+    assert!(d.sync_job.borrow().is_none());
+    assert!(d
+        .sync
+        .snapshot()
+        .unwrap()
+        .unwrap()
+        .catalog
+        .unwrap()
+        .deleted_folders
+        .is_empty());
+    // Completing deletion updates this dialog, not a rebuilt replacement, so
+    // unrelated edits remain in the same widgets on both failure and success.
+    d.widget::<adw::EntryRow>("sync_config_scopes")
+        .set_text("openid unsaved-scope");
+    let row = trash
+        .ancestor(adw::ActionRow::static_type())
+        .unwrap()
+        .downcast::<adw::ActionRow>()
+        .unwrap();
+    let folders = row
+        .ancestor(adw::PreferencesGroup::static_type())
+        .unwrap()
+        .downcast::<adw::PreferencesGroup>()
+        .unwrap();
+    assert!(descendant(config_dialog.upcast_ref(), &|widget| {
+        widget
+            .clone()
+            .downcast::<adw::PreferencesGroup>()
+            .is_ok_and(|group| group.title() == "Removed from Sync")
+    })
+    .is_none());
+    let selected = descendant(row.upcast_ref(), &|widget| widget.is::<gtk::CheckButton>())
+        .unwrap()
+        .downcast::<gtk::CheckButton>()
+        .unwrap();
+    let alert = config_dialog
+        .clone()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    let deletion_view =
+        crate::sync::FolderDeletionView::new(&folder_id, &alert, &folders, &row, &selected, None);
+    deletion_view.set_busy(true);
+    d.sync_folder_deletion.replace(Some(deletion_view.clone()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    *d.sync_job.borrow_mut() = Some(rx);
+    assert!(!row.is_sensitive());
+    assert!(!alert.is_response_enabled("save"));
+    assert_eq!(d.window.visible_dialog().unwrap(), config_dialog);
+    d.sync_interactive.set(true);
+    tx.send(Err(std::io::Error::other("Deletion unavailable")))
+        .unwrap();
+    d.sync_poll();
+    settle();
+    let error = d
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert!(error.body().contains("Deletion unavailable"));
+    error.close();
+    settle();
+    assert_eq!(d.window.visible_dialog().unwrap(), config_dialog);
+    assert!(row.is_sensitive());
+    assert!(alert.is_response_enabled("save"));
+    assert!(selected.is_active());
+    assert!(descendant(config_dialog.upcast_ref(), &|widget| widget
+        .clone()
+        .downcast::<gtk::Button>()
+        .is_ok_and(
+            |button| button.label().as_deref() == Some("Sync as New Folder…")
+        ))
+    .is_none());
+    assert_eq!(
+        d.widget::<adw::EntryRow>("sync_config_scopes").text(),
+        "openid unsaved-scope"
+    );
+    {
+        let mut engine =
+            papertrail_sync::engine::Engine::open(root.join("sync/state.json")).unwrap();
+        engine.state.catalog = engine
+            .state
+            .catalog_draft
+            .take()
+            .or(engine.state.catalog.take());
+        engine
+            .state
+            .catalog
+            .as_mut()
+            .unwrap()
+            .deleted_folders
+            .insert(folder_id.clone());
+        engine.state.catalog_draft = None;
+        engine.save().unwrap();
+    }
+    deletion_view.set_busy(true);
+    d.sync_folder_deletion.replace(Some(deletion_view));
+    let (tx, rx) = std::sync::mpsc::channel();
+    *d.sync_job.borrow_mut() = Some(rx);
+    tx.send(Ok(papertrail_sync::control::Outcome {
+        message: "Folder deleted from server".into(),
+        warning: None,
+        recovery: None,
+        synced: false,
+        unlocked: false,
+        settings_update: None,
+        local_changed: false,
+    }))
+    .unwrap();
+    d.sync_poll();
+    settle();
+    assert_eq!(d.window.visible_dialog().unwrap(), config_dialog);
+    assert!(alert.is_response_enabled("save"));
+    assert!(!selected.is_active());
+    assert!(row.parent().is_none());
+    assert_eq!(
+        d.widget::<adw::EntryRow>("sync_config_scopes").text(),
+        "openid unsaved-scope"
+    );
+    assert_eq!(
+        d.sync.saved_config().unwrap().unwrap().scopes,
+        "openid offline_access changed-scope"
+    );
+    let again = descendant(config_dialog.upcast_ref(), &|widget| {
+        widget
+            .clone()
+            .downcast::<gtk::Button>()
+            .is_ok_and(|button| button.label().as_deref() == Some("Sync as New Folder…"))
+    })
+    .unwrap()
+    .downcast::<gtk::Button>()
+    .unwrap();
+    let local_row = again
+        .ancestor(adw::ActionRow::static_type())
+        .unwrap()
+        .downcast::<adw::ActionRow>()
+        .unwrap();
+    assert_eq!(
+        local_row
+            .ancestor(adw::PreferencesGroup::static_type())
+            .unwrap(),
+        folders.clone().upcast::<gtk::Widget>()
+    );
+    assert!(local_row.subtitle().unwrap().starts_with("Local only"));
+    assert!(descendant(local_row.upcast_ref(), &|widget| widget
+        .is::<gtk::CheckButton>())
+    .is_none());
+    let mut ancestor = again.parent();
+    while let Some(widget) = ancestor {
+        if let Some(scroll) = widget.downcast_ref::<gtk::ScrolledWindow>() {
+            let adjustment = scroll.vadjustment();
+            adjustment.set_value(adjustment.upper());
+        }
+        ancestor = widget.parent();
+    }
+    capture(&d, "sync-local-only-folder");
+    again.emit_clicked();
+    settle();
+    let confirm = d
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert!(confirm.body().contains("new note identities"));
+    confirm.emit_by_name::<()>("response", &[&"cancel"]);
+    confirm.close();
+    settle();
+    assert!(d
+        .sync
+        .snapshot()
+        .unwrap()
+        .unwrap()
+        .bindings
+        .contains_key(&folder_id));
+    alert.emit_by_name::<()>("response", &[&"save"]);
+    config_dialog.close();
+    settle();
+    let saved = d.sync.saved_config().unwrap().unwrap();
+    assert_eq!(saved.scopes, "openid unsaved-scope");
+    assert!(saved.excluded_folders.contains(&folder_id));
+    assert!(!saved.folders.contains(&a));
+    assert!(saved.folders.contains(&b));
+    // Closing a non-deleted synced folder pauses this device, even if an older
+    // worker result tries to add its bookmark again.
+    fs::write(b.join("keep.txt"), "local files remain").unwrap();
+    let journal = fs::read(root.join("sync/state.json")).unwrap();
+    d.close_folder(&b).unwrap();
+    let paused = d.sync.saved_config().unwrap().unwrap();
+    assert!(paused.excluded_folders.contains(&draft_id));
+    assert!(!paused.selected_folders.contains(&draft_id));
+    assert!(!paused.folders.contains(&b));
+    assert!(!d.model.borrow().settings.note_folders.contains(&b));
+    let baseline = d.model.borrow().settings.clone();
+    let mut stale = baseline.clone();
+    stale.add_folder(b.clone(), false);
+    stale
+        .folder_labels
+        .insert(b.clone(), "Late remote label".into());
+    let (tx, rx) = std::sync::mpsc::channel();
+    *d.sync_job.borrow_mut() = Some(rx);
+    tx.send(Ok(papertrail_sync::control::Outcome {
+        message: "Late sync completion".into(),
+        warning: None,
+        recovery: None,
+        synced: true,
+        unlocked: false,
+        settings_update: Some((Box::new(baseline), Box::new(stale))),
+        local_changed: false,
+    }))
+    .unwrap();
+    d.sync_poll();
+    assert!(!d.model.borrow().settings.note_folders.contains(&b));
+    assert!(!d.model.borrow().settings.folder_labels.contains_key(&b));
+    assert_eq!(fs::read(root.join("sync/state.json")).unwrap(), journal);
+    assert_eq!(
+        fs::read_to_string(b.join("keep.txt")).unwrap(),
+        "local files remain"
+    );
+    d.choose_active(Some(&b)).unwrap();
+    assert!(d.model.borrow().settings.note_folders.contains(&b));
+    assert!(
+        !d.sync
+            .folder_choices(&d.model.borrow().settings)
+            .unwrap()
+            .iter()
+            .find(|choice| choice.id.as_ref() == Some(&draft_id))
+            .unwrap()
+            .selected
+    );
+    // Server-only markers and stale mappings are internal bookkeeping, not rows.
+    {
+        let mut engine =
+            papertrail_sync::engine::Engine::open(root.join("sync/state.json")).unwrap();
+        let catalog = engine.state.catalog.as_mut().unwrap();
+        let mut data = catalog.folders[&folder_id].clone();
+        data.name = "Server-only deleted folder".into();
+        let remote_id = "BAQEBAQEBAQEBAQEBAQEBA".to_owned();
+        catalog.folders.insert(remote_id.clone(), data.clone());
+        catalog.deleted_folders.insert(remote_id);
+        let missing_id = "BQUFBQUFBQUFBQUFBQUFBQ".to_owned();
+        data.name = "Unavailable deleted folder".into();
+        catalog.folders.insert(missing_id.clone(), data);
+        catalog.deleted_folders.insert(missing_id.clone());
+        engine.state.bindings.insert(
+            missing_id,
+            papertrail_sync::folders::Binding {
+                path: root.join("unavailable"),
+                managed: true,
+                observed_name: "unavailable".into(),
+                observed_color: None,
+            },
+        );
+        engine.save().unwrap();
+    }
+    let journal = fs::read(root.join("sync/state.json")).unwrap();
+    d.window
+        .lookup_action("sync-configure")
+        .unwrap()
+        .activate(None);
+    settle();
+    let config_dialog = d.window.visible_dialog().unwrap();
+    for title in [
+        "Server-only deleted folder",
+        "Unavailable deleted folder",
+        "Removed from Sync",
+    ] {
+        assert!(descendant(config_dialog.upcast_ref(), &|widget| {
+            widget
+                .clone()
+                .downcast::<adw::ActionRow>()
+                .is_ok_and(|row| row.title() == title)
+                || widget
+                    .clone()
+                    .downcast::<adw::PreferencesGroup>()
+                    .is_ok_and(|group| group.title() == title)
+        })
+        .is_none());
+    }
+    config_dialog.close();
+    settle();
+    assert_eq!(fs::read(root.join("sync/state.json")).unwrap(), journal);
     d.window.close();
     settle();
 }
@@ -1145,6 +1882,23 @@ fn desktop_workflows_use_embedded_assets_and_preserve_pending_edits() {
         &default_notes_dir,
     )
     .unwrap();
+    // Keep GTK initialization on one test thread, but allow sync regressions
+    // to run without compositor-dependent editor focus/input checks.
+    if std::env::var("PAPERTRAIL_TEST_SCOPE").as_deref() == Ok("sync") {
+        remembered_password_dialogs(&app, &temp.path().join("remembered-password"));
+        successful_login_prompts_for_unlock_only_when_needed(
+            &app,
+            &temp.path().join("login-unlock"),
+        );
+        background_sync_is_non_intrusive(&app, &temp.path().join("background-sync"));
+        sync_configuration_prefills_and_preserves_multiple_selected_folders(
+            &app,
+            &temp.path().join("configure-folders"),
+        );
+        sync_discovery_trust_is_explicit(&app, &temp.path().join("discovery-trust"));
+        assert_no_application_diagnostics(&d, &diagnostics);
+        return;
+    }
     for (name, _, _) in crate::actions::SHORTCUTS {
         assert!(d.window.lookup_action(name).is_some(), "missing {name}");
     }
@@ -1153,7 +1907,6 @@ fn desktop_workflows_use_embedded_assets_and_preserve_pending_edits() {
         "sync-login",
         "sync-create",
         "sync-unlock",
-        "sync-recover",
         "sync-passphrase",
         "sync-now",
         "sync-lock",
@@ -1323,6 +2076,8 @@ fn desktop_workflows_use_embedded_assets_and_preserve_pending_edits() {
     d.window.close();
     settle();
     startup_folder_recovery_regression(&app, &temp.path().join("startup-recovery"));
+    remembered_password_dialogs(&app, &temp.path().join("remembered-password"));
+    successful_login_prompts_for_unlock_only_when_needed(&app, &temp.path().join("login-unlock"));
     background_sync_is_non_intrusive(&app, &temp.path().join("background-sync"));
     sync_configuration_prefills_and_preserves_multiple_selected_folders(
         &app,
