@@ -751,7 +751,15 @@ mod tests {
         app.create_note(None).unwrap();
         app.add_folder("Unavailable".into(), "preset-2".into())
             .unwrap();
-        let path = root.path().join("Documents/Paper Trail/Unavailable");
+        let path = PathBuf::from(
+            app.snapshot(None, "".into())
+                .unwrap()
+                .folders
+                .into_iter()
+                .find(|folder| folder.name == "Unavailable")
+                .unwrap()
+                .path,
+        );
         fs::remove_dir(&path).unwrap();
         let snapshot = app.snapshot(None, "".into()).unwrap();
         assert_eq!(snapshot.notes.len(), 1);
@@ -780,7 +788,10 @@ mod tests {
         app.register_folder(folder.clone(), true).unwrap();
         app.set_folder_color(folder.clone(), "#def".into()).unwrap();
         let path = app.create_note(None).unwrap();
-        assert!(path.starts_with(&folder));
+        assert_eq!(
+            Path::new(&path).parent(),
+            Some(fs::canonicalize(&folder).unwrap().as_path())
+        );
         assert_eq!(
             app.snapshot(None, "".into()).unwrap().notes[0].color,
             "#ddeeff"
