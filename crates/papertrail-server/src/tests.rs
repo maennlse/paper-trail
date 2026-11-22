@@ -3,6 +3,23 @@ use axum::{body::Body, http::Request};
 use http_body_util::BodyExt;
 use papertrail_crypto::{opaque_id, NoteData};
 use tower::ServiceExt;
+
+#[test]
+fn sqlite_counters_reject_unsigned_overflow_and_negative_database_values() {
+    let db = Connection::open_in_memory().unwrap();
+    for value in [0, 1, i64::MAX] {
+        let unsigned = u64::try_from(value).unwrap();
+        assert_eq!(sql_counter(unsigned).unwrap(), value);
+        assert_eq!(
+            db.query_row("SELECT ?1", [value], read_counter).unwrap(),
+            unsigned
+        );
+    }
+    assert_eq!(sql_counter(u64::MAX).unwrap_err(), StatusCode::BAD_REQUEST);
+    assert!(sql_counter(u64::try_from(i64::MAX).unwrap() + 1).is_err());
+    assert!(db.query_row("SELECT -1", [], read_counter).is_err());
+    assert!(db.query_row("SELECT 1.5", [], read_counter).is_err());
+}
 #[test]
 fn native_settings_are_validated_without_confidential_client_defaults() {
     assert!(

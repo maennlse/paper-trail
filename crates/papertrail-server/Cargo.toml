@@ -19,7 +19,7 @@ axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
