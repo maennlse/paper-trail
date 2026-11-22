@@ -93,9 +93,10 @@ fn encrypt(key: &Secret, aad: &[u8], plaintext: &[u8]) -> Result<Blob> {
     }
     let mut nonce = [0; 24];
     OsRng.fill_bytes(&mut nonce);
+    let encryption_nonce = XNonce::from(nonce);
     let ciphertext = XChaCha20Poly1305::new((&key.0).into())
         .encrypt(
-            XNonce::from_slice(&nonce),
+            &encryption_nonce,
             Payload {
                 msg: plaintext,
                 aad,
@@ -111,10 +112,11 @@ fn encrypt(key: &Secret, aad: &[u8], plaintext: &[u8]) -> Result<Blob> {
 fn decrypt(key: &Secret, aad: &[u8], blob: &Blob) -> Result<Zeroizing<Vec<u8>>> {
     blob.validate()?;
     let nonce = B64.decode(&blob.nonce).map_err(|_| Error::Format)?;
+    let nonce = XNonce::try_from(nonce.as_slice()).map_err(|_| Error::Format)?;
     let ciphertext = B64.decode(&blob.ciphertext).map_err(|_| Error::Format)?;
     XChaCha20Poly1305::new((&key.0).into())
         .decrypt(
-            XNonce::from_slice(&nonce),
+            &nonce,
             Payload {
                 msg: &ciphertext,
                 aad,
