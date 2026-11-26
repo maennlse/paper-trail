@@ -9,6 +9,7 @@ struct SyncSheet: View {
     @State private var clientID = ""
     @State private var scopes = "openid profile offline_access"
     @State private var manualAuthentication = false
+    @State private var advancedExpanded = false
     @State private var folders = Set<String>()
     @State private var remoteFolders: [SyncFolder] = []
     @State private var setup: SyncSetup?
@@ -91,13 +92,16 @@ struct SyncSheet: View {
                  ? "Manual authentication is enabled under Advanced Authentication."
                  : "Enter your sync server URL. Authentication settings are discovered automatically; you will be asked before trusting a new identity provider.")
                 .font(.caption).foregroundStyle(.secondary)
-            DisclosureGroup("Advanced Authentication") {
+            DisclosureGroup("Advanced Authentication", isExpanded: $advancedExpanded) {
                 Toggle("Configure authentication manually", isOn: $manualAuthentication)
                     .accessibilityIdentifier("sync-manual-auth")
                 if manualAuthentication {
-                    TextField("OIDC issuer URL (HTTPS)", text: $issuer).keyboardType(.URL)
+                    TextField("OIDC issuer URL (HTTPS)", text: $issuer)
+                        .keyboardType(.URL).accessibilityIdentifier("sync-issuer")
                     TextField("Public client ID", text: $clientID)
+                        .accessibilityIdentifier("sync-client-id")
                     TextField("Scopes", text: $scopes)
+                        .accessibilityIdentifier("sync-scopes")
                 }
                 Text("The identity provider must register io.github.maennlse.paper-trail://oauth/callback for the public client. No client secret is used.")
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)

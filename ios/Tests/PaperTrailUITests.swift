@@ -48,8 +48,8 @@ final class PaperTrailUITests: XCTestCase {
         app.buttons["folder-toggle"].tap()
         app.buttons["Sync"].tap()
         XCTAssertTrue(app.textFields["sync-server"].waitForExistence(timeout: 10))
-        XCTAssertFalse(app.textFields["OIDC issuer URL (HTTPS)"].exists)
-        XCTAssertFalse(app.textFields["Public client ID"].exists)
+        XCTAssertFalse(app.textFields["sync-issuer"].exists)
+        XCTAssertFalse(app.textFields["sync-client-id"].exists)
         for _ in 0..<4 where !app.buttons["sync-sign-in-out"].exists { app.swipeUp() }
         XCTAssertEqual(app.buttons.matching(identifier: "sync-sign-in-out").count, 1)
         XCTAssertEqual(app.buttons["sync-sign-in-out"].label, "Sign In")
@@ -60,9 +60,13 @@ final class PaperTrailUITests: XCTestCase {
         app.buttons["Advanced Authentication"].tap()
         let manualAuthentication = app.switches["sync-manual-auth"]
         XCTAssertTrue(manualAuthentication.waitForExistence(timeout: 5))
-        manualAuthentication.tap()
-        XCTAssertTrue(app.textFields["OIDC issuer URL (HTTPS)"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.textFields["Public client ID"].exists)
+        manualAuthentication.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == '1'"),
+                                               object: manualAuthentication)
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 5), .completed, app.debugDescription)
+        for _ in 0..<4 where !app.textFields["sync-issuer"].exists { app.swipeUp() }
+        XCTAssertTrue(app.textFields["sync-issuer"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.textFields["sync-client-id"].exists, app.debugDescription)
     }
 
     func testRailAndPlainTextRoundTrip() {
