@@ -58,7 +58,9 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Lock Vault"].exists)
         for _ in 0..<4 where !app.buttons["Advanced Authentication"].isHittable { app.swipeDown() }
         app.buttons["Advanced Authentication"].tap()
-        app.switches["sync-manual-auth"].tap()
+        let manualAuthentication = app.switches["sync-manual-auth"]
+        XCTAssertTrue(manualAuthentication.waitForExistence(timeout: 5))
+        manualAuthentication.tap()
         XCTAssertTrue(app.textFields["OIDC issuer URL (HTTPS)"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.textFields["Public client ID"].exists)
     }

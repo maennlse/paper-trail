@@ -102,7 +102,6 @@ struct SyncSheet: View {
                 Text("The identity provider must register io.github.maennlse.paper-trail://oauth/callback for the public client. No client secret is used.")
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
-            .accessibilityIdentifier("sync-advanced")
             ForEach(model.folders, id: \.path) { folder in
                 Toggle(folder.name, isOn: Binding(
                     get: { folders.contains(folder.path) },
