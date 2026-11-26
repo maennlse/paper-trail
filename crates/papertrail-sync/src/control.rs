@@ -140,6 +140,7 @@ struct Control {
 pub struct Service {
     control: Arc<Mutex<Control>>,
     signed_in: Arc<AtomicBool>,
+    unlocked: Arc<AtomicBool>,
     vault_state: Arc<AtomicU8>,
     root: Arc<PathBuf>,
     local: crate::local::LocalAccess,
@@ -409,8 +410,12 @@ impl Service {
         {
             return Err(error("Different account; use a separate local profile"));
         }
+        c.observe_bound_vault(&engine, &account);
+        // Match browser login: a failed vault lookup is unknown, not absence.
+        let _ = c.observe_vault(&account, api.vault());
         c.persist_tokens = !c.memory_only_tokens && auth::save(&config, &tokens).is_ok();
         c.tokens = Some(tokens);
+        self.publish_session_state(&c);
         Ok(())
     }
     pub fn relocate(&self, old: &Path, new: &Path) -> io::Result<()> {
@@ -470,6 +475,7 @@ impl Service {
         let local = crate::local::LocalAccess::default();
         Self {
             signed_in: Arc::new(AtomicBool::new(false)),
+            unlocked: Arc::new(AtomicBool::new(false)),
             vault_state: Arc::new(AtomicU8::new(0)),
             root: Arc::new(root.clone()),
             local: local.clone(),
@@ -497,6 +503,10 @@ impl Service {
     pub fn signed_in(&self) -> bool {
         self.signed_in.load(Ordering::Acquire)
     }
+    /// Last completed operation's key state, including operations returning errors.
+    pub fn unlocked(&self) -> bool {
+        self.unlocked.load(Ordering::Acquire)
+    }
     /// Last confirmed account's vault state: unknown is not the same as absent.
     /// Reading this never waits for a network or credential-store operation.
     pub fn vault_exists(&self) -> Option<bool> {
@@ -507,6 +517,8 @@ impl Service {
         }
     }
     fn publish_session_state(&self, control: &Control) {
+        self.unlocked
+            .store(control.key.is_some(), Ordering::Release);
         self.signed_in
             .store(control.tokens.is_some(), Ordering::Release);
         self.vault_state.store(
@@ -1404,13 +1416,26 @@ mod tests {
         let service = Service::new_session_only(&temp.path().join("settings.json"));
         let frontend = service.clone();
         assert!(!frontend.signed_in());
-        service.control.lock().unwrap().tokens = Some(Tokens {
-            access: "test-access".into(),
-            refresh: None,
-            expires: u64::MAX,
-        });
+        assert!(!frontend.unlocked());
+        {
+            let mut control = service.control.lock().unwrap();
+            control.tokens = Some(Tokens {
+                access: "test-access".into(),
+                refresh: None,
+                expires: u64::MAX,
+            });
+            control.key = Some(Secret([7; 32]));
+            service.publish_session_state(&control);
+        }
+        assert!(frontend.unlocked());
+        assert!(service.submit(Command::Status).recv().unwrap().is_err());
+        assert!(
+            frontend.unlocked(),
+            "failed status must reflect the actual retained key"
+        );
         let outcome = service.submit(Command::Lock).recv().unwrap().unwrap();
         assert!(!outcome.unlocked);
+        assert!(!frontend.unlocked());
         assert!(frontend.signed_in(), "locking must not sign out");
         assert!(service.submit(Command::Status).recv().unwrap().is_err());
         assert!(
@@ -1419,6 +1444,7 @@ mod tests {
         );
         service.submit(Command::Logout).recv().unwrap().unwrap();
         assert!(!frontend.signed_in());
+        assert!(!frontend.unlocked());
     }
 
     #[test]

@@ -44,6 +44,19 @@ fresh, non-overwriting output directories with SHA-256 checksums. Generated
 bindings/project/Info.plist and intermediate builds are ignored by Git; the
 project's source of truth is `ios/project.yml`.
 
+The app's asset catalog includes an opaque 1024px icon rendered from the existing
+Paper Trail SVG logo on a light background. Xcode generates the required device
+sizes; iOS applies the corner mask. The committed PNG needs no image tools during
+normal app/CI builds. To refresh it after changing the shared logo, use
+ImageMagick with SVG support:
+
+```sh
+magick -background none -density 768 \
+  data/icons/io.github.maennlse.paper-trail.svg -resize 1024x1024 \
+  -background '#f5f6fa' -alpha remove -alpha off -colorspace sRGB -depth 8 -strip \
+  PNG24:ios/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+```
+
 `build_local.py` remains the GTK/TUI/server **executable** packager. iOS uses a
 separate helper because Xcode app bundles and unsigned IPA packaging are not
 executable archives and cannot be built on the Linux host.
@@ -63,7 +76,9 @@ executable archives and cannot be built on the Linux host.
   button or a rightward left-edge swipe; dismiss with a scrim tap or left swipe.
 - Notes autosave after a short debounce. Failed/conflicting writes retain the
   editor state and offer **Save a Copy** without overwriting the external edit.
-- Long-press a note to pin/unpin or delete it. New folders have selectable colors.
+- Long-press a note to pin/unpin or delete it. New folders have named color
+  swatches and a selection checkmark in native form rows, rather than
+  monochrome-tinted picker symbols. The existing saved color tokens are unchanged.
 - Light appearance is the first-run default; light/dark/system and font size are
   configurable.
 
@@ -101,8 +116,20 @@ metadata rewriting and the sync relocation journal.
 
 ## Encrypted sync
 
-In Sync, enter the HTTPS server, trusted OIDC issuer, public client ID, scopes,
-and upload folders. Register this redirect URI with the OIDC provider:
+Open **Sync** from the folder rail and enter the **HTTPS server URL** plus upload
+folder selections. The shared Rust client discovers `/v1/auth/config` and validates
+the advertised OIDC provider. A new or changed provider requires explicit
+**Trust and Save** confirmation before anything is persisted or authentication
+starts. Cancelling, changing the draft, failed discovery, and stale confirmations
+do not replace the saved profile. Existing bound account/vault identities cannot
+be silently switched.
+
+For older servers, expand **Advanced Authentication**, enable manual setup, and
+enter the trusted issuer, public client ID, and scopes. Discovery mode is saved
+with the profile, so authentication continues checking the server's advertised
+settings against the accepted provider.
+
+Register this redirect URI with the OIDC provider:
 
 ```text
 io.github.maennlse.paper-trail://oauth/callback
@@ -116,8 +143,25 @@ go in settings or build artifacts. Vault keys stay in the Rust sync controller.
 Swift necessarily holds user-entered strings briefly for the FFI call; it clears
 the secure field after submission and does not log secrets.
 
-Unlock/create/recover/lock/change-passphrase and explicit sync are supported.
-Save and acknowledge the recovery key before finishing vault setup. Remote
+Like GTK, iOS shows one state-dependent **Sign In / Sign Out** action and one
+**Lock Vault / Unlock Vault** action. Sync status and controls live in the rail's
+Sync sheet; there is no duplicate lock button in the note-list header. Vault
+creation is hidden for accounts known to have a vault, and sign-in defaults to
+unlocking unless the server confirmed that no vault exists.
+
+Create/unlock/change-passphrase share a native secret dialog. Creation and changes
+require matching confirmation. Unlocking offers **Use Recovery Key Instead** and
+recovery offers **Use Passphrase Instead**; switching clears the fields. An
+explicit, initially-off **Remember encryption password on this device** toggle
+uses the same Rust `Command::Passphrase` and account/vault-bound credential format
+as GTK, backed by the iOS Keychain. Recovery keys are never remembered. Successful
+remembered startup unlocks automatically sync; explicit locking suppresses
+automatic unlock for the rest of that app session. Lock/sign-out requests made
+during a worker operation are queued, cancel remaining work at safe checkpoints,
+and cannot be undone by a late startup/login completion.
+
+Save and acknowledge the recovery key before finishing vault setup. Cancelling
+that step locks the vault and discards pending setup, as on GTK. Remote
 folders can be selected for download. Sync runs while the app is open; this
 version does not claim iOS background execution or iCloud-container entitlements.
 Ordinary user-selected iCloud Drive folders use the Files provider instead.

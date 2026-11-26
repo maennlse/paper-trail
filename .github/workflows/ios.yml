@@ -30,6 +30,8 @@ jobs:
           cache-directories: target/ios
       - name: Install project generator
         run: brew install xcodegen
+      - name: Validate iOS packaging and icon assets
+        run: python3 -m unittest discover -s build-aux -p test_build_ios.py
       - name: Test portable Rust and bridge
         run: cargo test --locked -p papertrail-core -p papertrail-storage -p papertrail-crypto -p papertrail-sync -p papertrail-ffi
       - name: Build unsigned device and simulator apps

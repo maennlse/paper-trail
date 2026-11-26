@@ -83,21 +83,61 @@ struct FolderRailOverlay: View {
 }
 
 struct NewFolderSheet: View {
+    private struct ColorChoice: Identifiable {
+        let name: String
+        let hex: String
+        var id: String { hex }
+    }
+
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var color = "#2563c9"
-    private let colors = ["#2563c9", "#779b82", "#d49b16", "#cd795e", "#6f5bd6", "#148085"]
+    @State private var detent: PresentationDetent = .large
+    private let colors = [
+        ColorChoice(name: "Blue", hex: "#2563c9"),
+        ColorChoice(name: "Sage", hex: "#779b82"),
+        ColorChoice(name: "Amber", hex: "#d49b16"),
+        ColorChoice(name: "Coral", hex: "#cd795e"),
+        ColorChoice(name: "Violet", hex: "#6f5bd6"),
+        ColorChoice(name: "Teal", hex: "#148085"),
+    ]
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Folder name", text: $name)
-                Picker("Color", selection: $color) {
-                    ForEach(Array(colors.enumerated()), id: \.element) { index, value in
-                        Label(["Blue", "Sage", "Amber", "Coral", "Violet", "Teal"][index],
-                              systemImage: "circle.fill")
-                            .foregroundStyle(Color(folderHex: value)).tag(value)
+                Section {
+                    TextField("Folder name", text: $name)
+                        .accessibilityIdentifier("new-folder-name")
+                }
+                Section("Color") {
+                    ForEach(colors) { choice in
+                        Button { color = choice.hex } label: {
+                            HStack(spacing: 12) {
+                                // Shapes retain their fill, unlike tinted SF Symbols
+                                // rendered as monochrome native picker/menu images.
+                                Circle()
+                                    .fill(Color(folderHex: choice.hex))
+                                    .frame(width: 24, height: 24)
+                                    .overlay {
+                                        Circle().strokeBorder(.primary.opacity(0.15), lineWidth: 1)
+                                    }
+                                    .accessibilityHidden(true)
+                                Text(choice.name).foregroundStyle(.primary)
+                                Spacer()
+                                if color == choice.hex {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Color.accentColor)
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .frame(minHeight: 32)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(choice.name)
+                        .accessibilityAddTraits(color == choice.hex ? [.isSelected] : [])
+                        .accessibilityIdentifier("folder-color-\(choice.name.lowercased())")
                     }
                 }
             }
@@ -114,7 +154,8 @@ struct NewFolderSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large], selection: $detent)
+        .presentationDragIndicator(.visible)
         .alert("Paper Trail", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }

@@ -4,12 +4,16 @@ use papertrail_core::{colors, note::sort_notes, Session, Settings, Store};
 use papertrail_storage::{Repository, SettingsFile};
 use papertrail_sync::{
     auth::LoginFlow,
-    control::{Command, Service},
+    control::{Cancellation, Command, PassphraseAction, Service},
+    Config,
 };
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
     time::{Instant, UNIX_EPOCH},
 };
 use zeroize::Zeroizing;
@@ -65,6 +69,20 @@ pub struct SyncProfile {
     pub client_id: String,
     pub scopes: String,
     pub folders: Vec<String>,
+    pub discover_auth: bool,
+}
+#[derive(uniffi::Record)]
+pub struct SyncSetup {
+    pub token: u64,
+    pub needs_confirmation: bool,
+    pub trust_description: String,
+}
+#[derive(uniffi::Record)]
+pub struct SyncStatus {
+    pub configured: bool,
+    pub signed_in: bool,
+    pub unlocked: bool,
+    pub vault_exists: Option<bool>,
 }
 #[derive(uniffi::Record)]
 pub struct SyncResult {
@@ -98,6 +116,11 @@ struct State {
     settings: Settings,
     session: Session,
 }
+struct PendingSetup {
+    token: u64,
+    baseline: Option<Config>,
+    candidate: Config,
+}
 #[derive(uniffi::Object)]
 pub struct PaperTrailClient {
     state: Mutex<State>,
@@ -105,6 +128,9 @@ pub struct PaperTrailClient {
     home: PathBuf,
     service: Service,
     login: Mutex<Option<LoginFlow>>,
+    setup_generation: AtomicU64,
+    pending_setup: Mutex<Option<PendingSetup>>,
+    operation: Mutex<Option<Cancellation>>,
 }
 
 impl PaperTrailClient {
@@ -142,6 +168,97 @@ impl PaperTrailClient {
             ));
         }
         Ok(target)
+    }
+
+    fn configuration(&self, profile: SyncProfile, previous: Option<Config>) -> Result<Config> {
+        let state = self.state()?;
+        let folders = profile
+            .folders
+            .iter()
+            .map(|p| self.folder(&state.settings, p))
+            .collect::<Result<Vec<_>>>()?;
+        let mut config = previous.unwrap_or_default();
+        for choice in self.service.folder_choices(&state.settings)? {
+            if let (Some(id), Some(path)) = (choice.id, choice.path) {
+                if folders
+                    .iter()
+                    .any(|selected| papertrail_sync::same_directory(selected, &path))
+                {
+                    config.excluded_folders.remove(&id);
+                    config.selected_folders.insert(id);
+                } else {
+                    config.selected_folders.remove(&id);
+                    config.excluded_folders.insert(id);
+                }
+            }
+        }
+        config.server = profile.server.trim().trim_end_matches('/').into();
+        config.issuer = profile.issuer.trim().into();
+        config.client_id = profile.client_id;
+        config.scopes = profile.scopes;
+        config.discover_auth = profile.discover_auth;
+        config.folders = folders;
+        config
+            .download_dir
+            .get_or_insert_with(|| self.home.join("Paper Trail Synced"));
+        Ok(config)
+    }
+
+    fn prepare_setup(
+        &self,
+        profile: SyncProfile,
+        discover: impl FnOnce(Config) -> io::Result<Config>,
+    ) -> Result<SyncSetup> {
+        let generation = self.setup_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        *self
+            .pending_setup
+            .lock()
+            .map_err(|_| error("Setup unavailable"))? = None;
+        let baseline = self.service.saved_config()?;
+        let candidate = self.configuration(profile, baseline.clone())?;
+        let candidate = if candidate.discover_auth {
+            discover(candidate)?
+        } else {
+            candidate
+        };
+        candidate.validate()?;
+        if self.service.saved_config()? != baseline {
+            return Err(error("Sync configuration changed; review setup again"));
+        }
+        let preview = SyncSetup {
+            token: generation,
+            needs_confirmation: candidate.discover_auth
+                && papertrail_sync::auth::config::needs_confirmation(baseline.as_ref(), &candidate),
+            trust_description: papertrail_sync::auth::config::trust_description(
+                baseline.as_ref(),
+                &candidate,
+            ),
+        };
+        let mut pending = self
+            .pending_setup
+            .lock()
+            .map_err(|_| error("Setup unavailable"))?;
+        if self.setup_generation.load(Ordering::Acquire) != generation {
+            return Err(error("Setup was superseded; review the current server"));
+        }
+        *pending = Some(PendingSetup {
+            token: generation,
+            baseline,
+            candidate,
+        });
+        Ok(preview)
+    }
+}
+
+fn passphrase_command(
+    action: PassphraseAction,
+    secret: Zeroizing<String>,
+    remember: bool,
+) -> Command {
+    Command::Passphrase {
+        action,
+        passphrase: secret,
+        remember,
     }
 }
 
@@ -194,6 +311,9 @@ impl PaperTrailClient {
             home: documents,
             service,
             login: Mutex::new(None),
+            setup_generation: AtomicU64::new(0),
+            pending_setup: Mutex::new(None),
+            operation: Mutex::new(None),
         }))
     }
 
@@ -505,49 +625,90 @@ impl PaperTrailClient {
     }
     pub fn sync_profile(&self) -> Result<SyncProfile> {
         let config = self.service.saved_config()?.unwrap_or_default();
+        let folders = self
+            .service
+            .folder_choices(&self.state()?.settings)?
+            .into_iter()
+            .filter(|choice| choice.selected)
+            .filter_map(|choice| choice.path)
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         Ok(SyncProfile {
             server: config.server,
             issuer: config.issuer,
             client_id: config.client_id,
             scopes: config.scopes,
-            folders: config
-                .folders
-                .iter()
-                .map(|p| p.to_string_lossy().into())
-                .collect(),
+            discover_auth: config.discover_auth,
+            folders,
         })
     }
     pub fn configure_sync(&self, profile: SyncProfile) -> Result<()> {
-        let state = self.state()?;
-        let folders = profile
-            .folders
-            .iter()
-            .map(|p| self.folder(&state.settings, p))
-            .collect::<Result<Vec<_>>>()?;
-        let mut config = self.service.saved_config()?.unwrap_or_default();
-        for choice in self.service.folder_choices(&state.settings)? {
-            if let (Some(id), Some(path)) = (choice.id, choice.path) {
-                if folders
-                    .iter()
-                    .any(|selected| papertrail_sync::same_directory(selected, &path))
-                {
-                    config.excluded_folders.remove(&id);
-                    config.selected_folders.insert(id);
-                } else {
-                    config.selected_folders.remove(&id);
-                    config.excluded_folders.insert(id);
-                }
-            }
+        if profile.discover_auth {
+            return Err(error(
+                "Discovered authentication requires setup review and confirmation",
+            ));
         }
-        config.server = profile.server;
-        config.issuer = profile.issuer;
-        config.client_id = profile.client_id;
-        config.scopes = profile.scopes;
-        config.folders = folders;
-        config
-            .download_dir
-            .get_or_insert_with(|| self.home.join("Paper Trail Synced"));
-        self.service.configure(config)?;
+        self.service
+            .configure(self.configuration(profile, self.service.saved_config()?)?)?;
+        Ok(())
+    }
+    /// Discovery never persists settings or starts authentication.
+    pub fn prepare_sync_setup(&self, profile: SyncProfile) -> Result<SyncSetup> {
+        self.prepare_setup(profile, papertrail_sync::auth::config::prepare)
+    }
+    pub fn confirm_sync_setup(&self, token: u64) -> Result<()> {
+        let mut pending = self
+            .pending_setup
+            .lock()
+            .map_err(|_| error("Setup unavailable"))?;
+        let setup = pending
+            .as_ref()
+            .filter(|setup| setup.token == token)
+            .ok_or_else(|| error("Setup expired; review the current server again"))?;
+        if self.setup_generation.load(Ordering::Acquire) != token {
+            return Err(error("Setup was superseded; review the current server"));
+        }
+        if self.service.saved_config()? != setup.baseline {
+            return Err(error("Sync configuration changed; review setup again"));
+        }
+        // Revalidate folder access after a confirmation dialog/provider change.
+        for folder in &setup.candidate.folders {
+            self.folder(&self.state()?.settings, &folder.to_string_lossy())?;
+        }
+        self.service.configure(setup.candidate.clone())?;
+        pending.take();
+        Ok(())
+    }
+    pub fn discard_sync_setup(&self, token: u64) -> Result<()> {
+        let mut pending = self
+            .pending_setup
+            .lock()
+            .map_err(|_| error("Setup unavailable"))?;
+        if pending.as_ref().is_some_and(|setup| setup.token == token) {
+            pending.take();
+        }
+        Ok(())
+    }
+    pub fn sync_status(&self) -> SyncStatus {
+        SyncStatus {
+            configured: self.service.configured(),
+            signed_in: self.service.signed_in(),
+            unlocked: self.service.unlocked(),
+            vault_exists: self.service.vault_exists(),
+        }
+    }
+    /// A control-plane signal: safe to call while the serialized worker is busy.
+    pub fn cancel_sync(&self) -> Result<()> {
+        if let Some(cancel) = self
+            .operation
+            .lock()
+            .map_err(|_| error("Sync unavailable"))?
+            .as_ref()
+        {
+            cancel.cancel();
+        }
         Ok(())
     }
     pub fn begin_login(&self) -> Result<String> {
@@ -555,6 +716,7 @@ impl PaperTrailClient {
             .service
             .saved_config()?
             .ok_or_else(|| error("Configure sync first"))?;
+        papertrail_sync::auth::config::check(&config)?;
         let (flow, url) =
             LoginFlow::begin(&config, "io.github.maennlse.paper-trail://oauth/callback")?;
         *self.login.lock().map_err(|_| error("Login unavailable"))? = Some(flow);
@@ -588,17 +750,24 @@ impl PaperTrailClient {
             .accept_remote_folder(&id, &self.state()?.settings)?;
         Ok(())
     }
-    pub fn sync_action(&self, action: SyncAction, secret: String) -> Result<SyncResult> {
+    pub fn sync_action(
+        &self,
+        action: SyncAction,
+        secret: String,
+        remember: bool,
+    ) -> Result<SyncResult> {
         let secret = Zeroizing::new(secret);
         let mut state = self.state()?;
         let command = match action {
             SyncAction::Restore => Command::Restore,
             SyncAction::Status => Command::Status,
-            SyncAction::Unlock => Command::Unlock(secret),
-            SyncAction::Create => Command::Create(secret),
+            SyncAction::Unlock => passphrase_command(PassphraseAction::Unlock, secret, remember),
+            SyncAction::Create => passphrase_command(PassphraseAction::Create, secret, remember),
             SyncAction::Recover => Command::Recover(secret),
             SyncAction::ConfirmRecovery => Command::ConfirmRecovery,
-            SyncAction::ChangePassphrase => Command::ChangePassphrase(secret),
+            SyncAction::ChangePassphrase => {
+                passphrase_command(PassphraseAction::Change, secret, remember)
+            }
             SyncAction::Lock => Command::Lock,
             SyncAction::Logout => Command::Logout,
             SyncAction::Synchronize => {
@@ -614,11 +783,21 @@ impl PaperTrailClient {
                 }
             }
         };
-        let outcome = self
+        let cancel = Cancellation::default();
+        *self
+            .operation
+            .lock()
+            .map_err(|_| error("Sync unavailable"))? = Some(cancel.clone());
+        let result = self
             .service
-            .submit(command)
+            .submit_cancellable(command, cancel)
             .recv()
-            .map_err(|_| error("Sync worker stopped"))??;
+            .map_err(|_| error("Sync worker stopped"));
+        *self
+            .operation
+            .lock()
+            .map_err(|_| error("Sync unavailable"))? = None;
+        let outcome = result??;
         state.settings = self
             .settings_file
             .load(state.settings.notes_dir.clone(), &self.home)?;
@@ -640,6 +819,188 @@ mod tests {
             root.join("Support").to_string_lossy().into(),
         )
         .unwrap()
+    }
+    fn setup_profile(app: &PaperTrailClient, discover_auth: bool) -> SyncProfile {
+        SyncProfile {
+            server: "https://sync.example".into(),
+            issuer: "https://manual.example".into(),
+            client_id: "manual-native".into(),
+            scopes: "openid".into(),
+            folders: vec![app.snapshot(None, "".into()).unwrap().default_folder],
+            discover_auth,
+        }
+    }
+    fn discovery(mut config: Config) -> io::Result<Config> {
+        config.issuer = "https://identity.example".into();
+        config.client_id = "discovered-native".into();
+        config.scopes = "openid offline_access api:notes".into();
+        config.discover_auth = true;
+        config.validate()?;
+        Ok(config)
+    }
+
+    #[test]
+    fn discovery_requires_explicit_trust_and_persists_the_discovery_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let preview = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        assert!(preview.needs_confirmation);
+        assert!(preview
+            .trust_description
+            .contains("https://identity.example"));
+        assert!(!app.sync_status().configured);
+        assert!(!app.sync_status().signed_in);
+        app.confirm_sync_setup(preview.token).unwrap();
+        let saved = app.sync_profile().unwrap();
+        assert!(saved.discover_auth);
+        assert_eq!(saved.client_id, "discovered-native");
+        let preview = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        assert!(
+            !preview.needs_confirmation,
+            "unchanged issuer is already trusted"
+        );
+    }
+
+    #[test]
+    fn cancelled_superseded_and_stale_discovery_cannot_reconfigure_sync() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let cancelled = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        app.discard_sync_setup(cancelled.token).unwrap();
+        assert!(app.confirm_sync_setup(cancelled.token).is_err());
+        assert!(!app.sync_status().configured);
+        let old = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        let new = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        assert!(app.confirm_sync_setup(old.token).is_err());
+        app.configure_sync(setup_profile(&app, false)).unwrap();
+        assert!(app.confirm_sync_setup(new.token).is_err());
+        assert_eq!(app.sync_profile().unwrap().issuer, "https://manual.example");
+    }
+
+    #[test]
+    fn manual_setup_skips_discovery_and_failed_discovery_keeps_saved_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let manual = app
+            .prepare_setup(setup_profile(&app, false), |_| {
+                panic!("Manual setup must not discover")
+            })
+            .unwrap();
+        assert!(!manual.needs_confirmation);
+        app.confirm_sync_setup(manual.token).unwrap();
+        let saved = app.service.saved_config().unwrap();
+        assert!(app
+            .prepare_setup(setup_profile(&app, true), |_| Err(io::Error::other(
+                "Discovery failed"
+            )))
+            .is_err());
+        assert!(app.service.saved_config().unwrap() == saved);
+        assert!(!app.sync_profile().unwrap().discover_auth);
+        assert!(
+            app.configure_sync(setup_profile(&app, true)).is_err(),
+            "discovery must not bypass review"
+        );
+    }
+
+    #[test]
+    fn changed_issuer_needs_new_confirmation_without_replacing_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let original = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        app.confirm_sync_setup(original.token).unwrap();
+        let saved = app.service.saved_config().unwrap().unwrap();
+        let preview = app
+            .prepare_setup(setup_profile(&app, true), |mut config| {
+                config.issuer = "https://another-identity.example".into();
+                Ok(config)
+            })
+            .unwrap();
+        assert!(preview.needs_confirmation);
+        assert!(preview.trust_description.contains("Previously accepted"));
+        assert!(app.service.saved_config().unwrap().unwrap() == saved);
+        app.confirm_sync_setup(preview.token).unwrap();
+        assert_eq!(
+            app.service.saved_config().unwrap().unwrap().folders,
+            saved.folders
+        );
+    }
+
+    #[test]
+    fn discovery_preserves_download_mappings_and_remote_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        app.configure_sync(setup_profile(&app, false)).unwrap();
+        let mut saved = app.service.saved_config().unwrap().unwrap();
+        let id = "AAAAAAAAAAAAAAAAAAAAAA".to_owned();
+        saved
+            .folder_mappings
+            .insert(id.clone(), app.home.join("remote"));
+        saved.selected_folders.insert(id.clone());
+        saved.excluded_folders.insert(id);
+        saved.auto_download = false;
+        saved.download_dir = Some(app.home.join("existing-downloads"));
+        app.service.configure(saved.clone()).unwrap();
+        let preview = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        app.confirm_sync_setup(preview.token).unwrap();
+        let actual = app.service.saved_config().unwrap().unwrap();
+        assert_eq!(actual.folder_mappings, saved.folder_mappings);
+        assert_eq!(actual.selected_folders, saved.selected_folders);
+        assert_eq!(actual.excluded_folders, saved.excluded_folders);
+        assert_eq!(actual.download_dir, saved.download_dir);
+        assert!(!actual.auto_download);
+    }
+
+    #[test]
+    fn passphrase_commands_preserve_explicit_remember_consent() {
+        for action in [
+            PassphraseAction::Create,
+            PassphraseAction::Unlock,
+            PassphraseAction::Change,
+        ] {
+            for remember in [false, true] {
+                let command = passphrase_command(
+                    action,
+                    Zeroizing::new("private passphrase".into()),
+                    remember,
+                );
+                let Command::Passphrase {
+                    remember: actual,
+                    passphrase,
+                    ..
+                } = command
+                else {
+                    panic!("Must use the shared remember-password command")
+                };
+                assert_eq!(actual, remember);
+                assert_eq!(passphrase.as_str(), "private passphrase");
+            }
+        }
+    }
+
+    #[test]
+    fn cancellation_signal_does_not_wait_for_the_library_worker() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let cancel = Cancellation::default();
+        *app.operation.lock().unwrap() = Some(cancel.clone());
+        let _state = app.state().unwrap();
+        app.cancel_sync().unwrap();
+        assert!(cancel.is_cancelled());
+        assert!(!app.sync_status().unlocked);
     }
     #[test]
     fn search_full_contents_and_preserve_metadata() {
@@ -723,6 +1084,7 @@ mod tests {
             client_id: "ios".into(),
             scopes: "openid".into(),
             folders: vec![default],
+            discover_auth: false,
         })
         .unwrap();
         drop(app);

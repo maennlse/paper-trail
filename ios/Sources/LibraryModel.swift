@@ -161,6 +161,10 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     @Published var saveFailed = false
     @Published var busy = false
     @Published var unlocked = false
+    @Published var signedIn = false
+    @Published var configured = false
+    @Published var vaultExists: Bool?
+    @Published var vaultPrompt: VaultPrompt?
     @Published var syncMessage = "Sync is optional. Local notes remain plaintext."
     @Published var recovery: String?
     @Published var storageWarning: String?
@@ -169,6 +173,10 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     private var saveTask: Task<Void, Never>?
     private var searchGeneration = 0
     private var authentication: ASWebAuthenticationSession?
+    private var pendingSyncAction: SyncAction?
+    private var automaticSyncBlocked = false
+    private var operationCancelled = false
+    private var stopGeneration = 0
 
     var colorScheme: ColorScheme? {
         switch snapshot?.appearance ?? "light" {
@@ -195,7 +203,8 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
             storageWarning = host?.bookmarkWarning
             await refresh()
             // Restoring credentials must not prevent local-only use.
-            if (try? await call({ try $0.syncProfile().server.isEmpty })) == false {
+            updateSyncStatus()
+            if configured && !automaticSyncBlocked {
                 await sync(.restore)
             }
         } catch { errorMessage = error.localizedDescription }
@@ -344,38 +353,167 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         } catch { errorMessage = error.localizedDescription }
     }
 
-    func sync(_ action: SyncAction, secret: String = "") async {
-        guard !busy else { return }
+    // These FFI status/cancellation methods only read atomics or signal a token;
+    // unlike filesystem/network operations, they must bypass the serialized worker.
+    func updateSyncStatus() {
+        guard let status = host?.client.syncStatus() else { return }
+        configured = status.configured
+        signedIn = status.signedIn
+        vaultExists = status.vaultExists
+        unlocked = status.unlocked && pendingSyncAction == nil
+    }
+
+    func cancelOperation() {
+        stopGeneration += 1
+        operationCancelled = true
+        automaticSyncBlocked = true
+        authentication?.cancel()
+        try? host?.client.cancelSync()
+        syncMessage = "Cancelling… Waiting for the current request to finish."
+    }
+
+    private func finishOperation(autoSync: Bool = false) async {
+        updateSyncStatus()
+        busy = false
+        if let pending = pendingSyncAction {
+            pendingSyncAction = nil
+            await sync(pending)
+        } else if autoSync && !automaticSyncBlocked && !operationCancelled && unlocked {
+            // Release the secret dialog before starting network work. A lock
+            // requested in between must prevent this automatic follow-up.
+            let generation = stopGeneration
+            Task {
+                guard !self.busy, !self.automaticSyncBlocked, self.pendingSyncAction == nil,
+                      self.stopGeneration == generation else { return }
+                await self.sync(.synchronize)
+            }
+        } else if operationCancelled {
+            syncMessage = "Operation cancelled. Automatic sync paused; choose Sync Now to resume."
+        }
+    }
+
+    @discardableResult
+    func sync(_ action: SyncAction, secret: String = "", remember: Bool = false) async -> Bool {
+        switch action {
+        case .lock, .logout:
+            stopGeneration += 1
+            automaticSyncBlocked = true
+            unlocked = false
+            recovery = nil
+            vaultPrompt = nil
+            if busy {
+                if case .logout? = pendingSyncAction {
+                    // A queued sign-out must not be weakened to only locking.
+                } else {
+                    pendingSyncAction = action
+                }
+                cancelOperation()
+                syncMessage = "Finishing the current operation, then locking/signing out…"
+                return false
+            }
+        case .restore:
+            guard !automaticSyncBlocked else { return false }
+        default: break
+        }
+        guard !busy else { return false }
+        switch action {
+        case .unlock, .create, .recover, .changePassphrase, .synchronize:
+            automaticSyncBlocked = false
+        default: break
+        }
+        let wasUnlocked = unlocked
         busy = true
-        defer { busy = false }
+        operationCancelled = false
+        var succeeded = false
+        var autoSync = false
         do {
-            let result = try await call { try $0.syncAction(action: action, secret: secret) }
-            syncMessage = [result.message, result.warning].compactMap { $0 }.joined(separator: "\n")
-            unlocked = result.unlocked
-            if let value = result.recovery { recovery = value }
-            if case .confirmRecovery = action { recovery = nil }
-            await refresh()
+            let result = try await call { try $0.syncAction(action: action, secret: secret, remember: remember) }
+            if pendingSyncAction == nil && !operationCancelled {
+                syncMessage = [result.message, result.warning].compactMap { $0 }.joined(separator: "\n")
+                if let value = result.recovery { recovery = value }
+                if case .confirmRecovery = action { recovery = nil }
+                autoSync = result.unlocked && !wasUnlocked && result.warning == nil
+                succeeded = true
+            }
+            if pendingSyncAction == nil && !operationCancelled { await refresh() }
+        } catch {
+            if pendingSyncAction == nil && !operationCancelled {
+                errorMessage = error.localizedDescription
+            }
+        }
+        await finishOperation(autoSync: autoSync)
+        return succeeded
+    }
+
+    func prepareConfiguration(_ profile: SyncProfile) async -> SyncSetup? {
+        guard !busy else { return nil }
+        busy = true
+        operationCancelled = false
+        var setup: SyncSetup?
+        do {
+            let result = try await call { try $0.prepareSyncSetup(profile: profile) }
+            if pendingSyncAction == nil && !operationCancelled {
+                setup = result
+            } else {
+                try await call { try $0.discardSyncSetup(token: result.token) }
+            }
+        } catch {
+            if pendingSyncAction == nil && !operationCancelled { errorMessage = error.localizedDescription }
+        }
+        await finishOperation()
+        return setup
+    }
+
+    func confirmConfiguration(_ token: UInt64) async -> Bool {
+        guard !busy else { return false }
+        busy = true
+        operationCancelled = false
+        var succeeded = false
+        do {
+            try await call { try $0.confirmSyncSetup(token: token) }
+            syncMessage = "Configuration saved. Sign in/unlock if needed; selected folders will sync."
+            succeeded = true
         } catch { errorMessage = error.localizedDescription }
+        await finishOperation()
+        return succeeded
     }
 
     func signIn() async {
         guard !busy else { return }
+        let generation = stopGeneration
         busy = true
+        operationCancelled = false
         do {
             let value = try await call { try $0.beginLogin() }
+            guard pendingSyncAction == nil, !operationCancelled else {
+                await finishOperation()
+                return
+            }
             guard let url = URL(string: value) else { throw CocoaError(.coderInvalidValue) }
             let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "io.github.maennlse.paper-trail") { [weak self] callback, error in
                 Task { @MainActor in
                     guard let self else { return }
-                    defer { self.busy = false; self.authentication = nil }
-                    if let callback {
+                    var succeeded = false
+                    if let callback, self.pendingSyncAction == nil, !self.operationCancelled {
                         do {
                             try await self.call { try $0.completeLogin(callback: callback.absoluteString) }
                             self.syncMessage = "Signed in. Unlock or create your encrypted vault."
-                        } catch { self.errorMessage = error.localizedDescription }
+                            succeeded = true
+                        } catch {
+                            if self.pendingSyncAction == nil && !self.operationCancelled {
+                                self.errorMessage = error.localizedDescription
+                            }
+                        }
                     } else if let error,
+                              self.pendingSyncAction == nil, !self.operationCancelled,
                               (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin {
                         self.errorMessage = error.localizedDescription
+                    }
+                    self.authentication = nil
+                    let shouldPrompt = succeeded && self.pendingSyncAction == nil && !self.operationCancelled
+                    await self.finishOperation()
+                    if shouldPrompt && !self.unlocked && self.signedIn && self.stopGeneration == generation {
+                        self.vaultPrompt = self.vaultExists == false ? .create : .unlock
                     }
                 }
             }
@@ -384,8 +522,9 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
             authentication = session
             if !session.start() { throw CocoaError(.userCancelled) }
         } catch {
-            busy = false
-            errorMessage = error.localizedDescription
+            if pendingSyncAction == nil && !operationCancelled { errorMessage = error.localizedDescription }
+            authentication = nil
+            await finishOperation()
         }
     }
 

@@ -77,12 +77,6 @@ struct NoteListView: View {
                         .accessibilityLabel("Show folders")
                         .accessibilityIdentifier("folder-toggle")
                     }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button { showSync = true } label: {
-                            Image(systemName: model.unlocked ? "lock.open" : "lock.fill")
-                        }
-                        .accessibilityLabel(model.unlocked ? "Sync vault unlocked" : "Sync vault locked or not configured")
-                    }
                 }
                 .overlay(alignment: .bottomTrailing) {
                     Button { Task { await model.compose() } } label: {
