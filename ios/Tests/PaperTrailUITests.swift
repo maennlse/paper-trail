@@ -260,13 +260,16 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertEqual(numbers.value as? String, "1")
         XCTAssertEqual(wrap.value as? String, "1")
         XCTAssertEqual(highlight.value as? String, "1")
-        numbers.tap()
-        wrap.tap()
-        highlight.tap()
+        setSwitch(numbers, enabled: false)
+        setSwitch(wrap, enabled: false)
+        setSwitch(highlight, enabled: false)
         app.buttons["editor-font-choice"].tap()
         app.buttons["Monospaced"].tap()
         XCTAssertTrue(app.staticTexts["editor-font-preview"].exists)
         app.navigationBars["Preferences"].buttons["Done"].tap()
+        let saved = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: app.navigationBars["Preferences"])
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
         app.terminate()
         app.launch()
         XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
@@ -280,22 +283,43 @@ final class PaperTrailUITests: XCTestCase {
                       (fontChoice.value as? String)?.contains("Monospaced") == true)
         fontChoice.tap()
         app.buttons["Custom Font"].tap()
-        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
-        app.buttons["Cancel"].tap()
+        let cancelFont = app.buttons.matching(
+            NSPredicate(format: "label IN %@", ["Cancel", "Close", "close"])).firstMatch
+        XCTAssertTrue(cancelFont.waitForExistence(timeout: 10))
+        cancelFont.tap()
         XCTAssertTrue(fontChoice.waitForExistence(timeout: 5))
-        XCTAssertTrue(fontChoice.label.contains("Monospaced") ||
-                      (fontChoice.value as? String)?.contains("Monospaced") == true)
+        let cancelled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fontChoice.label.contains("Monospaced") ||
+                (fontChoice.value as? String)?.contains("Monospaced") == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [cancelled], timeout: 5), .completed)
         fontChoice.tap()
         app.buttons["System Default"].tap()
-        numbers.tap()
-        wrap.tap()
-        highlight.tap()
+        setSwitch(numbers, enabled: true)
+        setSwitch(wrap, enabled: true)
+        setSwitch(highlight, enabled: true)
         app.navigationBars["Preferences"].buttons["Done"].tap()
+        let dismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: app.navigationBars["Preferences"])
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 10), .completed)
         app.staticTexts["weekend.md"].tap()
         let editor = app.scrollViews["note-editor"].textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertEqual(editor.value as? String,
                        "Weekend plans\nA long walk, a good book, and time to write.")
+    }
+
+    private func setSwitch(_ control: XCUIElement, enabled: Bool,
+                           file: StaticString = #filePath, line: UInt = #line) {
+        let expected = enabled ? "1" : "0"
+        if control.value as? String != expected {
+            // SwiftUI exposes the whole form row as a switch. Its center can
+            // be empty space; target the actual trailing UISwitch instead.
+            control.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        let changed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", expected), object: control)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed, file: file, line: line)
     }
 
     private func fixtureApp() -> XCUIApplication {
