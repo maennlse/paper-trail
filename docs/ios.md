@@ -123,6 +123,19 @@ executable archives and cannot be built on the Linux host.
   monochrome-tinted picker symbols. The existing saved color tokens are unchanged.
 - Light appearance is the first-run default; light/dark/system and font size are
   configurable.
+- Preferences follows GTK's **Show Line Numbers**, **Wrap Text**, and
+  **Highlight Current Line** editor controls. The last option is the former
+  “ruler” setting, not a vertical column guide. These controls use the same Rust
+  settings and defaults as GTK.
+- **Editor Font** offers System Default, Monospaced, and Custom Font through
+  the native iOS font picker, with face selection, a preview, and font-size
+  scaling that respects Dynamic Type. iOS PostScript font names are saved in
+  `ios_custom_font`, separately from GTK's Pango `custom_font` description.
+  A missing custom font falls back safely to the system font without discarding
+  the saved name. Existing GTK font choices are not overwritten.
+- Editor display changes update Runestone's view/theme without replacing its
+  text or undo stack. Settings are committed together when **Done** is pressed
+  and restored after relaunch.
 
 ## Rust API audit and boundary
 

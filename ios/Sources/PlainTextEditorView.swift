@@ -26,7 +26,8 @@ struct PlainTextEditorView: View {
                 RunestoneEditor(
                     text: Binding(get: { model.editorText }, set: { model.edited($0) }),
                     fontScale: model.snapshot?.fontScale ?? 1,
-                    findRequest: findRequest
+                    findRequest: findRequest,
+                    preferences: model.snapshot?.editorPreferences
                 )
                 HStack(spacing: 6) {
                     if model.editorSave.phase == .saving { ProgressView().controlSize(.mini) }

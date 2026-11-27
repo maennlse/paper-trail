@@ -472,11 +472,12 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         } catch { errorMessage = error.localizedDescription }
     }
 
-    func preferences(scale: Double, appearance: String) async {
+    func preferences(scale: Double, appearance: String, editor: EditorPreferences) async -> Bool {
         do {
-            try await call { try $0.preferences(fontScale: scale, appearance: appearance) }
+            try await call { try $0.preferences(fontScale: scale, appearance: appearance, editor: editor) }
             await refresh()
-        } catch { errorMessage = error.localizedDescription }
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
     }
 
     // These FFI status/cancellation methods only read atomics or signal a token;

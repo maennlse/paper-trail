@@ -54,6 +54,15 @@ pub struct NoteInfo {
     pub color: String,
     pub pinned: bool,
 }
+#[derive(Clone, uniffi::Record)]
+pub struct EditorPreferences {
+    pub show_line_numbers: bool,
+    pub wrap_text: bool,
+    pub highlight_current_line: bool,
+    pub use_monospace: bool,
+    pub custom_font: String,
+}
+
 #[derive(uniffi::Record)]
 pub struct LibrarySnapshot {
     pub folders: Vec<FolderInfo>,
@@ -61,6 +70,7 @@ pub struct LibrarySnapshot {
     pub default_folder: String,
     pub font_scale: f64,
     pub appearance: String,
+    pub editor_preferences: EditorPreferences,
     pub unavailable_folders: Vec<String>,
 }
 #[derive(uniffi::Record)]
@@ -434,6 +444,13 @@ impl PaperTrailClient {
             default_folder: settings.notes_dir.to_string_lossy().into(),
             font_scale: settings.font_scale,
             appearance: settings.theme_mode.clone(),
+            editor_preferences: EditorPreferences {
+                show_line_numbers: settings.show_line_numbers,
+                wrap_text: settings.wrap_text,
+                highlight_current_line: settings.highlight_current_line,
+                use_monospace: settings.use_monospace,
+                custom_font: settings.ios_custom_font.clone(),
+            },
             unavailable_folders,
         })
     }
@@ -673,14 +690,27 @@ impl PaperTrailClient {
         updated.remove_folder(&path);
         self.persist(&mut state, updated)
     }
-    pub fn preferences(&self, font_scale: f64, appearance: String) -> Result<()> {
+    pub fn preferences(
+        &self,
+        font_scale: f64,
+        appearance: String,
+        editor: EditorPreferences,
+    ) -> Result<()> {
         if !font_scale.is_finite() || !["light", "dark", "system"].contains(&appearance.as_str()) {
             return Err(error("Invalid appearance settings"));
+        }
+        if editor.custom_font.len() > 256 || editor.custom_font.chars().any(char::is_control) {
+            return Err(error("Invalid iOS font name"));
         }
         let mut state = self.state()?;
         let mut updated = state.settings.clone();
         updated.font_scale = font_scale.clamp(0.7, 2.5);
         updated.theme_mode = appearance;
+        updated.show_line_numbers = editor.show_line_numbers;
+        updated.wrap_text = editor.wrap_text;
+        updated.highlight_current_line = editor.highlight_current_line;
+        updated.use_monospace = editor.use_monospace;
+        updated.ios_custom_font = editor.custom_font.trim().into();
         self.persist(&mut state, updated)
     }
     pub fn sync_profile(&self) -> Result<SyncProfile> {
@@ -1360,6 +1390,74 @@ mod tests {
         let outside = root.path().join("outside");
         fs::write(&outside, "Private").unwrap();
         assert!(app.export_note(outside.to_string_lossy().into()).is_err());
+    }
+
+    #[test]
+    fn editor_preferences_match_gtk_defaults_and_preserve_desktop_fonts() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let initial = app.snapshot(None, "".into()).unwrap().editor_preferences;
+        assert!(initial.show_line_numbers);
+        assert!(initial.wrap_text);
+        assert!(initial.highlight_current_line);
+        assert!(!initial.use_monospace);
+        assert!(initial.custom_font.is_empty());
+        {
+            let mut state = app.state().unwrap();
+            let mut updated = state.settings.clone();
+            updated.use_custom_font = true;
+            updated.custom_font = "Liberation Mono Bold 14".into();
+            app.persist(&mut state, updated).unwrap();
+        }
+        app.preferences(
+            1.3,
+            "dark".into(),
+            EditorPreferences {
+                show_line_numbers: false,
+                wrap_text: false,
+                highlight_current_line: false,
+                use_monospace: false,
+                custom_font: "Menlo-Regular".into(),
+            },
+        )
+        .unwrap();
+        let restored = client(root.path());
+        let snapshot = restored.snapshot(None, "".into()).unwrap();
+        assert_eq!(snapshot.font_scale, 1.3);
+        assert_eq!(snapshot.appearance, "dark");
+        assert!(!snapshot.editor_preferences.show_line_numbers);
+        assert!(!snapshot.editor_preferences.wrap_text);
+        assert!(!snapshot.editor_preferences.highlight_current_line);
+        assert_eq!(snapshot.editor_preferences.custom_font, "Menlo-Regular");
+        let state = restored.state().unwrap();
+        assert!(state.settings.use_custom_font);
+        assert_eq!(state.settings.custom_font, "Liberation Mono Bold 14");
+        drop(state);
+        let mut editor = snapshot.editor_preferences;
+        editor.custom_font.clear();
+        editor.use_monospace = true;
+        app.preferences(1.0, "system".into(), editor).unwrap();
+        let snapshot = client(root.path()).snapshot(None, "".into()).unwrap();
+        assert!(snapshot.editor_preferences.use_monospace);
+        assert!(snapshot.editor_preferences.custom_font.is_empty());
+    }
+
+    #[test]
+    fn invalid_editor_preferences_never_partially_replace_saved_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let editor = app.snapshot(None, "".into()).unwrap().editor_preferences;
+        let saved = fs::read(&app.settings_file.path).unwrap();
+        for invalid in ["Bad\nFont".to_owned(), "x".repeat(257)] {
+            let mut candidate = editor.clone();
+            candidate.custom_font = invalid;
+            assert!(app.preferences(1.5, "dark".into(), candidate).is_err());
+        }
+        assert!(app
+            .preferences(f64::NAN, "dark".into(), editor.clone())
+            .is_err());
+        assert!(app.preferences(1.0, "invalid".into(), editor).is_err());
+        assert_eq!(fs::read(&app.settings_file.path).unwrap(), saved);
     }
 
     #[cfg(unix)]

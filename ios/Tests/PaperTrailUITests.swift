@@ -249,6 +249,55 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Saved locally"].exists)
     }
 
+    func testEditorPreferencesPersistAndKeepNoteContents() {
+        let app = fixtureApp()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        app.buttons["preferences"].tap()
+        let numbers = app.switches["editor-line-numbers"]
+        let wrap = app.switches["editor-wrap-text"]
+        let highlight = app.switches["editor-highlight-current-line"]
+        XCTAssertTrue(numbers.waitForExistence(timeout: 5))
+        XCTAssertEqual(numbers.value as? String, "1")
+        XCTAssertEqual(wrap.value as? String, "1")
+        XCTAssertEqual(highlight.value as? String, "1")
+        numbers.tap()
+        wrap.tap()
+        highlight.tap()
+        app.buttons["editor-font-choice"].tap()
+        app.buttons["Monospaced"].tap()
+        XCTAssertTrue(app.staticTexts["editor-font-preview"].exists)
+        app.navigationBars["Preferences"].buttons["Done"].tap()
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        app.buttons["preferences"].tap()
+        XCTAssertTrue(numbers.waitForExistence(timeout: 5))
+        XCTAssertEqual(numbers.value as? String, "0")
+        XCTAssertEqual(wrap.value as? String, "0")
+        XCTAssertEqual(highlight.value as? String, "0")
+        let fontChoice = app.buttons["editor-font-choice"]
+        XCTAssertTrue(fontChoice.label.contains("Monospaced") ||
+                      (fontChoice.value as? String)?.contains("Monospaced") == true)
+        fontChoice.tap()
+        app.buttons["Custom Font"].tap()
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(fontChoice.waitForExistence(timeout: 5))
+        XCTAssertTrue(fontChoice.label.contains("Monospaced") ||
+                      (fontChoice.value as? String)?.contains("Monospaced") == true)
+        fontChoice.tap()
+        app.buttons["System Default"].tap()
+        numbers.tap()
+        wrap.tap()
+        highlight.tap()
+        app.navigationBars["Preferences"].buttons["Done"].tap()
+        app.staticTexts["weekend.md"].tap()
+        let editor = app.scrollViews["note-editor"].textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertEqual(editor.value as? String,
+                       "Weekend plans\nA long walk, a good book, and time to write.")
+    }
+
     private func fixtureApp() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["PAPERTRAIL_TEST_PROFILE"] = UUID().uuidString
