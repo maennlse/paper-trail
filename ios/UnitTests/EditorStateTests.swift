@@ -75,7 +75,7 @@ final class EditorStateTests: XCTestCase {
         var export: NoteExport? = try NoteExport(filename: "draft.md", data: bytes)
         let url = try XCTUnwrap(export?.url)
         XCTAssertEqual(url.lastPathComponent, "draft.md")
-        withExtendedLifetime(export) {
+        try withExtendedLifetime(export) {
             XCTAssertEqual(try Data(contentsOf: url), bytes)
         }
         let other = try NoteExport(filename: "draft.md", data: Data([0, 255, 12]))
