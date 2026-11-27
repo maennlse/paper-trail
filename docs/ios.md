@@ -236,7 +236,8 @@ with isolated demonstration files. It never reads real notes or bookmarks.
 The macOS workflow exports its XCTest attachments as the
 `paper-trail-ios-screenshots` artifact, including on successful runs.
 Download it from **Actions → Unsigned iOS**; its manifest identifies the
-`ios-library` and `ios-editor` PNG attachments. Review the captures, copy the
-library image to `data/screenshots/ios-library.png`, and embed it alongside the
-desktop/TUI screenshots in `README.md`. Do not substitute a mockup for a real
+`ios-library` and `ios-editor` PNG attachments. The README includes real iPhone 16
+Pro simulator captures from this test. To refresh them, review the new captures
+and copy them to `data/screenshots/ios-library.png` and
+`data/screenshots/ios-editor.png`. Do not substitute a mockup for a real
 simulator/device capture.

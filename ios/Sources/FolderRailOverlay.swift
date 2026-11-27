@@ -22,6 +22,17 @@ struct FolderRailOverlay: View {
                             model.select(folder.path)
                         }
                         .accessibilityLabel(folder.name)
+                        // Attach the menu before the drag interaction so a lift
+                        // can become a drag instead of being consumed by the menu.
+                        .contextMenu {
+                            Button("Edit Folder…", systemImage: "pencil") { editFolder(folder) }
+                            Button("Move Up", systemImage: "arrow.up") {
+                                Task { await model.moveFolder(folder.path, by: -1) }
+                            }.disabled(model.folders.first?.path == folder.path)
+                            Button("Move Down", systemImage: "arrow.down") {
+                                Task { await model.moveFolder(folder.path, by: 1) }
+                            }.disabled(model.folders.last?.path == folder.path)
+                        }
                         .draggable(folder.path)
                         .dropDestination(for: String.self) { paths, location in
                             guard paths.count == 1, let source = paths.first,
@@ -41,15 +52,6 @@ struct FolderRailOverlay: View {
                                     .stroke(Color.accentColor, lineWidth: 2)
                                     .allowsHitTesting(false)
                             }
-                        }
-                        .contextMenu {
-                            Button("Edit Folder…", systemImage: "pencil") { editFolder(folder) }
-                            Button("Move Up", systemImage: "arrow.up") {
-                                Task { await model.moveFolder(folder.path, by: -1) }
-                            }.disabled(model.folders.first?.path == folder.path)
-                            Button("Move Down", systemImage: "arrow.down") {
-                                Task { await model.moveFolder(folder.path, by: 1) }
-                            }.disabled(model.folders.last?.path == folder.path)
                         }
                         .accessibilityAction(named: "Edit Folder") { editFolder(folder) }
                         .accessibilityAction(named: "Move Up") {

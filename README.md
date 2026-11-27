@@ -52,6 +52,8 @@ Screenshots show the actual applications with isolated demonstration notes.
 
 ### Native iOS client · experimental
 
+<img src="data/screenshots/ios-library.png" alt="Paper Trail on iPhone showing colored folders and pinned notes" width="280"> <img src="data/screenshots/ios-editor.png" alt="Paper Trail Runestone editor on iPhone with find, share, and local-save status" width="280">
+
 The iOS app uses a Runestone editor with find, a colored folder rail, pinned notes,
 native swipe actions, note moves, and native sharing. Separate local-save and sync
 feedback keeps persistence status clear. Real simulator captures are exported by the

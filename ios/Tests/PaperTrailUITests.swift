@@ -149,8 +149,9 @@ final class PaperTrailUITests: XCTestCase {
         let target = app.buttons["Work Notes"]
         XCTAssertTrue(source.waitForExistence(timeout: 5))
         source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 1, thenDragTo: target.coordinate(
-                withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
+            .press(forDuration: 0.5, thenDragTo: target.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)),
+                   withVelocity: .slow, thenHoldForDuration: 0.5)
         let reordered = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in source.frame.minY < target.frame.minY }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [reordered], timeout: 10), .completed)
