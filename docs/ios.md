@@ -75,6 +75,8 @@ executable archives and cannot be built on the Linux host.
   regular files, regardless of extension. Symlinks are excluded. Search checks
   filenames and full text across those folders. Non-UTF-8/NUL-containing files
   remain visible but cannot be opened in the editor, preventing lossy writes.
+- Note-list search is a native collapsible navigation-bar search field: pull
+  down on the list to reveal it. Queries still search full contents across folders.
 - The 76pt rail overlays a dimmed list without reflow. Open it with the sidebar
   button or a rightward left-edge swipe; dismiss with a scrim tap or left swipe
   on the scrim. Folder gestures are reserved for native drag and drop.
@@ -90,6 +92,24 @@ executable archives and cannot be built on the Linux host.
 - Runestone provides the plain-text editor through a SwiftUI/UIKit bridge, with
   wrapping, native selection/undo, Dynamic Type, and the existing autosave and
   conflict protections. Its Swift package is pinned in `ios/project.yml`.
+- The editor header shows the note's first-line title above its filename, using
+  the same Rust title/fallback rules as GTK. Titles update while editing.
+  **Done** or a rightward swipe from the left edge uses the same save-before-close
+  path; failed saves keep the editor and draft open. The rest of the canvas
+  remains available for text selection and horizontal scrolling.
+- Syntax highlighting uses pinned TreeSitterLanguages 0.1.10 grammars compatible
+  with Runestone 0.5.2. Filename detection covers Markdown, JSON, Python,
+  Rust, JavaScript, Swift, TOML, and YAML, including uppercase extensions.
+  The editor's **Language** button offers Automatic, Plain Text, and those
+  bundled languages. Overrides use shared `note_language_overrides` metadata
+  and survive rename/move/sync; GTK also recognizes explicit Plain Text.
+  Unavailable desktop languages remain stored unchanged and display as plain
+  text on iOS, with an explanation in the language chooser.
+- Highlight colors adapt to light/dark appearance. Markdown inline syntax and
+  fenced blocks in bundled languages are highlighted, not rendered.
+  Syntax changes preserve the buffer, selection, and undo history; they do not
+  enable bracket insertion, grammar-driven indentation, or other code-editing
+  features.
 - **Find** in the editor toolbar (or Command-F on a hardware keyboard) opens
   Runestone's native find navigator with highlighted matches and next/previous
   navigation. Finding text does not change the note or reset its undo history.
@@ -101,6 +121,8 @@ executable archives and cannot be built on the Linux host.
   synchronization activity, actionable failures, and the last successful sync.
   The timestamp is device/profile-local and cleared on sign-out or confirmed
   reconfiguration. Failed, cancelled, or warning-bearing runs do not advance it.
+  Ages show **Just now**, then minutes, hours, or days; they refresh at minute
+  intervals, with no seconds display.
 - Long-press a note and choose **Move…** to select another registered folder.
   Contents, pins, and sync identity are preserved; filename collisions choose a
   unique name rather than overwriting either note. Open notes must be closed
@@ -115,8 +137,10 @@ executable archives and cannot be built on the Linux host.
   Editing changes its display label and color only, not its directory path,
   Files/iCloud bookmark, ordering, note pins, or sync mappings. Labels/colors can
   also be edited while a registered folder is temporarily unavailable.
-- Preferences live in the upper-right header; New Note uses the native bottom
-  toolbar. The rail's reload-style Sync menu offers Sync Now and Sync Settings;
+- Preferences live in the upper-right header; New Note floats at the bottom-right
+  above the safe area, without reserving a full-width toolbar. List content has
+  enough bottom scroll padding to bring the final note clear of the button.
+  The rail's reload-style Sync menu offers Sync Now and Sync Settings;
   the icon rotates during synchronization (unless Reduce Motion is enabled).
 - New folders have named color
   swatches and a selection checkmark in native form rows, rather than
@@ -136,11 +160,15 @@ executable archives and cannot be built on the Linux host.
 - Editor display changes update Runestone's view/theme without replacing its
   text or undo stack. Settings are committed together when **Done** is pressed
   and restored after relaunch.
+- The **About** section shows the running app's bundle version/build and a native
+  link to the GitHub source repository; the displayed version is not hard-coded.
 
 ## Rust API audit and boundary
 
 - Titles, full-content search, sorting: `Note::from_text`, `Note::matches`,
   `note::sort_notes`.
+- Portable native syntax catalog/detection: `syntax::{LANGUAGES,by_id,detect}`;
+  per-note language choices use the existing `Settings::note_language_overrides`.
 - Unsaved edits, debounce, conflict-safe saves: `Session::{edit,flush,open,close}`,
   `Store::save_if_unchanged`.
 - Listing and file CRUD:
@@ -230,10 +258,11 @@ python3 -m unittest discover -s build-aux -p test_build_ios.py
 ```
 
 The macOS workflow additionally compiles generated Swift, builds unsigned device
-and simulator apps, and runs isolated UI tests plus Foundation-only state/export
-unit tests (`PaperTrailStateTests`). Coverage includes stale-save completions,
+and simulator apps, and runs isolated UI tests plus state/export and Runestone
+grammar unit tests (`PaperTrailStateTests`). Coverage includes stale-save completions,
 retry/note-switch state, sync timestamp rules, export bytes/cleanup, moves,
-folder editing, find/share preparation, navigation, and persisted text edits.
+folder editing, find/share preparation, syntax choices and parsing, pull-down
+search, swipe-back, About, navigation, and persisted text edits.
 Tests never use the user's notes or bookmarks.
 Before distribution, manually test Files/iCloud provider availability, revoked
 bookmarks, concurrent external edits, OAuth and recovery against a real server,

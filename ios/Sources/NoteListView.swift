@@ -27,7 +27,6 @@ struct NoteListView: View {
         ZStack(alignment: .leading) {
             NavigationStack {
                 VStack(spacing: 0) {
-                    searchField
                     if model.configured || model.syncFeedback.failure != nil {
                         SyncFeedbackView(settings: { showSync = true })
                             .padding(.horizontal, 16).padding(.bottom, 8)
@@ -54,6 +53,12 @@ struct NoteListView: View {
                         }
                     }
                     .listStyle(.insetGrouped)
+                    .contentMargins(.bottom, 88, for: .scrollContent)
+                    .searchable(text: $model.query,
+                                placement: .navigationBarDrawer(displayMode: .automatic),
+                                prompt: "Search across folders")
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                     .overlay {
                         if model.notes.isEmpty {
                             ContentUnavailableView(
@@ -83,17 +88,20 @@ struct NoteListView: View {
                         .accessibilityLabel("Preferences")
                         .accessibilityIdentifier("preferences")
                     }
-                    ToolbarItemGroup(placement: .bottomBar) {
-                        Spacer()
-                        Button { Task { await model.compose() } } label: {
-                            Image(systemName: "square.and.pencil")
-                                .font(.title2)
-                                .frame(minWidth: 44, minHeight: 44)
-                        }
-                        .accessibilityLabel("New note")
-                        .accessibilityIdentifier("compose")
-                        .disabled(model.snapshot == nil)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    Button { Task { await model.compose() } } label: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 56, height: 56, alignment: .center)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
+                            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
                     }
+                    .accessibilityLabel("New note")
+                    .accessibilityIdentifier("compose")
+                    .disabled(model.snapshot == nil)
+                    .padding(20)
                 }
             }
             .accessibilityHidden(model.railOpen)
@@ -176,25 +184,6 @@ struct NoteListView: View {
                 }
             }
         }
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search across folders", text: $model.query)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityIdentifier("search")
-            if !model.query.isEmpty {
-                Button { model.query = "" } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }.accessibilityLabel("Clear search")
-            }
-        }
-        .padding(10)
-        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
     }
 
     private func noteButton(_ note: NoteInfo) -> some View {

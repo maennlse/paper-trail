@@ -309,6 +309,74 @@ final class PaperTrailUITests: XCTestCase {
                        "Weekend plans\nA long walk, a good book, and time to write.")
     }
 
+    func testSyntaxChoiceHeaderAndSwipeBackPreserveNote() {
+        let app = fixtureApp()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        app.staticTexts["weekend.md"].tap()
+        let editor = app.scrollViews["note-editor"].textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let original = editor.value as? String
+        XCTAssertEqual(app.staticTexts["editor-note-title"].label, "Weekend plans")
+        XCTAssertEqual(app.staticTexts["editor-note-filename"].label, "weekend.md")
+        XCTAssertTrue(app.buttons["note-language"].label.contains("Markdown"))
+        app.buttons["note-language"].tap()
+        app.buttons["note-language-plain"].tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["note-language"].label.contains("Plain Text"))
+        XCTAssertEqual(editor.value as? String, original)
+        editor.tap()
+        editor.typeText("\nSaved by edge swipe")
+        let edited = editor.value as? String
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo:
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)))
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 10))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        app.staticTexts["weekend.md"].tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["note-language"].label.contains("Plain Text"))
+        app.buttons["note-language"].tap()
+        app.buttons["note-language-automatic"].tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["note-language"].label.contains("Markdown"))
+        XCTAssertEqual(editor.value as? String, edited)
+    }
+
+    func testPullDownSearchAndFloatingCompose() {
+        let app = fixtureApp()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["compose"].isHittable)
+        XCTAssertEqual(app.toolbars.buttons.matching(identifier: "compose").count, 0)
+        let search = app.searchFields["Search across folders"]
+        XCTAssertFalse(search.exists && search.isHittable)
+        app.collectionViews.firstMatch.swipeDown()
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("long walk")
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 5))
+        let filtered = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: app.staticTexts["ideas.txt"])
+        XCTAssertEqual(XCTWaiter.wait(for: [filtered], timeout: 5), .completed)
+    }
+
+    func testAboutShowsVersionAndSourceLink() {
+        let app = fixtureApp()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        app.buttons["preferences"].tap()
+        let version = app.descendants(matching: .any).matching(identifier: "about-version").firstMatch
+        let source = app.descendants(matching: .any).matching(identifier: "about-source").firstMatch
+        for _ in 0..<8 {
+            if source.exists && source.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(version.exists)
+        XCTAssertTrue(source.exists)
+        XCTAssertTrue(source.isHittable)
+        XCTAssertFalse(version.label.contains("Unknown"))
+    }
+
     private func setSwitch(_ control: XCUIElement, enabled: Bool,
                            file: StaticString = #filePath, line: UInt = #line) {
         let expected = enabled ? "1" : "0"

@@ -69,6 +69,15 @@ struct PreferencesSheet: View {
                     Text("Encryption protects sync data, not local note files. Vault locking does not hide notes stored on this device.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Section("About") {
+                    LabeledContent("Version", value: AppVersion.description(info: Bundle.main.infoDictionary ?? [:]))
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("about-version")
+                    Link(destination: AppVersion.sourceURL) {
+                        Label("Source Code on GitHub", systemImage: "link")
+                    }
+                    .accessibilityIdentifier("about-source")
+                }
             }
             .disabled(saving)
             .navigationTitle("Preferences")

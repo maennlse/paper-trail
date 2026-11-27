@@ -55,6 +55,20 @@ pub struct NoteInfo {
     pub pinned: bool,
 }
 #[derive(Clone, uniffi::Record)]
+pub struct SyntaxLanguage {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct NoteSyntax {
+    pub override_id: Option<String>,
+    pub language_id: String,
+    pub name: String,
+    pub unsupported: bool,
+}
+
+#[derive(Clone, uniffi::Record)]
 pub struct EditorPreferences {
     pub show_line_numbers: bool,
     pub wrap_text: bool,
@@ -476,6 +490,70 @@ impl PaperTrailClient {
     pub fn edit(&self, text: String) -> Result<()> {
         self.state()?.session.edit(text, Instant::now());
         Ok(())
+    }
+
+    pub fn editor_title(&self) -> Result<String> {
+        let state = self.state()?;
+        let note = state
+            .session
+            .current
+            .as_ref()
+            .ok_or_else(|| error("No open note"))?;
+        Ok(papertrail_core::note::summarize(&note.path, &state.session.text).0)
+    }
+
+    pub fn syntax_languages(&self) -> Vec<SyntaxLanguage> {
+        papertrail_core::syntax::LANGUAGES
+            .iter()
+            .map(|language| SyntaxLanguage {
+                id: language.id.into(),
+                name: language.name.into(),
+            })
+            .collect()
+    }
+
+    pub fn note_syntax(&self, path: String) -> Result<NoteSyntax> {
+        let state = self.state()?;
+        let path = self.note(&state.settings, &path)?;
+        let override_id = state.settings.note_language_overrides.get(&path).cloned();
+        let chosen = override_id
+            .as_deref()
+            .and_then(papertrail_core::syntax::by_id);
+        // An unavailable desktop grammar must not silently change its stored
+        // override, or enable a different grammar based on the extension.
+        let unsupported = override_id.is_some() && chosen.is_none();
+        let language = chosen.unwrap_or_else(|| {
+            if unsupported {
+                &papertrail_core::syntax::LANGUAGES[0]
+            } else {
+                papertrail_core::syntax::detect(&path)
+            }
+        });
+        Ok(NoteSyntax {
+            override_id,
+            language_id: language.id.into(),
+            name: language.name.into(),
+            unsupported,
+        })
+    }
+
+    pub fn set_note_language(&self, path: String, language: Option<String>) -> Result<()> {
+        let language = language
+            .map(|id| {
+                papertrail_core::syntax::by_id(&id)
+                    .map(|language| language.id.to_owned())
+                    .ok_or_else(|| error("This language is not bundled on iOS"))
+            })
+            .transpose()?;
+        let mut state = self.state()?;
+        let path = self.note(&state.settings, &path)?;
+        let mut updated = state.settings.clone();
+        if let Some(language) = language {
+            updated.note_language_overrides.insert(path, language);
+        } else {
+            updated.note_language_overrides.remove(&path);
+        }
+        self.persist(&mut state, updated)
     }
     pub fn save(&self) -> Result<()> {
         let mut state = self.state()?;
@@ -1458,6 +1536,93 @@ mod tests {
             .is_err());
         assert!(app.preferences(1.0, "invalid".into(), editor).is_err());
         assert_eq!(fs::read(&app.settings_file.path).unwrap(), saved);
+    }
+
+    #[test]
+    fn syntax_choices_preserve_contents_dirty_edits_and_shared_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        let path = app.rename_note(path, "Example.MD".into()).unwrap();
+        fs::write(&path, "# Heading\n**Saved contents**").unwrap();
+        assert_eq!(
+            app.note_syntax(path.clone()).unwrap().language_id,
+            "markdown"
+        );
+        app.open_note(path.clone()).unwrap();
+        app.edit("# Unsaved heading\n`code`".into()).unwrap();
+        assert_eq!(app.editor_title().unwrap(), "# Unsaved heading");
+        app.set_note_language(path.clone(), Some("plain".into()))
+            .unwrap();
+        let syntax = app.note_syntax(path.clone()).unwrap();
+        assert_eq!(syntax.language_id, "plain");
+        assert_eq!(syntax.override_id.as_deref(), Some("plain"));
+        assert!(!syntax.unsupported);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# Heading\n**Saved contents**"
+        );
+        assert!(app.state().unwrap().session.is_dirty());
+        assert_eq!(
+            app.state().unwrap().session.text,
+            "# Unsaved heading\n`code`"
+        );
+        app.close_note().unwrap();
+        let restarted = client(root.path());
+        assert_eq!(
+            restarted.note_syntax(path.clone()).unwrap().language_id,
+            "plain"
+        );
+        let path = restarted.rename_note(path, "renamed.md".into()).unwrap();
+        assert_eq!(
+            restarted.note_syntax(path.clone()).unwrap().language_id,
+            "plain"
+        );
+        restarted.set_note_language(path.clone(), None).unwrap();
+        assert_eq!(
+            restarted.note_syntax(path.clone()).unwrap().language_id,
+            "markdown"
+        );
+        assert!(restarted.note_syntax(path).unwrap().override_id.is_none());
+        assert_eq!(
+            restarted.syntax_languages().len(),
+            papertrail_core::syntax::LANGUAGES.len()
+        );
+    }
+
+    #[test]
+    fn unsupported_synced_syntax_is_preserved_and_new_invalid_choices_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        {
+            let mut state = app.state().unwrap();
+            let mut updated = state.settings.clone();
+            updated
+                .note_language_overrides
+                .insert(PathBuf::from(&path), "c".into());
+            app.persist(&mut state, updated).unwrap();
+        }
+        let syntax = app.note_syntax(path.clone()).unwrap();
+        assert!(syntax.unsupported);
+        assert_eq!(syntax.override_id.as_deref(), Some("c"));
+        assert_eq!(syntax.language_id, "plain");
+        assert!(app
+            .set_note_language(path.clone(), Some("invalid".into()))
+            .is_err());
+        assert_eq!(
+            app.note_syntax(path.clone())
+                .unwrap()
+                .override_id
+                .as_deref(),
+            Some("c")
+        );
+        assert!(app
+            .set_note_language(root.path().join("outside").to_string_lossy().into(), None)
+            .is_err());
+        app.set_note_language(path.clone(), Some("python".into()))
+            .unwrap();
+        assert_eq!(app.note_syntax(path).unwrap().language_id, "python3");
     }
 
     #[cfg(unix)]

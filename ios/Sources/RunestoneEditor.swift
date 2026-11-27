@@ -10,6 +10,7 @@ struct RunestoneEditor: UIViewRepresentable {
     let fontScale: Double
     var findRequest = 0
     var preferences: EditorPreferences? = nil
+    var languageID = "plain"
     @Environment(\.isEnabled) private var isEnabled
     @ScaledMetric(relativeTo: .body) private var baseFontSize: CGFloat = 17
 
@@ -32,6 +33,10 @@ struct RunestoneEditor: UIViewRepresentable {
     func updateUIView(_ view: Runestone.TextView, context: Context) {
         context.coordinator.text = $text
         view.isEditable = isEnabled
+        if context.coordinator.languageID != languageID {
+            context.coordinator.languageID = languageID
+            view.setLanguageMode(context.coordinator.highlighter.mode(for: languageID))
+        }
         let lineNumbers = preferences?.showLineNumbers ?? true
         let wrap = preferences?.wrapText ?? true
         let highlight = preferences?.highlightCurrentLine ?? true
@@ -72,6 +77,8 @@ struct RunestoneEditor: UIViewRepresentable {
         var text: Binding<String>
         var findRequest = 0
         var highlightCurrentLine: Bool?
+        var languageID: String?
+        let highlighter = SyntaxHighlighter()
         init(text: Binding<String>) { self.text = text }
         func textViewDidChange(_ textView: Runestone.TextView) {
             text.wrappedValue = textView.text
@@ -94,5 +101,28 @@ private final class NoteEditorTheme: Runestone.Theme {
     let pageGuideHairlineColor = UIColor.separator
     let pageGuideBackgroundColor = UIColor.clear
     let markedTextBackgroundColor = UIColor.systemFill
-    func textColor(for highlightName: String) -> UIColor? { nil }
+    func textColor(for highlightName: String) -> UIColor? {
+        let name = highlightName.lowercased()
+        if name == "none" { return .label }
+        if name.hasPrefix("comment") { return .secondaryLabel }
+        if name.hasPrefix("text.title") || name.hasPrefix("text.uri") ||
+            name.hasPrefix("text.reference") { return .systemBlue }
+        if name.hasPrefix("text.literal") { return .systemGreen }
+        switch name.split(separator: ".").first {
+        case "keyword", "include", "conditional", "repeat", "exception": return .systemPurple
+        case "string", "character": return .systemGreen
+        case "number", "float", "boolean", "constant": return .systemOrange
+        case "function", "method", "constructor": return .systemBlue
+        case "type", "namespace": return .systemTeal
+        case "property", "field", "attribute": return .systemBrown
+        case "punctuation", "operator": return .secondaryLabel
+        default: return nil
+        }
+    }
+
+    func fontTraits(for highlightName: String) -> FontTraits {
+        if highlightName == "text.title" || highlightName == "text.strong" { return .bold }
+        if highlightName == "text.emphasis" { return .italic }
+        return []
+    }
 }

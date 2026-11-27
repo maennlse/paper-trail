@@ -50,6 +50,19 @@ class IOSBuildTests(unittest.TestCase):
         self.assertIn("ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon", project)
         self.assertIn("      - Resources\n", project)
 
+    def test_syntax_grammars_are_pinned_and_only_selected_products_are_linked(self) -> None:
+        """Keep language support compatible with the pinned Runestone ABI."""
+        root = Path(__file__).resolve().parent.parent
+        project = (root / "ios/project.yml").read_text(encoding="utf-8")
+        self.assertIn("revision: 15cf3a9ec3ab95e0d058b7df9f35619123c9e02d", project)
+        for language in [
+            "Markdown", "MarkdownInline", "JSON", "Python", "Rust",
+            "JavaScript", "Swift", "TOML", "YAML",
+        ]:
+            self.assertIn(f"product: TreeSitter{language}Runestone", project)
+        self.assertNotIn("product: RunestoneLanguageSupport", project)
+        self.assertTrue((root / "ios/Resources/SyntaxQueries-Apache-2.0.txt").is_file())
+
     def test_app_icon_is_opaque_rgb_at_full_resolution(self) -> None:
         """iOS icons require a square 1024px image with no alpha/transparency."""
         icon = (

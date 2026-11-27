@@ -4,7 +4,24 @@ Copyright (c) 2021 Simon Støvring
 Tree-sitter — https://github.com/tree-sitter/tree-sitter
 Copyright (c) 2018-2023 Max Brunsfeld
 
-Both libraries are distributed under the MIT License:
+TreeSitterLanguages 0.1.10 — https://github.com/simonbs/TreeSitterLanguages
+Copyright (c) 2021 Simon Støvring
+
+Bundled Tree-sitter grammars:
+JSON and JavaScript — https://github.com/tree-sitter
+Copyright (c) 2014 Max Brunsfeld
+Python — https://github.com/tree-sitter/tree-sitter-python
+Copyright (c) 2016 Max Brunsfeld
+Rust — https://github.com/tree-sitter/tree-sitter-rust
+Copyright (c) 2017 Maxim Sokolov
+Markdown and Markdown Inline — https://github.com/MDeiml/tree-sitter-markdown
+Copyright (c) 2021 Matthias Deiml
+Swift — https://github.com/alex-pinkus/tree-sitter-swift
+Copyright (c) 2021 alex-pinkus
+TOML and YAML — https://github.com/ikatyang
+Copyright (c) Ika <ikatyang@gmail.com> (https://github.com/ikatyang)
+
+The libraries and grammars above are distributed under the MIT License:
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -23,3 +40,9 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Some bundled highlight queries originate from nvim-treesitter:
+https://github.com/nvim-treesitter/nvim-treesitter
+They are distributed under the Apache License, Version 2.0, included in
+SyntaxQueries-Apache-2.0.txt in this bundle. Queries are used as supplied by
+the pinned TreeSitterLanguages package, without local modifications.

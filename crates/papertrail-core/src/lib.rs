@@ -4,6 +4,7 @@ pub mod colors;
 pub mod note;
 pub mod session;
 pub mod settings;
+pub mod syntax;
 
 pub use note::Note;
 pub use session::{Session, Store};

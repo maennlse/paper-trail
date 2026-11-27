@@ -183,6 +183,9 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     @Published var errorMessage: String?
     @Published var editorPath: String?
     @Published var editorText = ""
+    @Published private(set) var editorTitle = ""
+    @Published private(set) var editorSyntax: NoteSyntax?
+    @Published private(set) var syntaxLanguages: [SyntaxLanguage] = []
     @Published private(set) var editorSave = EditorSaveState()
     @Published private(set) var closingEditor = false
     @Published private(set) var syncFeedback = SyncFeedback()
@@ -229,6 +232,7 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         defer { starting = false }
         do {
             host = try await Task.detached { try NativeHost() }.value
+            syntaxLanguages = try await call { $0.syntaxLanguages() }
             syncFeedback.lastSuccess = host?.lastSuccessfulSync
             storageWarning = host?.bookmarkWarning
             await refresh()
@@ -246,9 +250,16 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         let generation = searchGeneration
         let folder = selectedFolder
         let search = query
+        let path = editorPath
         do {
-            let result = try await call { try $0.snapshot(folder: folder, query: search) }
-            if generation == searchGeneration { snapshot = result }
+            let (result, syntax) = try await call { client in
+                let snapshot = try client.snapshot(folder: folder, query: search)
+                return (snapshot, path.flatMap { try? client.noteSyntax(path: $0) })
+            }
+            if generation == searchGeneration {
+                snapshot = result
+                if editorPath == path, let syntax { editorSyntax = syntax }
+            }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -260,8 +271,13 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
 
     func open(_ path: String) async {
         do {
-            let text = try await call { try $0.openNote(path: path) }
+            let (text, syntax, title) = try await call { client in
+                let text = try client.openNote(path: path)
+                return (text, try client.noteSyntax(path: path), try client.editorTitle())
+            }
             editorText = text
+            editorTitle = title
+            editorSyntax = syntax
             editorSave.reset()
             editorPath = path
         } catch { errorMessage = error.localizedDescription }
@@ -288,7 +304,13 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
             do {
                 guard !Task.isCancelled, self.editorSave.revision == revision,
                       self.editorPath == path else { return }
-                try await call { try $0.edit(text: text) }
+                let title = try await call { client in
+                    try client.edit(text: text)
+                    return try client.editorTitle()
+                }
+                if self.editorSave.revision == revision, self.editorPath == path {
+                    self.editorTitle = title
+                }
                 try await Task.sleep(for: .milliseconds(350))
                 guard !Task.isCancelled, self.editorSave.revision == revision,
                       self.editorPath == path else { return }
@@ -312,11 +334,13 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         let text = editorText
         let token = editorSave.begin()
         do {
-            try await call {
+            let title = try await call {
                 try $0.edit(text: text)
                 try $0.save()
+                return try $0.editorTitle()
             }
             editorSave.complete(token)
+            if token.revision == editorSave.revision { editorTitle = title }
         } catch {
             editorSave.fail(token, message: error.localizedDescription)
             throw error
@@ -345,10 +369,14 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         let token = editorSave.begin()
         do {
             let text = editorText
-            editorPath = try await call {
-                try $0.edit(text: text)
-                return try $0.saveCopy()
+            let (path, syntax, title) = try await call { client in
+                try client.edit(text: text)
+                let path = try client.saveCopy()
+                return (path, try client.noteSyntax(path: path), try client.editorTitle())
             }
+            editorPath = path
+            editorSyntax = syntax
+            editorTitle = title
             editorSave.complete(token)
             await refresh()
         } catch {
@@ -360,6 +388,18 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     func retrySave() async {
         do { try await flush() }
         catch { /* The persistent save banner retains the actionable error. */ }
+    }
+
+    func setEditorLanguage(_ language: String?) async -> Bool {
+        guard let path = editorPath, !closingEditor else { return false }
+        do {
+            let syntax = try await call { client in
+                try client.setNoteLanguage(path: path, language: language)
+                return try client.noteSyntax(path: path)
+            }
+            if editorPath == path { editorSyntax = syntax }
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
     }
 
     func export(_ note: NoteInfo) async throws -> NoteExport {

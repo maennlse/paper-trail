@@ -26,10 +26,8 @@ struct SyncFeedbackView: View {
                 .font(.caption)
             }
             if let date = model.syncFeedback.lastSuccess {
-                HStack(spacing: 4) {
-                    Text("Last synced")
-                    Text(date, style: .relative)
-                    Text("ago")
+                TimelineView(.periodic(from: date, by: 60)) { context in
+                    Text(SyncRelativeTime.description(since: date, now: context.date))
                 }
                 .font(.caption2).foregroundStyle(.secondary)
                 .accessibilityIdentifier("last-successful-sync")

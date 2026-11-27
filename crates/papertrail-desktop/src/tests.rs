@@ -351,6 +351,17 @@ fn editor_padding_and_filetype_regressions(d: &Rc<Desktop>, folder: &std::path::
         .settings
         .note_language_overrides
         .contains_key(&json_path));
+    // An explicit Plain Text override must disable detection on known
+    // extensions, including overrides synchronized from the native iOS editor.
+    activate_language(d, papertrail_core::syntax::PLAIN_TEXT);
+    assert!(d.buffer.language().is_none());
+    assert!(!d.buffer.is_highlight_syntax());
+    d.close_note().unwrap();
+    d.open(&json_path).unwrap();
+    assert!(d.buffer.language().is_none());
+    assert_eq!(d.document_type(), "Plain Text");
+    activate_language(d, "automatic");
+    assert_eq!(d.buffer.language().unwrap().id(), "json");
     d.rename_note(&json_path, "renamed.unrecognized-extension")
         .unwrap();
     assert!(d.buffer.language().is_none());

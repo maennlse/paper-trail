@@ -3,6 +3,29 @@ import Foundation
 import XCTest
 
 final class EditorStateTests: XCTestCase {
+    func testAboutUsesBundleVersionAndBuildWithoutHardCoding() {
+        XCTAssertEqual(AppVersion.description(info: [
+            "CFBundleShortVersionString": "1.2.3", "CFBundleVersion": "42"
+        ]), "1.2.3 (42)")
+        XCTAssertEqual(AppVersion.description(info: ["CFBundleShortVersionString": "2.0"]), "2.0")
+        XCTAssertEqual(AppVersion.description(info: [:]), "Unknown")
+        XCTAssertEqual(AppVersion.sourceURL.absoluteString, "https://github.com/maennlse/paper-trail")
+    }
+
+    func testSyncAgeNeverShowsSeconds() {
+        let synced = Date(timeIntervalSince1970: 1000)
+        XCTAssertEqual(SyncRelativeTime.description(since: synced, now: synced), "Last synced: Just now")
+        XCTAssertEqual(SyncRelativeTime.description(since: synced, now: synced.addingTimeInterval(59)),
+                       "Last synced: Just now")
+        for seconds: TimeInterval in [60, 119, 3600, 86400] {
+            let text = SyncRelativeTime.description(since: synced, now: synced.addingTimeInterval(seconds))
+            XCTAssertFalse(text.contains("second"))
+            XCTAssertFalse(text.contains("Just now"))
+        }
+        XCTAssertEqual(SyncRelativeTime.description(since: synced, now: synced.addingTimeInterval(-10)),
+                       "Last synced: Just now")
+    }
+
     func testOlderSaveCannotMarkNewerEditsSavedOrFailed() {
         var state = EditorSaveState()
         state.changed()

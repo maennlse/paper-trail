@@ -46,6 +46,36 @@ fn ios_font_names_are_separate_from_desktop_font_descriptions_and_validated() {
 }
 
 #[test]
+fn native_syntax_detection_uses_extensions_and_gtk_compatible_ids() {
+    use papertrail_core::syntax;
+    for (filename, expected) in [
+        ("NOTE.MD", "markdown"),
+        ("config.JSON", "json"),
+        ("script.py", "python3"),
+        ("lib.rs", "rust"),
+        ("app.mjs", "js"),
+        ("App.swift", "swift"),
+        ("Cargo.toml", "toml"),
+        ("config.yml", "yaml"),
+        ("README", "plain"),
+        ("note.txt", "plain"),
+        ("code.unknown", "plain"),
+    ] {
+        assert_eq!(syntax::detect(std::path::Path::new(filename)).id, expected);
+    }
+    assert_eq!(syntax::by_id("python").unwrap().id, "python3");
+    assert!(syntax::by_id("not-bundled").is_none());
+    let mut ids: Vec<_> = syntax::LANGUAGES
+        .iter()
+        .map(|language| language.id)
+        .collect();
+    let count = ids.len();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), count);
+}
+
+#[test]
 fn empty_and_blank_first_line_metadata() {
     assert_eq!(
         summarize(Path::new("empty.txt"), ""),

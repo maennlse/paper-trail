@@ -3,6 +3,9 @@ packages:
   Runestone:
     url: https://github.com/simonbs/Runestone
     revision: 592434a103a4d1ab83e14f87ac6eef569dd7a99d # 0.5.2
+  TreeSitterLanguages:
+    url: https://github.com/simonbs/TreeSitterLanguages
+    revision: 15cf3a9ec3ab95e0d058b7df9f35619123c9e02d # 0.1.10, Runestone 0.5.2 compatible
 options:
   bundleIdPrefix: io.github.maennlse
   deploymentTarget:
@@ -22,8 +25,28 @@ targets:
   PaperTrail:
     type: application
     platform: iOS
-    dependencies:
+    dependencies: &editorDependencies
       - package: Runestone
+      - package: TreeSitterLanguages
+        product: TreeSitterLanguagesCommon
+      - package: TreeSitterLanguages
+        product: TreeSitterMarkdownRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterMarkdownInlineRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterJSONRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterPythonRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterRustRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterJavaScriptRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterSwiftRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterTOMLRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterYAMLRunestone
     sources:
       - Sources
       - Resources
@@ -64,10 +87,14 @@ targets:
   PaperTrailStateTests:
     type: bundle.unit-test
     platform: iOS
+    dependencies: *editorDependencies
     sources:
       - UnitTests
       - Sources/EditorSaveState.swift
       - Sources/NoteExport.swift
+      - Sources/SyntaxHighlighting.swift
+      - Sources/SyncRelativeTime.swift
+      - Sources/AppVersion.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
