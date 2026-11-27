@@ -7,6 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/maennlse/paper-trail)](https://github.com/maennlse/paper-trail/releases/latest)
 [![Build](https://github.com/maennlse/paper-trail/actions/workflows/rust.yml/badge.svg)](https://github.com/maennlse/paper-trail/actions/workflows/rust.yml)
 [![Standalone TUI](https://github.com/maennlse/paper-trail/actions/workflows/tui.yml/badge.svg)](https://github.com/maennlse/paper-trail/actions/workflows/tui.yml)
+[![iOS build](https://github.com/maennlse/paper-trail/actions/workflows/ios.yml/badge.svg)](https://github.com/maennlse/paper-trail/actions/workflows/ios.yml)
 [![Lint](https://github.com/maennlse/paper-trail/actions/workflows/super-linter.yml/badge.svg)](https://github.com/maennlse/paper-trail/actions/workflows/super-linter.yml)
 [![Built with Rust](https://img.shields.io/badge/built_with-Rust-dea584?logo=rust)](https://www.rust-lang.org/)
 [![TUI platforms: Linux, Windows, macOS](https://img.shields.io/badge/TUI-Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-4c8eda)](docs/tui.md)
@@ -84,7 +85,8 @@ A native iOS 17+ SwiftUI client shares the Rust core through UniFFI. Build an
 **unsigned IPA** using the manual **Unsigned iOS** GitHub Actions workflow, then
 sign/install it with a sideloading tool such as iLoader. No Apple signing
 credentials are needed in CI. See the [iOS build and sideloading guide](docs/ios.md).
-The iOS app is not part of the tagged release package set yet.
+Tagged releases include `paper-trail-ios-arm64-unsigned.ipa`; simulator apps
+remain available only as CI artifacts.
 
 ## Plain files, lasting notes
 

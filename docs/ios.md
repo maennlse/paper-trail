@@ -8,10 +8,13 @@ local note files.
 
 ## Get an unsigned IPA without a Mac
 
+Tagged releases include `paper-trail-ios-arm64-unsigned.ipa` and its `.sha256`
+checksum. For development builds:
+
 1. Push this source to GitHub.
 2. Open **Actions → Unsigned iOS → Run workflow**, choosing the desired branch.
 3. Download the `paper-trail-ios-unsigned` artifact.
-4. Extract it and locate `Paper-Trail-unsigned.ipa` and `SHA256SUMS`.
+4. Extract it and locate `paper-trail-ios-arm64-unsigned.ipa` and `SHA256SUMS`.
 5. Use a sideloading tool such as iLoader to sign/install the IPA.
 
 The IPA intentionally contains no signature, provisioning profile, Apple account,
@@ -21,8 +24,9 @@ tool, subject to Apple's device/app limits and expiration rules. These limitatio
 are not bypassed by this project. No paid Apple Developer account or signing
 secrets are required to **build** the workflow artifacts.
 
-The workflow runs manually or on pull requests that change iOS/Rust build inputs,
-has read-only repository permissions, and never creates a release or tag.
+The workflow runs manually, on pull requests that change iOS/Rust build inputs,
+or as a reusable job in the tag-triggered release workflow.
+It has read-only repository permissions and never creates a release or tag itself.
 It also produces an Apple Silicon simulator app archive and
 runs a simulator smoke test. Workflow execution and physical-device/iCloud
 behavior still need verification on Apple's platforms.
@@ -161,7 +165,7 @@ executable archives and cannot be built on the Linux host.
   text or undo stack. Settings are committed together when **Done** is pressed
   and restored after relaunch.
 - The **About** section shows the running app's bundle version/build and a native
-  link to the GitHub source repository; the displayed version is not hard-coded.
+  link to the GitHub source repository; the displayed version is not hardcoded.
 
 ## Rust API audit and boundary
 
@@ -271,14 +275,14 @@ Also verify actual share destinations on iPhone/iPad (including cancellation),
 Command-F and find dismissal/selection, and save/sync recovery while editing
 offline or after an external conflicting edit.
 
-### README screenshots
+### Readme screenshots
 
 `testCaptureReadmeScreenshots` captures the actual library/rail and Runestone editor
 with isolated demonstration files. It never reads real notes or bookmarks.
 The macOS workflow exports its XCTest attachments as the
 `paper-trail-ios-screenshots` artifact, including on successful runs.
 Download it from **Actions → Unsigned iOS**; its manifest identifies the
-`ios-library` and `ios-editor` PNG attachments. The README includes real iPhone 16
+`ios-library` and `ios-editor` PNG attachments. The readme includes real iPhone 16
 Pro simulator captures from this test. To refresh them, review the new captures
 and copy them to `data/screenshots/ios-library.png` and
 `data/screenshots/ios-editor.png`. Do not substitute a mockup for a real

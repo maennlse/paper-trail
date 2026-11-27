@@ -39,8 +39,14 @@ jobs:
     permissions:
       contents: read
 
+  ios:
+    needs: validate
+    uses: $/.github/workflows/ios.yml
+    permissions:
+      contents: read
+
   publish:
-    needs: [validate, tui, gtk, server]
+    needs: [validate, tui, gtk, server, ios]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -53,7 +59,7 @@ jobs:
           pattern: paper-trail-*
           path: downloaded-artifacts
           merge-multiple: false
-      - name: Validate all fourteen packages and collect release assets
+      - name: Validate all fifteen packages and collect release assets
         run: >-
           python3 build-aux/prepare_release.py collect
           downloaded-artifacts dist/release
