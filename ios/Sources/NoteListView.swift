@@ -59,6 +59,10 @@ struct NoteListView: View {
                                 prompt: "Search across folders")
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .background(InitiallyCollapsedSearch(
+                        ready: model.snapshot != nil,
+                        queryIsEmpty: model.query.isEmpty
+                    ))
                     .overlay {
                         if model.notes.isEmpty {
                             ContentUnavailableView(
@@ -66,6 +70,7 @@ struct NoteListView: View {
                                 systemImage: model.query.isEmpty ? "note.text" : "magnifyingglass",
                                 description: Text(model.query.isEmpty ? "Compose a plain text note to get started." : "Search checks titles and full text across folders.")
                             )
+                            .allowsHitTesting(false)
                         }
                     }
                     .refreshable { await model.refresh() }

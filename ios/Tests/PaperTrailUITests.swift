@@ -228,8 +228,14 @@ final class PaperTrailUITests: XCTestCase {
         let original = editor.value as? String
         XCTAssertTrue(app.staticTexts["Saved locally"].exists)
         app.buttons["find-in-note"].tap()
-        let search = app.searchFields.firstMatch
-        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        // The library's native search field may remain in the accessibility
+        // tree underneath the full-screen editor. Only target document Find.
+        let search = app.searchFields.matching(NSPredicate(
+            format: "identifier != %@ AND placeholderValue != %@",
+            "library-search", "Search across folders")).firstMatch
+        let findPresented = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"), object: search)
+        XCTAssertEqual(XCTWaiter.wait(for: [findPresented], timeout: 5), .completed)
         search.tap()
         search.typeText("walk")
         XCTAssertEqual(editor.value as? String, original)
@@ -349,16 +355,46 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["compose"].isHittable)
         XCTAssertEqual(app.toolbars.buttons.matching(identifier: "compose").count, 0)
-        let search = app.searchFields["Search across folders"]
-        XCTAssertFalse(search.exists && search.isHittable)
+        let search = librarySearch(in: app)
+        let initiallyHidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !search.exists || !search.isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [initiallyHidden], timeout: 5), .completed)
         app.collectionViews.firstMatch.swipeDown()
-        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        let revealed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"), object: search)
+        XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 5), .completed)
         search.tap()
         search.typeText("long walk")
         XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 5))
         let filtered = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"), object: app.staticTexts["ideas.txt"])
         XCTAssertEqual(XCTWaiter.wait(for: [filtered], timeout: 5), .completed)
+        app.staticTexts["weekend.md"].tap()
+        XCTAssertTrue(app.scrollViews["note-editor"].waitForExistence(timeout: 10))
+        app.navigationBars.buttons["Done"].tap()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 10))
+        XCTAssertEqual(search.value as? String, "long walk")
+        XCTAssertFalse(app.staticTexts["ideas.txt"].exists)
+    }
+
+    func testEmptyLibraryStillRevealsSearchOnPullDown() {
+        let app = XCUIApplication()
+        app.launchEnvironment["PAPERTRAIL_TEST_PROFILE"] = UUID().uuidString
+        app.launch()
+        XCTAssertTrue(app.buttons["compose"].waitForExistence(timeout: 20))
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"), object: app.buttons["compose"])
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 20), .completed)
+        let search = librarySearch(in: app)
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !search.exists || !search.isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
+        app.collectionViews.firstMatch.swipeDown()
+        let revealed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"), object: search)
+        XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 5), .completed)
     }
 
     func testAboutShowsVersionAndSourceLink() {
@@ -375,6 +411,12 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertTrue(source.exists)
         XCTAssertTrue(source.isHittable)
         XCTAssertFalse(version.label.contains("Unknown"))
+    }
+
+    private func librarySearch(in app: XCUIApplication) -> XCUIElement {
+        app.searchFields.matching(NSPredicate(
+            format: "identifier == %@ OR placeholderValue == %@",
+            "library-search", "Search across folders")).firstMatch
     }
 
     private func setSwitch(_ control: XCUIElement, enabled: Bool,
