@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import json
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +17,79 @@ import build_ios
 
 class IOSBuildTests(unittest.TestCase):
     """Exercise build plans without invoking Cargo or Apple tooling."""
+
+    def test_runestone_dependency_is_pinned_and_linked(self) -> None:
+        """Regenerating the Xcode project must retain the editor dependency."""
+        root = Path(__file__).resolve().parent.parent
+        project = (root / "ios/project.yml").read_text(encoding="utf-8")
+        self.assertIn("url: https://github.com/simonbs/Runestone", project)
+        self.assertIn("revision: 592434a103a4d1ab83e14f87ac6eef569dd7a99d", project)
+        self.assertIn("- package: Runestone", project)
+
+    def test_app_icon_is_wired_to_the_asset_catalog(self) -> None:
+        """Xcode must compile the checked-in universal icon into the iOS app."""
+        root = Path(__file__).resolve().parent.parent
+        assets = root / "ios/Resources/Assets.xcassets"
+        manifest = json.loads(
+            (assets / "AppIcon.appiconset/Contents.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            manifest["images"],
+            [
+                {
+                    "filename": "AppIcon.png",
+                    "idiom": "universal",
+                    "platform": "ios",
+                    "size": "1024x1024",
+                }
+            ],
+        )
+        project = (root / "ios/project.yml").read_text(encoding="utf-8")
+        self.assertIn("ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon", project)
+        self.assertIn("      - Resources\n", project)
+
+    def test_syntax_grammars_are_pinned_and_only_selected_products_are_linked(
+        self,
+    ) -> None:
+        """Keep language support compatible with the pinned Runestone ABI."""
+        root = Path(__file__).resolve().parent.parent
+        project = (root / "ios/project.yml").read_text(encoding="utf-8")
+        self.assertIn("revision: 15cf3a9ec3ab95e0d058b7df9f35619123c9e02d", project)
+        for language in [
+            "Markdown",
+            "MarkdownInline",
+            "JSON",
+            "Python",
+            "Rust",
+            "JavaScript",
+            "Swift",
+            "TOML",
+            "YAML",
+        ]:
+            self.assertIn(f"product: TreeSitter{language}Runestone", project)
+        self.assertNotIn("product: RunestoneLanguageSupport", project)
+        self.assertTrue((root / "ios/Resources/SyntaxQueries-Apache-2.0.txt").is_file())
+
+    def test_app_icon_is_opaque_rgb_at_full_resolution(self) -> None:
+        """iOS icons require a square 1024px image with no alpha/transparency."""
+        icon = (
+            Path(__file__).resolve().parent.parent
+            / "ios/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+        ).read_bytes()
+        self.assertEqual(icon[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(icon[12:16], b"IHDR")
+        self.assertEqual(
+            struct.unpack(">IIBBBBB", icon[16:29]), (1024, 1024, 8, 2, 0, 0, 0)
+        )
+        offset = 8
+        chunks = []
+        while offset < len(icon):
+            size = int.from_bytes(icon[offset : offset + 4], "big")
+            chunks.append(icon[offset + 4 : offset + 8])
+            offset += size + 12
+        self.assertIn(b"IDAT", chunks)
+        self.assertEqual(chunks[-1], b"IEND")
+        self.assertNotIn(b"tRNS", chunks)
 
     def test_dry_run_creates_nothing_and_disables_signing(self) -> None:
         """A build preview is non-mutating and never requests provisioning."""
@@ -77,6 +152,12 @@ class IOSBuildTests(unittest.TestCase):
             digest = hashlib.sha256(b"unsigned archive").hexdigest()
             checksums = (destination / "SHA256SUMS").read_text()
             self.assertEqual(checksums.count(digest), 2)
+            ipa = destination / "paper-trail-ios-arm64-unsigned.ipa"
+            self.assertTrue(ipa.is_file())
+            self.assertEqual(
+                ipa.with_name(f"{ipa.name}.sha256").read_text(),
+                f"{digest}  {ipa.name}\n",
+            )
 
     def test_packaging_rejects_existing_signing_material(self) -> None:
         """A developer's old signed build must never leak into an unsigned artifact."""

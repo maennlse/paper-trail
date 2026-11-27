@@ -187,7 +187,7 @@ def package_artifacts(root: Path, output: Path) -> Path:
                 "-k",
                 "--keepParent",
                 str(payload),
-                str(destination / "Paper-Trail-unsigned.ipa"),
+                str(destination / "paper-trail-ios-arm64-unsigned.ipa"),
             ],
             check=True,
         )
@@ -206,7 +206,11 @@ def package_artifacts(root: Path, output: Path) -> Path:
     for artifact in sorted(destination.iterdir()):
         with artifact.open("rb") as source:
             digest = hashlib.file_digest(source, "sha256").hexdigest()
-        checksums.append(f"{digest}  {artifact.name}\n")
+        checksum = f"{digest}  {artifact.name}\n"
+        checksums.append(checksum)
+        artifact.with_name(f"{artifact.name}.sha256").write_text(
+            checksum, encoding="utf-8"
+        )
     (destination / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
     print(f"Unsigned artifacts: {destination}")
     return destination

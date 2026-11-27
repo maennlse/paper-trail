@@ -4,12 +4,16 @@ use papertrail_core::{colors, note::sort_notes, Session, Settings, Store};
 use papertrail_storage::{Repository, SettingsFile};
 use papertrail_sync::{
     auth::LoginFlow,
-    control::{Command, Service},
+    control::{Cancellation, Command, PassphraseAction, Service},
+    Config,
 };
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
     time::{Instant, UNIX_EPOCH},
 };
 use zeroize::Zeroizing;
@@ -38,6 +42,7 @@ pub struct FolderInfo {
     pub path: String,
     pub name: String,
     pub color: String,
+    pub badge: String,
 }
 #[derive(Clone, uniffi::Record)]
 pub struct NoteInfo {
@@ -49,6 +54,29 @@ pub struct NoteInfo {
     pub color: String,
     pub pinned: bool,
 }
+#[derive(Clone, uniffi::Record)]
+pub struct SyntaxLanguage {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct NoteSyntax {
+    pub override_id: Option<String>,
+    pub language_id: String,
+    pub name: String,
+    pub unsupported: bool,
+}
+
+#[derive(Clone, uniffi::Record)]
+pub struct EditorPreferences {
+    pub show_line_numbers: bool,
+    pub wrap_text: bool,
+    pub highlight_current_line: bool,
+    pub use_monospace: bool,
+    pub custom_font: String,
+}
+
 #[derive(uniffi::Record)]
 pub struct LibrarySnapshot {
     pub folders: Vec<FolderInfo>,
@@ -56,6 +84,7 @@ pub struct LibrarySnapshot {
     pub default_folder: String,
     pub font_scale: f64,
     pub appearance: String,
+    pub editor_preferences: EditorPreferences,
     pub unavailable_folders: Vec<String>,
 }
 #[derive(uniffi::Record)]
@@ -65,6 +94,20 @@ pub struct SyncProfile {
     pub client_id: String,
     pub scopes: String,
     pub folders: Vec<String>,
+    pub discover_auth: bool,
+}
+#[derive(uniffi::Record)]
+pub struct SyncSetup {
+    pub token: u64,
+    pub needs_confirmation: bool,
+    pub trust_description: String,
+}
+#[derive(uniffi::Record)]
+pub struct SyncStatus {
+    pub configured: bool,
+    pub signed_in: bool,
+    pub unlocked: bool,
+    pub vault_exists: Option<bool>,
 }
 #[derive(uniffi::Record)]
 pub struct SyncResult {
@@ -98,6 +141,11 @@ struct State {
     settings: Settings,
     session: Session,
 }
+struct PendingSetup {
+    token: u64,
+    baseline: Option<Config>,
+    candidate: Config,
+}
 #[derive(uniffi::Object)]
 pub struct PaperTrailClient {
     state: Mutex<State>,
@@ -105,6 +153,9 @@ pub struct PaperTrailClient {
     home: PathBuf,
     service: Service,
     login: Mutex<Option<LoginFlow>>,
+    setup_generation: AtomicU64,
+    pending_setup: Mutex<Option<PendingSetup>>,
+    operation: Mutex<Option<Cancellation>>,
 }
 
 impl PaperTrailClient {
@@ -135,13 +186,113 @@ impl PaperTrailClient {
         let folder = self.folder(settings, &parent.to_string_lossy())?;
         let target = fs::canonicalize(&path)?;
         if target.parent() != Some(folder.as_path())
-            || target.extension().is_none_or(|ext| ext != "txt")
+            || !target.is_file()
+            || fs::symlink_metadata(&path)?.file_type().is_symlink()
         {
             return Err(error(
-                "Only .txt files inside registered folders are allowed",
+                "Only regular files inside registered folders are allowed",
             ));
         }
         Ok(target)
+    }
+
+    fn require_text(path: &Path) -> Result<()> {
+        let bytes = fs::read(path)?;
+        if bytes.contains(&0) || std::str::from_utf8(&bytes).is_err() {
+            return Err(error("This file is not UTF-8 text and cannot be edited. Its contents have not been changed."));
+        }
+        Ok(())
+    }
+
+    fn configuration(&self, profile: SyncProfile, previous: Option<Config>) -> Result<Config> {
+        let state = self.state()?;
+        let folders = profile
+            .folders
+            .iter()
+            .map(|p| self.folder(&state.settings, p))
+            .collect::<Result<Vec<_>>>()?;
+        let mut config = previous.unwrap_or_default();
+        for choice in self.service.folder_choices(&state.settings)? {
+            if let (Some(id), Some(path)) = (choice.id, choice.path) {
+                if folders
+                    .iter()
+                    .any(|selected| papertrail_sync::same_directory(selected, &path))
+                {
+                    config.excluded_folders.remove(&id);
+                    config.selected_folders.insert(id);
+                } else {
+                    config.selected_folders.remove(&id);
+                    config.excluded_folders.insert(id);
+                }
+            }
+        }
+        config.server = profile.server.trim().trim_end_matches('/').into();
+        config.issuer = profile.issuer.trim().into();
+        config.client_id = profile.client_id;
+        config.scopes = profile.scopes;
+        config.discover_auth = profile.discover_auth;
+        config.folders = folders;
+        config
+            .download_dir
+            .get_or_insert_with(|| self.home.join("Paper Trail Synced"));
+        Ok(config)
+    }
+
+    fn prepare_setup(
+        &self,
+        profile: SyncProfile,
+        discover: impl FnOnce(Config) -> io::Result<Config>,
+    ) -> Result<SyncSetup> {
+        let generation = self.setup_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        *self
+            .pending_setup
+            .lock()
+            .map_err(|_| error("Setup unavailable"))? = None;
+        let baseline = self.service.saved_config()?;
+        let candidate = self.configuration(profile, baseline.clone())?;
+        let candidate = if candidate.discover_auth {
+            discover(candidate)?
+        } else {
+            candidate
+        };
+        candidate.validate()?;
+        if self.service.saved_config()? != baseline {
+            return Err(error("Sync configuration changed; review setup again"));
+        }
+        let preview = SyncSetup {
+            token: generation,
+            needs_confirmation: candidate.discover_auth
+                && papertrail_sync::auth::config::needs_confirmation(baseline.as_ref(), &candidate),
+            trust_description: papertrail_sync::auth::config::trust_description(
+                baseline.as_ref(),
+                &candidate,
+            ),
+        };
+        let mut pending = self
+            .pending_setup
+            .lock()
+            .map_err(|_| error("Setup unavailable"))?;
+        if self.setup_generation.load(Ordering::Acquire) != generation {
+            return Err(error("Setup was superseded; review the current server"));
+        }
+        *pending = Some(PendingSetup {
+            token: generation,
+            baseline,
+            candidate,
+        });
+        Ok(preview)
+    }
+}
+
+fn passphrase_command(
+    action: PassphraseAction,
+    secret: Zeroizing<String>,
+    remember: bool,
+) -> Command {
+    Command::Passphrase {
+        action,
+        passphrase: secret,
+        remember,
     }
 }
 
@@ -194,6 +345,9 @@ impl PaperTrailClient {
             home: documents,
             service,
             login: Mutex::new(None),
+            setup_generation: AtomicU64::new(0),
+            pending_setup: Mutex::new(None),
+            operation: Mutex::new(None),
         }))
     }
 
@@ -220,6 +374,7 @@ impl PaperTrailClient {
         let mut unavailable_folders = Vec::new();
         for path in &settings.note_folders {
             folders.push(FolderInfo {
+                badge: colors::badge(&settings.folder_name(path)),
                 path: path.to_string_lossy().into(),
                 name: settings.folder_name(path),
                 color: colors::hex(
@@ -247,19 +402,26 @@ impl PaperTrailClient {
             };
             for entry in entries {
                 let path = entry?.path();
-                if path.extension().is_none_or(|ext| ext != "txt")
-                    || !path.is_file()
-                    || fs::symlink_metadata(&path)?.file_type().is_symlink()
-                {
+                if !path.is_file() || fs::symlink_metadata(&path)?.file_type().is_symlink() {
                     continue;
                 }
-                let note = match Repository.load(&path) {
-                    Ok(note) => note,
+                let bytes = match fs::read(&path) {
+                    Ok(bytes) => bytes,
                     Err(e) => {
                         unavailable_folders.push(format!("{}: {e}", path.display()));
                         continue;
                     }
                 };
+                // Keep binary files visible, but never use lossy decoding in the editor.
+                let text = std::str::from_utf8(&bytes)
+                    .ok()
+                    .filter(|_| !bytes.contains(&0))
+                    .unwrap_or("");
+                let note = papertrail_core::Note::from_text(
+                    path.clone(),
+                    text.replace("\r\n", "\n").replace('\r', "\n"),
+                    fs::metadata(&path)?.modified()?,
+                );
                 if note.matches(&query) {
                     notes.push(note);
                 }
@@ -296,6 +458,13 @@ impl PaperTrailClient {
             default_folder: settings.notes_dir.to_string_lossy().into(),
             font_scale: settings.font_scale,
             appearance: settings.theme_mode.clone(),
+            editor_preferences: EditorPreferences {
+                show_line_numbers: settings.show_line_numbers,
+                wrap_text: settings.wrap_text,
+                highlight_current_line: settings.highlight_current_line,
+                use_monospace: settings.use_monospace,
+                custom_font: settings.ios_custom_font.clone(),
+            },
             unavailable_folders,
         })
     }
@@ -314,12 +483,77 @@ impl PaperTrailClient {
         let mut state = self.state()?;
         let path = self.note(&state.settings, &path)?;
         let _activity = self.service.local()?;
+        Self::require_text(&path)?;
         state.session.open(&Repository, &path)?;
         Ok(state.session.text.clone())
     }
     pub fn edit(&self, text: String) -> Result<()> {
         self.state()?.session.edit(text, Instant::now());
         Ok(())
+    }
+
+    pub fn editor_title(&self) -> Result<String> {
+        let state = self.state()?;
+        let note = state
+            .session
+            .current
+            .as_ref()
+            .ok_or_else(|| error("No open note"))?;
+        Ok(papertrail_core::note::summarize(&note.path, &state.session.text).0)
+    }
+
+    pub fn syntax_languages(&self) -> Vec<SyntaxLanguage> {
+        papertrail_core::syntax::LANGUAGES
+            .iter()
+            .map(|language| SyntaxLanguage {
+                id: language.id.into(),
+                name: language.name.into(),
+            })
+            .collect()
+    }
+
+    pub fn note_syntax(&self, path: String) -> Result<NoteSyntax> {
+        let state = self.state()?;
+        let path = self.note(&state.settings, &path)?;
+        let override_id = state.settings.note_language_overrides.get(&path).cloned();
+        let chosen = override_id
+            .as_deref()
+            .and_then(papertrail_core::syntax::by_id);
+        // An unavailable desktop grammar must not silently change its stored
+        // override, or enable a different grammar based on the extension.
+        let unsupported = override_id.is_some() && chosen.is_none();
+        let language = chosen.unwrap_or_else(|| {
+            if unsupported {
+                &papertrail_core::syntax::LANGUAGES[0]
+            } else {
+                papertrail_core::syntax::detect(&path)
+            }
+        });
+        Ok(NoteSyntax {
+            override_id,
+            language_id: language.id.into(),
+            name: language.name.into(),
+            unsupported,
+        })
+    }
+
+    pub fn set_note_language(&self, path: String, language: Option<String>) -> Result<()> {
+        let language = language
+            .map(|id| {
+                papertrail_core::syntax::by_id(&id)
+                    .map(|language| language.id.to_owned())
+                    .ok_or_else(|| error("This language is not bundled on iOS"))
+            })
+            .transpose()?;
+        let mut state = self.state()?;
+        let path = self.note(&state.settings, &path)?;
+        let mut updated = state.settings.clone();
+        if let Some(language) = language {
+            updated.note_language_overrides.insert(path, language);
+        } else {
+            updated.note_language_overrides.remove(&path);
+        }
+        self.persist(&mut state, updated)
     }
     pub fn save(&self) -> Result<()> {
         let mut state = self.state()?;
@@ -372,14 +606,28 @@ impl PaperTrailClient {
         }
         let _activity = self.service.local()?;
         let mut filename = papertrail_core::note::normalize_filename(&filename, "untitled-note");
-        if !filename.ends_with(".txt") {
-            filename.push_str(".txt");
+        if Path::new(&filename).extension().is_none() {
+            if let Some(extension) = path.extension() {
+                filename.push('.');
+                filename.push_str(&extension.to_string_lossy());
+            }
         }
         let renamed = Repository.rename(&path, &filename)?;
         let mut updated = state.settings.clone();
         updated.rename_note(&path, &renamed.path);
         self.persist(&mut state, updated)?;
         Ok(renamed.path.to_string_lossy().into())
+    }
+
+    pub fn reorder_folders(&self, paths: Vec<String>) -> Result<()> {
+        let mut state = self.state()?;
+        let mut updated = state.settings.clone();
+        if !updated.reorder(paths.into_iter().map(PathBuf::from).collect()) {
+            return Err(error(
+                "Folder order must contain each registered folder exactly once",
+            ));
+        }
+        self.persist(&mut state, updated)
     }
     pub fn move_note(&self, path: String, folder: String) -> Result<String> {
         let mut state = self.state()?;
@@ -408,6 +656,33 @@ impl PaperTrailClient {
             .folder_colors
             .insert(folder, colors::normalize(&color.into()));
         self.persist(&mut state, updated)
+    }
+    /// Update presentation metadata, not the provider directory or its bookmark.
+    pub fn edit_folder(&self, path: String, name: String, color: String) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().any(char::is_control) {
+            return Err(error(
+                "Enter a nonempty folder display name without control characters",
+            ));
+        }
+        let mut state = self.state()?;
+        let path = PathBuf::from(path);
+        if !state.settings.note_folders.contains(&path) {
+            return Err(error("Folder is not registered"));
+        }
+        let mut updated = state.settings.clone();
+        updated.folder_labels.insert(path.clone(), name.into());
+        updated
+            .folder_colors
+            .insert(path, colors::normalize(&color.into()));
+        self.persist(&mut state, updated)
+    }
+
+    /// Export bytes unchanged, including files not supported by the text editor.
+    pub fn export_note(&self, path: String) -> Result<Vec<u8>> {
+        let state = self.state()?;
+        let path = self.note(&state.settings, &path)?;
+        Ok(fs::read(path)?)
     }
     pub fn delete_note(&self, path: String) -> Result<()> {
         let mut state = self.state()?;
@@ -493,61 +768,115 @@ impl PaperTrailClient {
         updated.remove_folder(&path);
         self.persist(&mut state, updated)
     }
-    pub fn preferences(&self, font_scale: f64, appearance: String) -> Result<()> {
+    pub fn preferences(
+        &self,
+        font_scale: f64,
+        appearance: String,
+        editor: EditorPreferences,
+    ) -> Result<()> {
         if !font_scale.is_finite() || !["light", "dark", "system"].contains(&appearance.as_str()) {
             return Err(error("Invalid appearance settings"));
+        }
+        if editor.custom_font.len() > 256 || editor.custom_font.chars().any(char::is_control) {
+            return Err(error("Invalid iOS font name"));
         }
         let mut state = self.state()?;
         let mut updated = state.settings.clone();
         updated.font_scale = font_scale.clamp(0.7, 2.5);
         updated.theme_mode = appearance;
+        updated.show_line_numbers = editor.show_line_numbers;
+        updated.wrap_text = editor.wrap_text;
+        updated.highlight_current_line = editor.highlight_current_line;
+        updated.use_monospace = editor.use_monospace;
+        updated.ios_custom_font = editor.custom_font.trim().into();
         self.persist(&mut state, updated)
     }
     pub fn sync_profile(&self) -> Result<SyncProfile> {
         let config = self.service.saved_config()?.unwrap_or_default();
+        let folders = self
+            .service
+            .folder_choices(&self.state()?.settings)?
+            .into_iter()
+            .filter(|choice| choice.selected)
+            .filter_map(|choice| choice.path)
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         Ok(SyncProfile {
             server: config.server,
             issuer: config.issuer,
             client_id: config.client_id,
             scopes: config.scopes,
-            folders: config
-                .folders
-                .iter()
-                .map(|p| p.to_string_lossy().into())
-                .collect(),
+            discover_auth: config.discover_auth,
+            folders,
         })
     }
     pub fn configure_sync(&self, profile: SyncProfile) -> Result<()> {
-        let state = self.state()?;
-        let folders = profile
-            .folders
-            .iter()
-            .map(|p| self.folder(&state.settings, p))
-            .collect::<Result<Vec<_>>>()?;
-        let mut config = self.service.saved_config()?.unwrap_or_default();
-        for choice in self.service.folder_choices(&state.settings)? {
-            if let (Some(id), Some(path)) = (choice.id, choice.path) {
-                if folders
-                    .iter()
-                    .any(|selected| papertrail_sync::same_directory(selected, &path))
-                {
-                    config.excluded_folders.remove(&id);
-                    config.selected_folders.insert(id);
-                } else {
-                    config.selected_folders.remove(&id);
-                    config.excluded_folders.insert(id);
-                }
-            }
+        if profile.discover_auth {
+            return Err(error(
+                "Discovered authentication requires setup review and confirmation",
+            ));
         }
-        config.server = profile.server;
-        config.issuer = profile.issuer;
-        config.client_id = profile.client_id;
-        config.scopes = profile.scopes;
-        config.folders = folders;
-        config
-            .download_dir
-            .get_or_insert_with(|| self.home.join("Paper Trail Synced"));
-        self.service.configure(config)?;
+        self.service
+            .configure(self.configuration(profile, self.service.saved_config()?)?)?;
+        Ok(())
+    }
+    /// Discovery never persists settings or starts authentication.
+    pub fn prepare_sync_setup(&self, profile: SyncProfile) -> Result<SyncSetup> {
+        self.prepare_setup(profile, papertrail_sync::auth::config::prepare)
+    }
+    pub fn confirm_sync_setup(&self, token: u64) -> Result<()> {
+        let mut pending = self
+            .pending_setup
+            .lock()
+            .map_err(|_| error("Setup unavailable"))?;
+        let setup = pending
+            .as_ref()
+            .filter(|setup| setup.token == token)
+            .ok_or_else(|| error("Setup expired; review the current server again"))?;
+        if self.setup_generation.load(Ordering::Acquire) != token {
+            return Err(error("Setup was superseded; review the current server"));
+        }
+        if self.service.saved_config()? != setup.baseline {
+            return Err(error("Sync configuration changed; review setup again"));
+        }
+        // Revalidate folder access after a confirmation dialog/provider change.
+        for folder in &setup.candidate.folders {
+            self.folder(&self.state()?.settings, &folder.to_string_lossy())?;
+        }
+        self.service.configure(setup.candidate.clone())?;
+        pending.take();
+        Ok(())
+    }
+    pub fn discard_sync_setup(&self, token: u64) -> Result<()> {
+        let mut pending = self
+            .pending_setup
+            .lock()
+            .map_err(|_| error("Setup unavailable"))?;
+        if pending.as_ref().is_some_and(|setup| setup.token == token) {
+            pending.take();
+        }
+        Ok(())
+    }
+    pub fn sync_status(&self) -> SyncStatus {
+        SyncStatus {
+            configured: self.service.configured(),
+            signed_in: self.service.signed_in(),
+            unlocked: self.service.unlocked(),
+            vault_exists: self.service.vault_exists(),
+        }
+    }
+    /// A control-plane signal: safe to call while the serialized worker is busy.
+    pub fn cancel_sync(&self) -> Result<()> {
+        if let Some(cancel) = self
+            .operation
+            .lock()
+            .map_err(|_| error("Sync unavailable"))?
+            .as_ref()
+        {
+            cancel.cancel();
+        }
         Ok(())
     }
     pub fn begin_login(&self) -> Result<String> {
@@ -555,6 +884,7 @@ impl PaperTrailClient {
             .service
             .saved_config()?
             .ok_or_else(|| error("Configure sync first"))?;
+        papertrail_sync::auth::config::check(&config)?;
         let (flow, url) =
             LoginFlow::begin(&config, "io.github.maennlse.paper-trail://oauth/callback")?;
         *self.login.lock().map_err(|_| error("Login unavailable"))? = Some(flow);
@@ -588,17 +918,24 @@ impl PaperTrailClient {
             .accept_remote_folder(&id, &self.state()?.settings)?;
         Ok(())
     }
-    pub fn sync_action(&self, action: SyncAction, secret: String) -> Result<SyncResult> {
+    pub fn sync_action(
+        &self,
+        action: SyncAction,
+        secret: String,
+        remember: bool,
+    ) -> Result<SyncResult> {
         let secret = Zeroizing::new(secret);
         let mut state = self.state()?;
         let command = match action {
             SyncAction::Restore => Command::Restore,
             SyncAction::Status => Command::Status,
-            SyncAction::Unlock => Command::Unlock(secret),
-            SyncAction::Create => Command::Create(secret),
+            SyncAction::Unlock => passphrase_command(PassphraseAction::Unlock, secret, remember),
+            SyncAction::Create => passphrase_command(PassphraseAction::Create, secret, remember),
             SyncAction::Recover => Command::Recover(secret),
             SyncAction::ConfirmRecovery => Command::ConfirmRecovery,
-            SyncAction::ChangePassphrase => Command::ChangePassphrase(secret),
+            SyncAction::ChangePassphrase => {
+                passphrase_command(PassphraseAction::Change, secret, remember)
+            }
             SyncAction::Lock => Command::Lock,
             SyncAction::Logout => Command::Logout,
             SyncAction::Synchronize => {
@@ -614,11 +951,21 @@ impl PaperTrailClient {
                 }
             }
         };
-        let outcome = self
+        let cancel = Cancellation::default();
+        *self
+            .operation
+            .lock()
+            .map_err(|_| error("Sync unavailable"))? = Some(cancel.clone());
+        let result = self
             .service
-            .submit(command)
+            .submit_cancellable(command, cancel)
             .recv()
-            .map_err(|_| error("Sync worker stopped"))??;
+            .map_err(|_| error("Sync worker stopped"));
+        *self
+            .operation
+            .lock()
+            .map_err(|_| error("Sync unavailable"))? = None;
+        let outcome = result??;
         state.settings = self
             .settings_file
             .load(state.settings.notes_dir.clone(), &self.home)?;
@@ -640,6 +987,188 @@ mod tests {
             root.join("Support").to_string_lossy().into(),
         )
         .unwrap()
+    }
+    fn setup_profile(app: &PaperTrailClient, discover_auth: bool) -> SyncProfile {
+        SyncProfile {
+            server: "https://sync.example".into(),
+            issuer: "https://manual.example".into(),
+            client_id: "manual-native".into(),
+            scopes: "openid".into(),
+            folders: vec![app.snapshot(None, "".into()).unwrap().default_folder],
+            discover_auth,
+        }
+    }
+    fn discovery(mut config: Config) -> io::Result<Config> {
+        config.issuer = "https://identity.example".into();
+        config.client_id = "discovered-native".into();
+        config.scopes = "openid offline_access api:notes".into();
+        config.discover_auth = true;
+        config.validate()?;
+        Ok(config)
+    }
+
+    #[test]
+    fn discovery_requires_explicit_trust_and_persists_the_discovery_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let preview = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        assert!(preview.needs_confirmation);
+        assert!(preview
+            .trust_description
+            .contains("https://identity.example"));
+        assert!(!app.sync_status().configured);
+        assert!(!app.sync_status().signed_in);
+        app.confirm_sync_setup(preview.token).unwrap();
+        let saved = app.sync_profile().unwrap();
+        assert!(saved.discover_auth);
+        assert_eq!(saved.client_id, "discovered-native");
+        let preview = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        assert!(
+            !preview.needs_confirmation,
+            "unchanged issuer is already trusted"
+        );
+    }
+
+    #[test]
+    fn cancelled_superseded_and_stale_discovery_cannot_reconfigure_sync() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let cancelled = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        app.discard_sync_setup(cancelled.token).unwrap();
+        assert!(app.confirm_sync_setup(cancelled.token).is_err());
+        assert!(!app.sync_status().configured);
+        let old = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        let new = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        assert!(app.confirm_sync_setup(old.token).is_err());
+        app.configure_sync(setup_profile(&app, false)).unwrap();
+        assert!(app.confirm_sync_setup(new.token).is_err());
+        assert_eq!(app.sync_profile().unwrap().issuer, "https://manual.example");
+    }
+
+    #[test]
+    fn manual_setup_skips_discovery_and_failed_discovery_keeps_saved_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let manual = app
+            .prepare_setup(setup_profile(&app, false), |_| {
+                panic!("Manual setup must not discover")
+            })
+            .unwrap();
+        assert!(!manual.needs_confirmation);
+        app.confirm_sync_setup(manual.token).unwrap();
+        let saved = app.service.saved_config().unwrap();
+        assert!(app
+            .prepare_setup(setup_profile(&app, true), |_| Err(io::Error::other(
+                "Discovery failed"
+            )))
+            .is_err());
+        assert!(app.service.saved_config().unwrap() == saved);
+        assert!(!app.sync_profile().unwrap().discover_auth);
+        assert!(
+            app.configure_sync(setup_profile(&app, true)).is_err(),
+            "discovery must not bypass review"
+        );
+    }
+
+    #[test]
+    fn changed_issuer_needs_new_confirmation_without_replacing_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let original = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        app.confirm_sync_setup(original.token).unwrap();
+        let saved = app.service.saved_config().unwrap().unwrap();
+        let preview = app
+            .prepare_setup(setup_profile(&app, true), |mut config| {
+                config.issuer = "https://another-identity.example".into();
+                Ok(config)
+            })
+            .unwrap();
+        assert!(preview.needs_confirmation);
+        assert!(preview.trust_description.contains("Previously accepted"));
+        assert!(app.service.saved_config().unwrap().unwrap() == saved);
+        app.confirm_sync_setup(preview.token).unwrap();
+        assert_eq!(
+            app.service.saved_config().unwrap().unwrap().folders,
+            saved.folders
+        );
+    }
+
+    #[test]
+    fn discovery_preserves_download_mappings_and_remote_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        app.configure_sync(setup_profile(&app, false)).unwrap();
+        let mut saved = app.service.saved_config().unwrap().unwrap();
+        let id = "AAAAAAAAAAAAAAAAAAAAAA".to_owned();
+        saved
+            .folder_mappings
+            .insert(id.clone(), app.home.join("remote"));
+        saved.selected_folders.insert(id.clone());
+        saved.excluded_folders.insert(id);
+        saved.auto_download = false;
+        saved.download_dir = Some(app.home.join("existing-downloads"));
+        app.service.configure(saved.clone()).unwrap();
+        let preview = app
+            .prepare_setup(setup_profile(&app, true), discovery)
+            .unwrap();
+        app.confirm_sync_setup(preview.token).unwrap();
+        let actual = app.service.saved_config().unwrap().unwrap();
+        assert_eq!(actual.folder_mappings, saved.folder_mappings);
+        assert_eq!(actual.selected_folders, saved.selected_folders);
+        assert_eq!(actual.excluded_folders, saved.excluded_folders);
+        assert_eq!(actual.download_dir, saved.download_dir);
+        assert!(!actual.auto_download);
+    }
+
+    #[test]
+    fn passphrase_commands_preserve_explicit_remember_consent() {
+        for action in [
+            PassphraseAction::Create,
+            PassphraseAction::Unlock,
+            PassphraseAction::Change,
+        ] {
+            for remember in [false, true] {
+                let command = passphrase_command(
+                    action,
+                    Zeroizing::new("private passphrase".into()),
+                    remember,
+                );
+                let Command::Passphrase {
+                    remember: actual,
+                    passphrase,
+                    ..
+                } = command
+                else {
+                    panic!("Must use the shared remember-password command")
+                };
+                assert_eq!(actual, remember);
+                assert_eq!(passphrase.as_str(), "private passphrase");
+            }
+        }
+    }
+
+    #[test]
+    fn cancellation_signal_does_not_wait_for_the_library_worker() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let cancel = Cancellation::default();
+        *app.operation.lock().unwrap() = Some(cancel.clone());
+        let _state = app.state().unwrap();
+        app.cancel_sync().unwrap();
+        assert!(cancel.is_cancelled());
+        assert!(!app.sync_status().unlocked);
     }
     #[test]
     fn search_full_contents_and_preserve_metadata() {
@@ -711,6 +1240,410 @@ mod tests {
     }
 
     #[test]
+    fn all_regular_files_are_visible_but_only_utf8_text_is_editable() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let folder = PathBuf::from(app.snapshot(None, "".into()).unwrap().default_folder);
+        for name in ["plain.txt", "README", "journal.md", "UPPER.TXT"] {
+            fs::write(folder.join(name), format!("{name}\nSearchable contents")).unwrap();
+        }
+        let binary = folder.join("image.bin");
+        fs::write(&binary, [0, 255, 12]).unwrap();
+        let invalid_utf8 = folder.join("invalid");
+        fs::write(&invalid_utf8, [255, 254]).unwrap();
+        fs::create_dir(folder.join("not-a-note")).unwrap();
+        assert_eq!(app.snapshot(None, "".into()).unwrap().notes.len(), 6);
+        assert_eq!(
+            app.snapshot(None, "searchable".into()).unwrap().notes.len(),
+            4
+        );
+        let markdown = folder.join("journal.md").to_string_lossy().to_string();
+        app.open_note(markdown.clone()).unwrap();
+        app.edit("Updated Markdown\nPlain UTF-8".into()).unwrap();
+        app.close_note().unwrap();
+        assert_eq!(
+            fs::read_to_string(&markdown).unwrap(),
+            "Updated Markdown\nPlain UTF-8"
+        );
+        assert!(app.open_note(binary.to_string_lossy().into()).is_err());
+        assert!(app
+            .open_note(invalid_utf8.to_string_lossy().into())
+            .is_err());
+        assert_eq!(fs::read(binary).unwrap(), [0, 255, 12]);
+        assert_eq!(fs::read(invalid_utf8).unwrap(), [255, 254]);
+    }
+
+    #[test]
+    fn rename_preserves_extensions_contents_and_unpin_survives_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let folder = PathBuf::from(app.snapshot(None, "".into()).unwrap().default_folder);
+        for (original, requested, expected) in [
+            ("journal.md", "renamed", "renamed.md"),
+            ("README", "NOTES", "NOTES"),
+            ("upper.TXT", "upper-renamed", "upper-renamed.TXT"),
+        ] {
+            let path = folder.join(original);
+            fs::write(&path, "Keep my contents").unwrap();
+            let path = path.to_string_lossy().to_string();
+            app.set_pinned(path.clone(), true).unwrap();
+            let renamed = app.rename_note(path, requested.into()).unwrap();
+            assert_eq!(Path::new(&renamed).file_name().unwrap(), expected);
+            assert_eq!(fs::read_to_string(&renamed).unwrap(), "Keep my contents");
+            let snapshot = app.snapshot(None, "".into()).unwrap();
+            assert!(snapshot.notes.iter().any(|n| n.path == renamed && n.pinned));
+            app.set_pinned(renamed, false).unwrap();
+        }
+        assert!(client(root.path())
+            .snapshot(None, "".into())
+            .unwrap()
+            .notes
+            .iter()
+            .all(|n| !n.pinned));
+    }
+
+    #[test]
+    fn rename_does_not_overwrite_a_collision_or_rename_an_open_note() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        let existing = Path::new(&path).parent().unwrap().join("existing.txt");
+        fs::write(&existing, "Do not overwrite").unwrap();
+        app.open_note(path.clone()).unwrap();
+        assert!(app
+            .rename_note(path.clone(), "existing.txt".into())
+            .is_err());
+        app.close_note().unwrap();
+        let result = app.rename_note(path, "existing.txt".into());
+        if let Ok(renamed) = result {
+            assert_ne!(Path::new(&renamed), existing);
+        }
+        assert_eq!(fs::read_to_string(existing).unwrap(), "Do not overwrite");
+    }
+
+    #[test]
+    fn folder_order_is_validated_and_persisted_without_changing_selection_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        app.add_folder("Work Notes".into(), "#779b82".into())
+            .unwrap();
+        let snapshot = app.snapshot(None, "".into()).unwrap();
+        let default = snapshot.default_folder;
+        let mut paths: Vec<_> = snapshot.folders.iter().map(|f| f.path.clone()).collect();
+        paths.reverse();
+        app.reorder_folders(paths.clone()).unwrap();
+        let snapshot = client(root.path()).snapshot(None, "".into()).unwrap();
+        assert_eq!(
+            snapshot
+                .folders
+                .iter()
+                .map(|f| f.path.clone())
+                .collect::<Vec<_>>(),
+            paths
+        );
+        assert_eq!(snapshot.default_folder, default);
+        let work = snapshot
+            .folders
+            .iter()
+            .find(|f| f.name == "Work Notes")
+            .unwrap();
+        assert_eq!(work.color, "#779b82");
+        assert_eq!(work.badge, colors::badge("Work Notes"));
+        assert!(app.reorder_folders(vec![paths[0].clone()]).is_err());
+        assert!(app
+            .reorder_folders(vec![paths[0].clone(); paths.len()])
+            .is_err());
+        let mut unknown = paths.clone();
+        unknown[0] = root.path().to_string_lossy().into();
+        assert!(app.reorder_folders(unknown).is_err());
+        assert_eq!(
+            app.snapshot(None, "".into())
+                .unwrap()
+                .folders
+                .iter()
+                .map(|f| f.path.clone())
+                .collect::<Vec<_>>(),
+            paths
+        );
+    }
+
+    #[test]
+    fn folder_edit_changes_only_labels_and_colors_even_when_unavailable() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        app.set_pinned(path.clone(), true).unwrap();
+        let before = app.snapshot(None, "".into()).unwrap();
+        let folder = before.folders[0].path.clone();
+        app.edit_folder(folder.clone(), "  My Notes  ".into(), "#abc".into())
+            .unwrap();
+        let after = client(root.path()).snapshot(None, "".into()).unwrap();
+        assert_eq!(after.default_folder, before.default_folder);
+        assert_eq!(after.folders[0].path, folder);
+        assert_eq!(after.folders[0].name, "My Notes");
+        assert_eq!(after.folders[0].color, "#aabbcc");
+        assert_eq!(after.notes[0].path, path);
+        assert!(after.notes[0].pinned);
+        assert_eq!(after.notes[0].folder_name, "My Notes");
+        assert!(Path::new(&folder).is_dir());
+        assert!(app
+            .edit_folder(folder.clone(), " ".into(), "#fff".into())
+            .is_err());
+        assert!(app
+            .edit_folder(folder.clone(), "Bad\nLabel".into(), "#fff".into())
+            .is_err());
+        assert!(app
+            .edit_folder(
+                root.path().to_string_lossy().into(),
+                "Outside".into(),
+                "#fff".into()
+            )
+            .is_err());
+        let unavailable = PathBuf::from(&folder).with_file_name("temporarily-away");
+        fs::rename(&folder, unavailable).unwrap();
+        app.edit_folder(folder.clone(), "Offline Notes".into(), "#779b82".into())
+            .unwrap();
+        let after = app.snapshot(None, "".into()).unwrap();
+        assert_eq!(after.folders[0].name, "Offline Notes");
+        assert_eq!(after.folders[0].path, folder);
+        assert!(!Path::new(&folder).exists());
+        assert!(!after.unavailable_folders.is_empty());
+    }
+
+    #[test]
+    fn moving_preserves_both_files_on_collision_and_keeps_pins() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        app.add_folder("Destination".into(), "#abc".into()).unwrap();
+        let snapshot = app.snapshot(None, "".into()).unwrap();
+        let source = Path::new(&snapshot.default_folder).join("README");
+        let destination = &snapshot
+            .folders
+            .iter()
+            .find(|f| f.name == "Destination")
+            .unwrap()
+            .path;
+        let existing = Path::new(destination).join("README");
+        fs::write(&source, "Source contents").unwrap();
+        fs::write(&existing, "Destination contents").unwrap();
+        let source = source.to_string_lossy().to_string();
+        app.set_pinned(source.clone(), true).unwrap();
+        app.open_note(source.clone()).unwrap();
+        assert!(app.move_note(source.clone(), destination.clone()).is_err());
+        app.close_note().unwrap();
+        let moved = app.move_note(source.clone(), destination.clone()).unwrap();
+        assert!(!Path::new(&source).exists());
+        assert_ne!(Path::new(&moved), existing);
+        assert_eq!(fs::read_to_string(&moved).unwrap(), "Source contents");
+        assert_eq!(
+            fs::read_to_string(existing).unwrap(),
+            "Destination contents"
+        );
+        let after = client(root.path()).snapshot(None, "".into()).unwrap();
+        assert!(after
+            .notes
+            .iter()
+            .any(|n| n.path == moved && n.pinned && n.folder == *destination));
+        assert!(app
+            .move_note(moved, root.path().to_string_lossy().into())
+            .is_err());
+    }
+
+    #[test]
+    fn export_preserves_binary_bytes_and_does_not_flush_or_replace_editor_drafts() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        fs::write(&path, "Saved version").unwrap();
+        app.open_note(path.clone()).unwrap();
+        app.edit("Unsaved version".into()).unwrap();
+        assert_eq!(app.export_note(path.clone()).unwrap(), b"Saved version");
+        assert_eq!(app.state().unwrap().session.text, "Unsaved version");
+        let binary = Path::new(&path).parent().unwrap().join("data.bin");
+        fs::write(&binary, [0, 255, 254, 13, 10]).unwrap();
+        assert_eq!(
+            app.export_note(binary.to_string_lossy().into()).unwrap(),
+            [0, 255, 254, 13, 10]
+        );
+        let outside = root.path().join("outside");
+        fs::write(&outside, "Private").unwrap();
+        assert!(app.export_note(outside.to_string_lossy().into()).is_err());
+    }
+
+    #[test]
+    fn editor_preferences_match_gtk_defaults_and_preserve_desktop_fonts() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let initial = app.snapshot(None, "".into()).unwrap().editor_preferences;
+        assert!(initial.show_line_numbers);
+        assert!(initial.wrap_text);
+        assert!(initial.highlight_current_line);
+        assert!(!initial.use_monospace);
+        assert!(initial.custom_font.is_empty());
+        {
+            let mut state = app.state().unwrap();
+            let mut updated = state.settings.clone();
+            updated.use_custom_font = true;
+            updated.custom_font = "Liberation Mono Bold 14".into();
+            app.persist(&mut state, updated).unwrap();
+        }
+        app.preferences(
+            1.3,
+            "dark".into(),
+            EditorPreferences {
+                show_line_numbers: false,
+                wrap_text: false,
+                highlight_current_line: false,
+                use_monospace: false,
+                custom_font: "Menlo-Regular".into(),
+            },
+        )
+        .unwrap();
+        let restored = client(root.path());
+        let snapshot = restored.snapshot(None, "".into()).unwrap();
+        assert_eq!(snapshot.font_scale, 1.3);
+        assert_eq!(snapshot.appearance, "dark");
+        assert!(!snapshot.editor_preferences.show_line_numbers);
+        assert!(!snapshot.editor_preferences.wrap_text);
+        assert!(!snapshot.editor_preferences.highlight_current_line);
+        assert_eq!(snapshot.editor_preferences.custom_font, "Menlo-Regular");
+        let state = restored.state().unwrap();
+        assert!(state.settings.use_custom_font);
+        assert_eq!(state.settings.custom_font, "Liberation Mono Bold 14");
+        drop(state);
+        let mut editor = snapshot.editor_preferences;
+        editor.custom_font.clear();
+        editor.use_monospace = true;
+        app.preferences(1.0, "system".into(), editor).unwrap();
+        let snapshot = client(root.path()).snapshot(None, "".into()).unwrap();
+        assert!(snapshot.editor_preferences.use_monospace);
+        assert!(snapshot.editor_preferences.custom_font.is_empty());
+    }
+
+    #[test]
+    fn invalid_editor_preferences_never_partially_replace_saved_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let editor = app.snapshot(None, "".into()).unwrap().editor_preferences;
+        let saved = fs::read(&app.settings_file.path).unwrap();
+        for invalid in ["Bad\nFont".to_owned(), "x".repeat(257)] {
+            let mut candidate = editor.clone();
+            candidate.custom_font = invalid;
+            assert!(app.preferences(1.5, "dark".into(), candidate).is_err());
+        }
+        assert!(app
+            .preferences(f64::NAN, "dark".into(), editor.clone())
+            .is_err());
+        assert!(app.preferences(1.0, "invalid".into(), editor).is_err());
+        assert_eq!(fs::read(&app.settings_file.path).unwrap(), saved);
+    }
+
+    #[test]
+    fn syntax_choices_preserve_contents_dirty_edits_and_shared_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        let path = app.rename_note(path, "Example.MD".into()).unwrap();
+        fs::write(&path, "# Heading\n**Saved contents**").unwrap();
+        assert_eq!(
+            app.note_syntax(path.clone()).unwrap().language_id,
+            "markdown"
+        );
+        app.open_note(path.clone()).unwrap();
+        app.edit("# Unsaved heading\n`code`".into()).unwrap();
+        assert_eq!(app.editor_title().unwrap(), "# Unsaved heading");
+        app.set_note_language(path.clone(), Some("plain".into()))
+            .unwrap();
+        let syntax = app.note_syntax(path.clone()).unwrap();
+        assert_eq!(syntax.language_id, "plain");
+        assert_eq!(syntax.override_id.as_deref(), Some("plain"));
+        assert!(!syntax.unsupported);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# Heading\n**Saved contents**"
+        );
+        assert!(app.state().unwrap().session.is_dirty());
+        assert_eq!(
+            app.state().unwrap().session.text,
+            "# Unsaved heading\n`code`"
+        );
+        app.close_note().unwrap();
+        let restarted = client(root.path());
+        assert_eq!(
+            restarted.note_syntax(path.clone()).unwrap().language_id,
+            "plain"
+        );
+        let path = restarted.rename_note(path, "renamed.md".into()).unwrap();
+        assert_eq!(
+            restarted.note_syntax(path.clone()).unwrap().language_id,
+            "plain"
+        );
+        restarted.set_note_language(path.clone(), None).unwrap();
+        assert_eq!(
+            restarted.note_syntax(path.clone()).unwrap().language_id,
+            "markdown"
+        );
+        assert!(restarted.note_syntax(path).unwrap().override_id.is_none());
+        assert_eq!(
+            restarted.syntax_languages().len(),
+            papertrail_core::syntax::LANGUAGES.len()
+        );
+    }
+
+    #[test]
+    fn unsupported_synced_syntax_is_preserved_and_new_invalid_choices_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        {
+            let mut state = app.state().unwrap();
+            let mut updated = state.settings.clone();
+            updated
+                .note_language_overrides
+                .insert(PathBuf::from(&path), "c".into());
+            app.persist(&mut state, updated).unwrap();
+        }
+        let syntax = app.note_syntax(path.clone()).unwrap();
+        assert!(syntax.unsupported);
+        assert_eq!(syntax.override_id.as_deref(), Some("c"));
+        assert_eq!(syntax.language_id, "plain");
+        assert!(app
+            .set_note_language(path.clone(), Some("invalid".into()))
+            .is_err());
+        assert_eq!(
+            app.note_syntax(path.clone())
+                .unwrap()
+                .override_id
+                .as_deref(),
+            Some("c")
+        );
+        assert!(app
+            .set_note_language(root.path().join("outside").to_string_lossy().into(), None)
+            .is_err());
+        app.set_note_language(path.clone(), Some("python".into()))
+            .unwrap();
+        assert_eq!(app.note_syntax(path).unwrap().language_id, "python3");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_neither_listed_nor_accepted_for_note_operations() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        let link = Path::new(&path).parent().unwrap().join("linked.md");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert_eq!(app.snapshot(None, "".into()).unwrap().notes.len(), 1);
+        let link = link.to_string_lossy().to_string();
+        assert!(app.open_note(link.clone()).is_err());
+        assert!(app.export_note(link.clone()).is_err());
+        assert!(app.set_pinned(link.clone(), true).is_err());
+        assert!(app.rename_note(link.clone(), "escape".into()).is_err());
+        assert!(app.delete_note(link).is_err());
+        assert!(Path::new(&path).exists());
+    }
+
+    #[test]
     fn container_relocation_rewrites_settings_and_unsynced_profile() {
         let root = tempfile::tempdir().unwrap();
         let app = client(root.path());
@@ -723,6 +1656,7 @@ mod tests {
             client_id: "ios".into(),
             scopes: "openid".into(),
             folders: vec![default],
+            discover_auth: false,
         })
         .unwrap();
         drop(app);

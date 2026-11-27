@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import tarfile
 import tempfile
+import tomllib
 import unittest
 import zipfile
 from pathlib import Path
@@ -51,6 +52,20 @@ class ReleaseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_tag(wrong, manifest)
 
+    def test_ios_release_is_required_and_versions_match(self) -> None:
+        """The release must build iOS and present the same public version."""
+        root = Path(__file__).resolve().parent.parent
+        version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"][
+            "package"
+        ]["version"]
+        project = (root / "ios/project.yml").read_text()
+        self.assertIn(f'MARKETING_VERSION: "{version}"', project)
+        workflow = (root / ".github/workflows/release.yml").read_text()
+        self.assertIn("uses: $/.github/workflows/ios.yml", workflow)
+        self.assertIn("needs: [validate, tui, gtk, server, ios]", workflow)
+        ios = (root / ".github/workflows/ios.yml").read_text()
+        self.assertIn("  workflow_call:", ios)
+
     def test_windows_allows_system_crypto_but_rejects_dynamic_crt(self) -> None:
         """System randomness DLLs are allowed, but the C runtime stays static."""
         binary = self.root / "paper-trail-tui.exe"
@@ -76,11 +91,12 @@ class ReleaseTests(unittest.TestCase):
         (source / "debug.png").write_bytes(b"not a release asset")
         destination = self.root / "release"
         collect(source, destination)
-        self.assertEqual(len(PACKAGES), 14)
-        self.assertEqual(len(list(destination.iterdir())), 29)
+        self.assertEqual(len(PACKAGES), 15)
+        self.assertIn("paper-trail-ios-arm64-unsigned.ipa", PACKAGES)
+        self.assertEqual(len(list(destination.iterdir())), 31)
         self.assertFalse((destination / "debug.png").exists())
         lines = (destination / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(lines), 14)
+        self.assertEqual(len(lines), 15)
         for line in lines:
             digest, name = line.split()
             self.assertEqual(

@@ -3,31 +3,88 @@ import SwiftUI
 
 struct PlainTextEditorView: View {
     @EnvironmentObject private var model: LibraryModel
+    @State private var findRequest = 0
+    @State private var export: NoteExport?
+    @State private var showSync = false
+    @State private var showLanguage = false
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 if model.saveFailed {
-                    HStack {
+                    VStack(alignment: .leading, spacing: 8) {
                         Label("Not saved. Your edits are kept.", systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                        Spacer()
-                        Button("Save a Copy") { Task { await model.saveCopy() } }
+                        HStack {
+                            Button("Retry") { Task { await model.retrySave() } }
+                            Button("Save a Copy") { Task { await model.saveCopy() } }
+                        }
                     }
                     .padding().background(.orange.opacity(0.15))
+                    if let failure = model.editorSave.failure {
+                        Text(failure).font(.caption).foregroundStyle(.secondary)
+                            .padding(.horizontal)
+                    }
                 }
-                TextEditor(text: Binding(get: { model.editorText }, set: { model.edited($0) }))
-                    .font(.system(size: 17 * (model.snapshot?.fontScale ?? 1)))
-                    .padding(.horizontal, 8)
-                    .accessibilityIdentifier("note-editor")
+                RunestoneEditor(
+                    text: Binding(get: { model.editorText }, set: { model.edited($0) }),
+                    fontScale: model.snapshot?.fontScale ?? 1,
+                    findRequest: findRequest,
+                    preferences: model.snapshot?.editorPreferences,
+                    languageID: model.editorSyntax?.languageId ?? "plain"
+                )
+                HStack(spacing: 6) {
+                    if model.editorSave.phase == .saving { ProgressView().controlSize(.mini) }
+                    Text(model.editorSave.phase.rawValue)
+                        .accessibilityIdentifier("editor-save-status")
+                    Spacer()
+                    Button { showLanguage = true } label: {
+                        Label(model.editorSyntax?.name ?? "Plain Text", systemImage: "chevron.up.chevron.down")
+                    }
+                    .accessibilityLabel("Language: \(model.editorSyntax?.name ?? "Plain Text")")
+                    .accessibilityIdentifier("note-language")
+                    .disabled(model.closingEditor)
+                }
+                .font(.caption).foregroundStyle(model.saveFailed ? Color.orange : Color.secondary)
+                .padding(.horizontal).padding(.vertical, 6)
+                if model.configured || model.syncFeedback.failure != nil {
+                    SyncFeedbackView(settings: { showSync = true })
+                        .padding(.horizontal).padding(.bottom, 6)
+                }
             }
-            .navigationTitle("Plain Text")
+            .disabled(model.closingEditor)
+            .navigationTitle(model.editorTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 2) {
+                        Text(model.editorTitle).font(.headline).lineLimit(1)
+                            .accessibilityIdentifier("editor-note-title")
+                        Text(model.editorPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                            .accessibilityIdentifier("editor-note-filename")
+                    }
+                }
+                ToolbarItemGroup(placement: .topBarLeading) {
+                    Button {
+                        findRequest += 1
+                    } label: { Label("Find", systemImage: "magnifyingglass") }
+                    .keyboardShortcut("f", modifiers: .command)
+                    .accessibilityIdentifier("find-in-note")
+                    Button {
+                        do { export = try model.exportEditor() }
+                        catch { model.errorMessage = error.localizedDescription }
+                    } label: { Label("Share", systemImage: "square.and.arrow.up") }
+                    .accessibilityIdentifier("share-note")
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { Task { await model.closeEditor() } }
+                        .disabled(model.closingEditor)
                 }
             }
-            .alert("Could Not Save", isPresented: Binding(
+            .sheet(item: $export) { NoteExportSheet(export: $0) }
+            .sheet(isPresented: $showSync) { SyncSheet() }
+            .sheet(isPresented: $showLanguage) { NoteLanguageSheet() }
+            .alert("Paper Trail", isPresented: Binding(
                 get: { model.errorMessage != nil },
                 set: { if !$0 { model.errorMessage = nil } }
             )) {
@@ -39,6 +96,18 @@ struct PlainTextEditorView: View {
                     }
                 }
             } message: { Text(model.errorMessage ?? "") }
+        }
+        .overlay(alignment: .leading) {
+            // Reserve only the native back-gesture edge, not the text canvas.
+            Color.clear.frame(width: 18).contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 20).onEnded { value in
+                    if value.translation.width > 75,
+                       abs(value.translation.height) < value.translation.width,
+                       !model.closingEditor {
+                        Task { await model.closeEditor() }
+                    }
+                })
+                .accessibilityHidden(true)
         }
         .interactiveDismissDisabled()
     }

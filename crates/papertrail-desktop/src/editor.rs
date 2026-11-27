@@ -171,6 +171,13 @@ impl Desktop {
             .unwrap_or_else(|| "Plain Text".into())
     }
     fn language_for(&self, settings: &Settings, note: &Note) -> Option<sourceview5::Language> {
+        if settings
+            .note_language_overrides
+            .get(&note.path)
+            .is_some_and(|id| id == papertrail_core::syntax::PLAIN_TEXT)
+        {
+            return None;
+        }
         let manager = sourceview5::LanguageManager::default();
         settings
             .note_language_overrides
@@ -225,6 +232,13 @@ impl Desktop {
             .collect();
         languages.sort();
         languages.insert(0, ("Automatic".into(), "automatic".into()));
+        languages.insert(
+            1,
+            (
+                "Plain Text".into(),
+                papertrail_core::syntax::PLAIN_TEXT.into(),
+            ),
+        );
         for (name, id) in languages {
             if !papertrail_core::note::fold(&format!("{name} {id}")).contains(&query) {
                 continue;

@@ -1,4 +1,11 @@
 name: PaperTrail
+packages:
+  Runestone:
+    url: https://github.com/simonbs/Runestone
+    revision: 592434a103a4d1ab83e14f87ac6eef569dd7a99d # 0.5.2
+  TreeSitterLanguages:
+    url: https://github.com/simonbs/TreeSitterLanguages
+    revision: 15cf3a9ec3ab95e0d058b7df9f35619123c9e02d # 0.1.10, Runestone 0.5.2 compatible
 options:
   bundleIdPrefix: io.github.maennlse
   deploymentTarget:
@@ -12,14 +19,37 @@ settings:
     CODE_SIGNING_REQUIRED: NO
     DEVELOPMENT_TEAM: ""
     TARGETED_DEVICE_FAMILY: "1,2"
-    MARKETING_VERSION: "0.6.0"
+    MARKETING_VERSION: "0.7.0"
     CURRENT_PROJECT_VERSION: "1"
 targets:
   PaperTrail:
     type: application
     platform: iOS
+    dependencies: &editorDependencies
+      - package: Runestone
+      - package: TreeSitterLanguages
+        product: TreeSitterLanguagesCommon
+      - package: TreeSitterLanguages
+        product: TreeSitterMarkdownRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterMarkdownInlineRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterJSONRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterPythonRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterRustRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterJavaScriptRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterSwiftRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterTOMLRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterYAMLRunestone
     sources:
       - Sources
+      - Resources
       - path: Generated
         includes: ["*.swift"]
     info:
@@ -40,6 +70,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.maennlse.paper-trail
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_OBJC_BRIDGING_HEADER: Sources/PaperTrail-Bridging-Header.h
         HEADER_SEARCH_PATHS: '$(inherited) "$(SRCROOT)/Generated"'
         LIBRARY_SEARCH_PATHS: '$(inherited) "$(SRCROOT)/build/rust/$(PLATFORM_NAME)"'
@@ -53,6 +84,20 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+  PaperTrailStateTests:
+    type: bundle.unit-test
+    platform: iOS
+    dependencies: *editorDependencies
+    sources:
+      - UnitTests
+      - Sources/EditorSaveState.swift
+      - Sources/NoteExport.swift
+      - Sources/SyntaxHighlighting.swift
+      - Sources/SyncRelativeTime.swift
+      - Sources/AppVersion.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   PaperTrail:
     build:
@@ -61,3 +106,4 @@ schemes:
     test:
       targets:
         - PaperTrailUITests
+        - PaperTrailStateTests

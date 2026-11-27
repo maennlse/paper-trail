@@ -17,12 +17,20 @@ struct NoteListView: View {
     @State private var showPreferences = false
     @State private var showNewFolder = false
     @State private var pendingDelete: NoteInfo?
+    @State private var pendingRename: NoteInfo?
+    @State private var pendingMove: NoteInfo?
+    @State private var pendingFolderEdit: FolderInfo?
+    @State private var export: NoteExport?
+    @State private var exporting = false
 
     var body: some View {
         ZStack(alignment: .leading) {
             NavigationStack {
                 VStack(spacing: 0) {
-                    searchField
+                    if model.configured || model.syncFeedback.failure != nil {
+                        SyncFeedbackView(settings: { showSync = true })
+                            .padding(.horizontal, 16).padding(.bottom, 8)
+                    }
                     if let warning = model.storageWarning ?? model.snapshot?.unavailableFolders.first {
                         Button { showPreferences = true } label: {
                             Label(warning, systemImage: "exclamationmark.triangle")
@@ -31,38 +39,39 @@ struct NoteListView: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            let pinned = model.notes.filter(\.pinned)
-                            if !pinned.isEmpty {
-                                sectionTitle("Pinned")
-                                ForEach(pinned, id: \.path) { note in
-                                    Button { Task { await model.open(note.path) } } label: {
-                                        PinnedNoteCard(note: note)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .contextMenu { noteActions(note) }
-                                }
-                            }
-                            sectionTitle(model.query.isEmpty ? "Recent Notes" : "Search Results")
-                            ForEach(model.notes.filter { !$0.pinned }, id: \.path) { note in
-                                Button { Task { await model.open(note.path) } } label: {
-                                    NoteRowView(note: note)
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu { noteActions(note) }
-                            }
-                            if model.notes.isEmpty {
-                                ContentUnavailableView(
-                                    model.query.isEmpty ? "No Notes Yet" : "No Matching Notes",
-                                    systemImage: model.query.isEmpty ? "note.text" : "magnifyingglass",
-                                    description: Text(model.query.isEmpty ? "Compose a plain text note to get started." : "Search checks titles and full text across folders.")
-                                )
+                    List {
+                        let pinned = model.notes.filter(\.pinned)
+                        if !pinned.isEmpty {
+                            Section("Pinned") {
+                                ForEach(pinned, id: \.path) { note in noteButton(note) }
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 16)
-                        .padding(.bottom, 96)
+                        Section(model.query.isEmpty ? "Recent Notes" : "Search Results") {
+                            ForEach(model.notes.filter { !$0.pinned }, id: \.path) { note in
+                                noteButton(note)
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                    .contentMargins(.bottom, 88, for: .scrollContent)
+                    .searchable(text: $model.query,
+                                placement: .navigationBarDrawer(displayMode: .automatic),
+                                prompt: "Search across folders")
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .background(InitiallyCollapsedSearch(
+                        ready: model.snapshot != nil,
+                        queryIsEmpty: model.query.isEmpty
+                    ))
+                    .overlay {
+                        if model.notes.isEmpty {
+                            ContentUnavailableView(
+                                model.query.isEmpty ? "No Notes Yet" : "No Matching Notes",
+                                systemImage: model.query.isEmpty ? "note.text" : "magnifyingglass",
+                                description: Text(model.query.isEmpty ? "Compose a plain text note to get started." : "Search checks titles and full text across folders.")
+                            )
+                            .allowsHitTesting(false)
+                        }
                     }
                     .refreshable { await model.refresh() }
                 }
@@ -78,10 +87,11 @@ struct NoteListView: View {
                         .accessibilityIdentifier("folder-toggle")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button { showSync = true } label: {
-                            Image(systemName: model.unlocked ? "lock.open" : "lock.fill")
+                        Button { showPreferences = true } label: {
+                            Image(systemName: "gearshape")
                         }
-                        .accessibilityLabel(model.unlocked ? "Sync vault unlocked" : "Sync vault locked or not configured")
+                        .accessibilityLabel("Preferences")
+                        .accessibilityIdentifier("preferences")
                     }
                 }
                 .overlay(alignment: .bottomTrailing) {
@@ -89,9 +99,9 @@ struct NoteListView: View {
                         Image(systemName: "square.and.pencil")
                             .font(.title2.weight(.semibold))
                             .foregroundStyle(.white)
-                            .frame(width: 58, height: 58)
-                            .background(.blue, in: RoundedRectangle(cornerRadius: 19))
-                            .shadow(color: .blue.opacity(0.25), radius: 10, y: 4)
+                            .frame(width: 56, height: 56, alignment: .center)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
+                            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
                     }
                     .accessibilityLabel("New note")
                     .accessibilityIdentifier("compose")
@@ -125,7 +135,7 @@ struct NoteListView: View {
                 FolderRailOverlay(
                     newFolder: { showNewFolder = true },
                     sync: { model.railOpen = false; showSync = true },
-                    preferences: { model.railOpen = false; showPreferences = true }
+                    editFolder: { folder in model.railOpen = false; pendingFolderEdit = folder }
                 )
                 .transition(.move(edge: .leading))
                 .accessibilityIdentifier("folder-rail")
@@ -140,6 +150,25 @@ struct NoteListView: View {
         .sheet(isPresented: $showSync) { SyncSheet() }
         .sheet(isPresented: $showPreferences) { PreferencesSheet() }
         .sheet(isPresented: $showNewFolder) { NewFolderSheet() }
+        .sheet(item: $export) { NoteExportSheet(export: $0) }
+        .sheet(isPresented: Binding(
+            get: { pendingMove != nil },
+            set: { if !$0 { pendingMove = nil } }
+        )) {
+            if let note = pendingMove { MoveNoteSheet(note: note) }
+        }
+        .sheet(isPresented: Binding(
+            get: { pendingFolderEdit != nil },
+            set: { if !$0 { pendingFolderEdit = nil } }
+        )) {
+            if let folder = pendingFolderEdit { NewFolderSheet(folder: folder) }
+        }
+        .sheet(isPresented: Binding(
+            get: { pendingRename != nil },
+            set: { if !$0 { pendingRename = nil } }
+        )) {
+            if let note = pendingRename { RenameNoteSheet(note: note) }
+        }
         .fullScreenCover(isPresented: Binding(
             get: { model.editorPath != nil },
             set: { _ in } // Only explicit, successfully saved dismissal is allowed.
@@ -162,34 +191,58 @@ struct NoteListView: View {
         }
     }
 
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search across folders", text: $model.query)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityIdentifier("search")
-            if !model.query.isEmpty {
-                Button { model.query = "" } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }.accessibilityLabel("Clear search")
-            }
+    private func noteButton(_ note: NoteInfo) -> some View {
+        Button { Task { await model.open(note.path) } } label: {
+            if note.pinned { PinnedNoteCard(note: note) }
+            else { NoteRowView(note: note) }
         }
-        .padding(10)
-        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
-
-    private func sectionTitle(_ text: String) -> some View {
-        Text(text).font(.headline).padding(.top, 4).accessibilityAddTraits(.isHeader)
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .contextMenu { noteActions(note) }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button("Delete", systemImage: "trash", role: .destructive) { pendingDelete = note }
+            Button("Rename", systemImage: "pencil") { pendingRename = note }
+                .tint(.blue)
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            Button(note.pinned ? "Unpin" : "Pin",
+                   systemImage: note.pinned ? "pin.slash" : "pin") {
+                Task { await model.pin(note) }
+            }.tint(.orange)
+        }
+        .accessibilityAction(named: note.pinned ? "Unpin Note" : "Pin Note") {
+            Task { await model.pin(note) }
+        }
+        .accessibilityAction(named: "Rename Note") { pendingRename = note }
+        .accessibilityAction(named: "Move Note") {
+            if model.folders.contains(where: { $0.path != note.folder }) { pendingMove = note }
+        }
+        .accessibilityAction(named: "Share Note") { share(note) }
+        .accessibilityAction(named: "Delete Note") { pendingDelete = note }
     }
 
     @ViewBuilder private func noteActions(_ note: NoteInfo) -> some View {
         Button(note.pinned ? "Unpin Note" : "Pin Note", systemImage: note.pinned ? "pin.slash" : "pin") {
             Task { await model.pin(note) }
         }
+        Button("Rename Note", systemImage: "pencil") { pendingRename = note }
+        Button("Move…", systemImage: "folder") { pendingMove = note }
+            .disabled(!model.folders.contains(where: { $0.path != note.folder }))
+        Button("Share…", systemImage: "square.and.arrow.up") { share(note) }
+            .disabled(exporting)
         Button("Delete Note", systemImage: "trash", role: .destructive) { pendingDelete = note }
+    }
+
+    private func share(_ note: NoteInfo) {
+        guard !exporting else { return }
+        exporting = true
+        Task {
+            defer { exporting = false }
+            do { export = try await model.export(note) }
+            catch { model.errorMessage = error.localizedDescription }
+        }
     }
 }
 
@@ -203,6 +256,8 @@ struct NoteRowView: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text(note.title).font(.body.weight(.semibold))
                     .foregroundStyle(.primary).lineLimit(2)
+                Text(URL(fileURLWithPath: note.path).lastPathComponent)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 10) {
                     Label {
                         Text(Date(timeIntervalSince1970: Double(note.modified)), style: .date)
@@ -211,7 +266,7 @@ struct NoteRowView: View {
                         .foregroundStyle(Color(folderHex: note.color))
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    Text(".txt").font(.caption2.monospaced())
+                    Text(fileType).font(.caption2.monospaced())
                         .padding(.horizontal, 5).padding(.vertical, 2)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
                 }
@@ -223,6 +278,55 @@ struct NoteRowView: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground),
                     in: RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .combine)
+    }
+
+    private var fileType: String {
+        let ext = URL(fileURLWithPath: note.path).pathExtension
+        return ext.isEmpty ? "file" : ".\(ext)"
+    }
+}
+
+struct RenameNoteSheet: View {
+    @EnvironmentObject private var model: LibraryModel
+    @Environment(\.dismiss) private var dismiss
+    let note: NoteInfo
+    @State private var filename = ""
+    @State private var saving = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Filename", text: $filename)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .accessibilityIdentifier("rename-filename")
+                Text("Renaming changes the filename, not the note’s first line.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .navigationTitle("Rename Note")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.disabled(saving)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Rename") {
+                        saving = true
+                        Task {
+                            if await model.rename(note, filename: filename) { dismiss() }
+                            saving = false
+                        }
+                    }.disabled(saving || filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .onAppear { filename = URL(fileURLWithPath: note.path).lastPathComponent }
+        .interactiveDismissDisabled(saving)
+        .alert("Could Not Rename", isPresented: Binding(
+            get: { model.errorMessage != nil },
+            set: { if !$0 { model.errorMessage = nil } }
+        )) {
+            Button("OK") { model.errorMessage = nil }
+        } message: { Text(model.errorMessage ?? "") }
     }
 }
 

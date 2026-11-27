@@ -1,6 +1,6 @@
 project(
   'paper-trail',
-  version: '0.6.0',
+  version: '0.7.0',
   meson_version: '>=1.1.0',
 )
 

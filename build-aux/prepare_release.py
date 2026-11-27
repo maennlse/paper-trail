@@ -21,7 +21,11 @@ PACKAGES = tuple(
     f"paper-trail-{component}-{target}.{'zip' if 'windows' in target else 'tar.gz'}"
     for component in ("tui", "server")
     for target in NATIVE_TARGETS
-) + ("paper-trail-gtk-linux-x86_64.tar.gz", "paper-trail-gtk-linux-x86_64.flatpak")
+) + (
+    "paper-trail-gtk-linux-x86_64.tar.gz",
+    "paper-trail-gtk-linux-x86_64.flatpak",
+    "paper-trail-ios-arm64-unsigned.ipa",
+)
 
 
 def validate_tag(tag: str, manifest: Path) -> None:

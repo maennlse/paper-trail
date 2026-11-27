@@ -25,6 +25,9 @@ pub struct Settings {
     pub font_scale: f64,
     pub use_custom_font: bool,
     pub custom_font: String,
+    /// UIKit PostScript name; never overwrite GTK's Pango font description.
+    #[serde(default)]
+    pub ios_custom_font: String,
     pub width: i32,
     pub height: i32,
     pub sidebar_width: i32,
@@ -47,6 +50,7 @@ impl Settings {
             font_scale: 1.0,
             use_custom_font: false,
             custom_font: "Monospace 11".into(),
+            ios_custom_font: String::new(),
             width: 1320,
             height: 860,
             sidebar_width: 260,
@@ -143,6 +147,12 @@ impl Settings {
         }
         if let Some(s) = raw["custom_font"].as_str().filter(|s| !s.trim().is_empty()) {
             result.custom_font = s.into();
+        }
+        if let Some(s) = raw["ios_custom_font"]
+            .as_str()
+            .filter(|s| s.len() <= 256 && !s.chars().any(char::is_control))
+        {
+            result.ios_custom_font = s.trim().into();
         }
         if let Some(n) = raw["font_scale"]
             .as_f64()
