@@ -36,7 +36,7 @@ jobs:
         run: cargo test --locked -p papertrail-core -p papertrail-storage -p papertrail-crypto -p papertrail-sync -p papertrail-ffi
       - name: Build unsigned device and simulator apps
         run: python3 build-aux/build_ios.py --output-dir dist/ios
-      - name: Run simulator smoke test
+      - name: Run simulator UI and state tests
         run: |
           DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for group in d["devices"].values() for x in group if x["name"].startswith("iPhone")))')
           xcrun simctl bootstatus "$DEVICE_ID" -b
@@ -47,6 +47,20 @@ jobs:
             -resultBundlePath ios/build/UITests.xcresult \
             test CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= ARCHS=arm64
+      - name: Export simulator screenshots
+        if: always()
+        run: |
+          if [ -d ios/build/UITests.xcresult ]; then
+            xcrun xcresulttool export attachments \
+              --path ios/build/UITests.xcresult \
+              --output-path ios/build/screenshots
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: paper-trail-ios-screenshots
+          path: ios/build/screenshots
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

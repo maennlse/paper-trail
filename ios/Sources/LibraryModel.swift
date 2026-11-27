@@ -12,6 +12,10 @@ final class NativeHost: @unchecked Sendable {
     private var roots: [URL]
     private(set) var bookmarkWarning: String?
     private let bookmarkKey: String
+    var lastSuccessfulSync: Date? {
+        get { UserDefaults.standard.object(forKey: bookmarkKey + ".last-successful-sync") as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: bookmarkKey + ".last-successful-sync") }
+    }
 
     init() throws {
         let manager = FileManager.default
@@ -62,6 +66,27 @@ final class NativeHost: @unchecked Sendable {
             }
         }
         client = try PaperTrailClient(documents: documents.path, support: support.path)
+        // Fixtures require both an isolated UUID profile and explicit opt-in.
+        // Never seed, screenshot, or mutate the user's real library.
+        if UUID(uuidString: ProcessInfo.processInfo.environment["PAPERTRAIL_TEST_PROFILE"] ?? "") != nil,
+           ProcessInfo.processInfo.environment["PAPERTRAIL_TEST_FIXTURES"] == "1" {
+            let marker = support.appendingPathComponent("fixtures-created")
+            if !manager.fileExists(atPath: marker.path) {
+                try client.addFolder(name: "Work Notes", color: "#779b82")
+                try client.addFolder(name: "Personal", color: "#6f5bd6")
+                let folder = URL(fileURLWithPath: try client.snapshot(folder: nil, query: "").defaultFolder)
+                for (name, text) in [
+                    ("weekend.md", "Weekend plans\nA long walk, a good book, and time to write."),
+                    ("Reading List", "Reading list\nBooks and articles to come back to."),
+                    ("ideas.txt", "Project ideas\nSmall improvements that make everyday tools feel better.")
+                ] {
+                    try text.write(to: folder.appendingPathComponent(name), atomically: true, encoding: .utf8)
+                }
+                try client.setPinned(path: folder.appendingPathComponent("ideas.txt").path, pinned: true)
+                try Data([0, 255, 12]).write(to: folder.appendingPathComponent("sample.bin"))
+                try Data().write(to: marker)
+            }
+        }
         for (old, url) in restored where old != url.resolvingSymlinksInPath().path {
             try client.relocateFolder(old: old, new: url.path)
         }
@@ -158,8 +183,11 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     @Published var errorMessage: String?
     @Published var editorPath: String?
     @Published var editorText = ""
-    @Published var saveFailed = false
+    @Published private(set) var editorSave = EditorSaveState()
+    @Published private(set) var closingEditor = false
+    @Published private(set) var syncFeedback = SyncFeedback()
     @Published var busy = false
+    @Published var syncing = false
     @Published var unlocked = false
     @Published var signedIn = false
     @Published var configured = false
@@ -188,6 +216,7 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     var folders: [FolderInfo] { snapshot?.folders ?? [] }
     var notes: [NoteInfo] { snapshot?.notes ?? [] }
     var title: String { folders.first { $0.path == selectedFolder }?.name ?? "All Notes" }
+    var saveFailed: Bool { editorSave.phase == .failed }
 
     func call<T>(_ work: @escaping (PaperTrailClient) throws -> T) async throws -> T {
         guard let host else { throw CocoaError(.fileReadUnknown) }
@@ -200,6 +229,7 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         defer { starting = false }
         do {
             host = try await Task.detached { try NativeHost() }.value
+            syncFeedback.lastSuccess = host?.lastSuccessfulSync
             storageWarning = host?.bookmarkWarning
             await refresh()
             // Restoring credentials must not prevent local-only use.
@@ -232,7 +262,7 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         do {
             let text = try await call { try $0.openNote(path: path) }
             editorText = text
-            saveFailed = false
+            editorSave.reset()
             editorPath = path
         } catch { errorMessage = error.localizedDescription }
     }
@@ -246,21 +276,33 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     }
 
     func edited(_ text: String) {
+        guard editorPath != nil, !closingEditor else { return }
         editorText = text
+        editorSave.changed()
+        let revision = editorSave.revision
+        let path = editorPath
         saveTask?.cancel()
         saveTask = Task {
             // Queue edit immediately; only disk flushing is debounced.
+            var saving: EditorSaveState.Token?
             do {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.editorSave.revision == revision,
+                      self.editorPath == path else { return }
                 try await call { try $0.edit(text: text) }
                 try await Task.sleep(for: .milliseconds(350))
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.editorSave.revision == revision,
+                      self.editorPath == path else { return }
+                let token = self.editorSave.begin()
+                saving = token
                 try await call { try $0.save() }
-                saveFailed = false
+                self.editorSave.complete(token)
             } catch is CancellationError {
             } catch {
-                saveFailed = true
-                errorMessage = error.localizedDescription
+                if let token = saving {
+                    self.editorSave.fail(token, message: error.localizedDescription)
+                } else {
+                    self.editorSave.failPendingEdit(revision, message: error.localizedDescription)
+                }
             }
         }
     }
@@ -268,35 +310,70 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     func flush() async throws {
         saveTask?.cancel()
         let text = editorText
-        try await call {
-            try $0.edit(text: text)
-            try $0.save()
+        let token = editorSave.begin()
+        do {
+            try await call {
+                try $0.edit(text: text)
+                try $0.save()
+            }
+            editorSave.complete(token)
+        } catch {
+            editorSave.fail(token, message: error.localizedDescription)
+            throw error
         }
-        saveFailed = false
     }
 
     func closeEditor() async {
+        guard !closingEditor else { return }
+        closingEditor = true
+        defer { closingEditor = false }
         do {
             try await flush()
             try await call { try $0.closeNote() }
             editorPath = nil
             await refresh()
         } catch {
-            saveFailed = true
             errorMessage = error.localizedDescription
         }
     }
 
     func saveCopy() async {
+        guard !closingEditor else { return }
+        closingEditor = true
+        defer { closingEditor = false }
+        saveTask?.cancel()
+        let token = editorSave.begin()
         do {
             let text = editorText
             editorPath = try await call {
                 try $0.edit(text: text)
                 return try $0.saveCopy()
             }
-            saveFailed = false
+            editorSave.complete(token)
             await refresh()
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            editorSave.fail(token, message: error.localizedDescription)
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func retrySave() async {
+        do { try await flush() }
+        catch { /* The persistent save banner retains the actionable error. */ }
+    }
+
+    func export(_ note: NoteInfo) async throws -> NoteExport {
+        let bytes = try await call { try $0.exportNote(path: note.path) }
+        return try NoteExport(filename: URL(fileURLWithPath: note.path).lastPathComponent,
+                              data: Data(bytes))
+    }
+
+    func exportEditor() throws -> NoteExport {
+        guard let path = editorPath else { throw CocoaError(.fileReadNoSuchFile) }
+        // Export the current buffer, even after a failed save, without modifying
+        // the original file, save status, or conflict baseline.
+        return try NoteExport(filename: URL(fileURLWithPath: path).lastPathComponent,
+                              data: Data(editorText.utf8))
     }
 
     func flushForBackground() {
@@ -305,13 +382,62 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         Task {
             defer { UIApplication.shared.endBackgroundTask(token) }
             do { try await flush() }
-            catch { saveFailed = true; errorMessage = error.localizedDescription }
+            catch { errorMessage = error.localizedDescription }
         }
     }
 
     func pin(_ note: NoteInfo) async {
         do {
-            try await call { try $0.setPinned(path: note.path, pinned: !note.pinned) }
+            let pinned = notes.first { $0.path == note.path }?.pinned ?? note.pinned
+            try await call { try $0.setPinned(path: note.path, pinned: !pinned) }
+            await refresh()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func rename(_ note: NoteInfo, filename: String) async -> Bool {
+        do {
+            _ = try await call { try $0.renameNote(path: note.path, filename: filename) }
+            await refresh()
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func move(_ note: NoteInfo, to folder: String) async -> Bool {
+        do {
+            _ = try await call { try $0.moveNote(path: note.path, folder: folder) }
+            await refresh()
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func editFolder(_ folder: FolderInfo, name: String, color: String) async -> Bool {
+        do {
+            try await call { try $0.editFolder(path: folder.path, name: name, color: color) }
+            await refresh()
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    func reorderFolder(_ source: String, relativeTo target: String, after: Bool) async {
+        var paths = folders.map(\.path)
+        guard source != target, paths.contains(source), paths.contains(target) else { return }
+        paths.removeAll { $0 == source }
+        guard let index = paths.firstIndex(of: target) else { return }
+        paths.insert(source, at: index + (after ? 1 : 0))
+        await persistFolderOrder(paths)
+    }
+
+    func moveFolder(_ path: String, by offset: Int) async {
+        var paths = folders.map(\.path)
+        guard let index = paths.firstIndex(of: path),
+              paths.indices.contains(index + offset) else { return }
+        paths.swapAt(index, index + offset)
+        await persistFolderOrder(paths)
+    }
+
+    private func persistFolderOrder(_ paths: [String]) async {
+        do {
+            try await call { try $0.reorderFolders(paths: paths) }
             await refresh()
         } catch { errorMessage = error.localizedDescription }
     }
@@ -396,6 +522,10 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     func sync(_ action: SyncAction, secret: String = "", remember: Bool = false) async -> Bool {
         switch action {
         case .lock, .logout:
+            if case .logout = action {
+                syncFeedback = SyncFeedback()
+                host?.lastSuccessfulSync = nil
+            }
             stopGeneration += 1
             automaticSyncBlocked = true
             unlocked = false
@@ -423,10 +553,20 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         }
         let wasUnlocked = unlocked
         busy = true
+        if case .synchronize = action {
+            syncing = true
+            syncMessage = "Synchronizing…"
+        }
         operationCancelled = false
         var succeeded = false
         var autoSync = false
         do {
+            if syncing, editorPath != nil { try await flush() }
+            guard pendingSyncAction == nil, !operationCancelled else {
+                syncing = false
+                await finishOperation()
+                return false
+            }
             let result = try await call { try $0.syncAction(action: action, secret: secret, remember: remember) }
             if pendingSyncAction == nil && !operationCancelled {
                 syncMessage = [result.message, result.warning].compactMap { $0 }.joined(separator: "\n")
@@ -434,13 +574,24 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
                 if case .confirmRecovery = action { recovery = nil }
                 autoSync = result.unlocked && !wasUnlocked && result.warning == nil
                 succeeded = true
+                if syncing {
+                    syncFeedback.completed(at: Date(), succeeded: true,
+                                           warning: result.warning, cancelled: false)
+                    host?.lastSuccessfulSync = syncFeedback.lastSuccess
+                }
             }
             if pendingSyncAction == nil && !operationCancelled { await refresh() }
         } catch {
             if pendingSyncAction == nil && !operationCancelled {
-                errorMessage = error.localizedDescription
+                if syncing {
+                    syncMessage = "Sync did not finish."
+                    syncFeedback.failure = error.localizedDescription
+                } else {
+                    errorMessage = error.localizedDescription
+                }
             }
         }
+        syncing = false
         await finishOperation(autoSync: autoSync)
         return succeeded
     }
@@ -471,6 +622,8 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         var succeeded = false
         do {
             try await call { try $0.confirmSyncSetup(token: token) }
+            syncFeedback = SyncFeedback()
+            host?.lastSuccessfulSync = nil
             syncMessage = "Configuration saved. Sign in/unlock if needed; selected folders will sync."
             succeeded = true
         } catch { errorMessage = error.localizedDescription }

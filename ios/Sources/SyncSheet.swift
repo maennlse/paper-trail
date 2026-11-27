@@ -24,15 +24,25 @@ struct SyncSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                statusSection
-                connectionSection
-                vaultSection
-                if let recovery = model.recovery { recoverySection(recovery) }
-                remoteFolderSection
-                Section {
-                    Text("Sync is end-to-end encrypted. Local .txt files are not encrypted by the app. Sync runs while the app is open.")
-                        .font(.caption).foregroundStyle(.secondary)
+            ScrollViewReader { proxy in
+                Form {
+                    statusSection {
+                        if model.configured && !model.signedIn {
+                            Task { await model.signIn() }
+                        } else if model.signedIn && !model.unlocked {
+                            model.vaultPrompt = .unlock
+                        } else {
+                            withAnimation { proxy.scrollTo("sync-connection", anchor: .top) }
+                        }
+                    }
+                    connectionSection.id("sync-connection")
+                    vaultSection
+                    if let recovery = model.recovery { recoverySection(recovery) }
+                    remoteFolderSection
+                    Section {
+                        Text("Sync is end-to-end encrypted. Local note files are not encrypted by the app. Sync runs while the app is open.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             .navigationTitle("Encrypted Sync")
@@ -68,11 +78,12 @@ struct SyncSheet: View {
         .interactiveDismissDisabled(model.recovery != nil)
     }
 
-    private var statusSection: some View {
+    private func statusSection(settings: @escaping () -> Void) -> some View {
         Section("Status") {
             Label(model.syncMessage, systemImage: model.unlocked ? "lock.open" : "lock.fill")
+            SyncFeedbackView(settings: settings)
             if model.busy {
-                ProgressView()
+                if !model.syncing { ProgressView() }
                 Button("Cancel Operation") { model.cancelOperation() }
             }
             Button("Refresh Status") {

@@ -2,7 +2,7 @@
 
 ![Paper Trail logo](data/icons/io.github.maennlse.paper-trail.svg)
 
-**Your notes. Plain text. Desktop or terminal.**
+**Your notes. Plain text. Desktop, terminal, or iOS.**
 
 [![Release](https://img.shields.io/github/v/release/maennlse/paper-trail)](https://github.com/maennlse/paper-trail/releases/latest)
 [![Build](https://github.com/maennlse/paper-trail/actions/workflows/rust.yml/badge.svg)](https://github.com/maennlse/paper-trail/actions/workflows/rust.yml)
@@ -13,7 +13,8 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](https://www.gnu.org/licenses/gpl-3.0.html)
 
 Paper Trail is a local-first note app written in Rust, with a native GNOME desktop
-app and a portable terminal client. Your notes stay in ordinary text files.
+app, a portable terminal client, and an experimental native iOS client.
+Your notes stay in ordinary text files.
 Optional client-side end-to-end encrypted sync uses a separately deployed server;
 the server does not hold the decryption key. Local-only use needs no account.
 
@@ -48,6 +49,15 @@ keeps selection inside the terminal: open `:sync-folders`, toggle with Space or 
 click, then Enter to save or Esc to cancel. Unselecting never deletes notes.
 
 Screenshots show the actual applications with isolated demonstration notes.
+
+### Native iOS client · experimental
+
+The iOS app uses a Runestone editor with find, a colored folder rail, pinned notes,
+native swipe actions, note moves, and native sharing. Separate local-save and sync
+feedback keeps persistence status clear. Real simulator captures are exported by the
+[Unsigned iOS workflow](https://github.com/maennlse/paper-trail/actions/workflows/ios.yml)
+in its `paper-trail-ios-screenshots` artifact;
+see [screenshot capture instructions](docs/ios.md#readme-screenshots).
 
 ## Get Paper Trail
 

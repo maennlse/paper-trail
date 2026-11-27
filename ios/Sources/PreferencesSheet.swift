@@ -9,6 +9,7 @@ struct PreferencesSheet: View {
     @State private var appearance = "light"
     @State private var picker = false
     @State private var encryption = false
+    @State private var editingFolder: FolderInfo?
 
     var body: some View {
         NavigationStack {
@@ -17,7 +18,7 @@ struct PreferencesSheet: View {
                     Text(model.snapshot?.defaultFolder ?? "Documents/Paper Trail")
                         .font(.caption).textSelection(.enabled)
                     Button("Choose Folder in Files…") { picker = true }
-                    Text("Choose a local or iCloud Drive folder. Notes remain plain UTF-8 .txt files.")
+                    Text("Choose a local or iCloud Drive folder. New notes are UTF-8 .txt files; existing text notes can use any extension.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Registered Folders") {
@@ -25,6 +26,7 @@ struct PreferencesSheet: View {
                         VStack(alignment: .leading) {
                             Text(folder.name)
                             Text(folder.path).font(.caption2).foregroundStyle(.secondary)
+                            Button("Edit Folder…") { editingFolder = folder }
                             if model.folders.count > 1 {
                                 Button("Disconnect Folder", role: .destructive) {
                                     Task { await model.forget(folder.path) }
@@ -69,6 +71,12 @@ struct PreferencesSheet: View {
                 FolderPicker { url in Task { await model.register(url) } }
             }
             .sheet(isPresented: $encryption) { SyncSheet() }
+            .sheet(isPresented: Binding(
+                get: { editingFolder != nil },
+                set: { if !$0 { editingFolder = nil } }
+            )) {
+                if let folder = editingFolder { NewFolderSheet(folder: folder) }
+            }
             .alert("Paper Trail", isPresented: Binding(
                 get: { model.errorMessage != nil },
                 set: { if !$0 { model.errorMessage = nil } }

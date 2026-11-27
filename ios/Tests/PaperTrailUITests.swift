@@ -47,6 +47,7 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertFalse(app.navigationBars.buttons["Sync vault unlocked"].exists)
         app.buttons["folder-toggle"].tap()
         app.buttons["Sync"].tap()
+        app.buttons["Sync Settings"].tap()
         XCTAssertTrue(app.textFields["sync-server"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.textFields["sync-issuer"].exists)
         XCTAssertFalse(app.textFields["sync-client-id"].exists)
@@ -81,7 +82,7 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertTrue(app.buttons["All Notes"].waitForExistence(timeout: 5))
         app.buttons["All Notes"].tap()
         app.buttons["compose"].tap()
-        let editor = app.textViews["note-editor"]
+        let editor = app.scrollViews["note-editor"].textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         editor.typeText("iOS smoke test\nPlain UTF-8 text")
@@ -90,5 +91,168 @@ final class PaperTrailUITests: XCTestCase {
         app.terminate()
         app.launch()
         XCTAssertTrue(app.staticTexts["iOS smoke test"].waitForExistence(timeout: 15))
+    }
+
+    func testAllFileTypesRenameUnpinAndSwipeDeletion() {
+        let app = fixtureApp()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Reading List"].exists)
+        XCTAssertTrue(app.staticTexts["sample.bin"].exists)
+        XCTAssertTrue(app.navigationBars.buttons["preferences"].exists)
+        app.staticTexts["sample.bin"].tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.scrollViews["note-editor"].exists)
+        app.alerts.buttons["OK"].tap()
+
+        app.staticTexts["weekend.md"].press(forDuration: 1)
+        app.buttons["Rename Note"].tap()
+        let filename = app.textFields["rename-filename"]
+        XCTAssertTrue(filename.waitForExistence(timeout: 5))
+        filename.tap()
+        filename.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "weekend.md".count))
+        filename.typeText("outdoors.md")
+        app.buttons["Rename"].tap()
+        XCTAssertTrue(app.staticTexts["outdoors.md"].waitForExistence(timeout: 10))
+        app.staticTexts["outdoors.md"].tap()
+        let editor = app.scrollViews["note-editor"].textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertTrue((editor.value as? String ?? "").contains("Weekend plans"))
+        app.buttons["Done"].tap()
+
+        app.cells.containing(.staticText, identifier: "ideas.txt").firstMatch.swipeRight()
+        app.buttons["Unpin"].tap()
+        app.staticTexts["ideas.txt"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Pin Note"].waitForExistence(timeout: 5))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["ideas.txt"].waitForExistence(timeout: 20))
+        app.staticTexts["ideas.txt"].press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Pin Note"].waitForExistence(timeout: 5))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Reading List"].waitForExistence(timeout: 20))
+
+        app.cells.containing(.staticText, identifier: "Reading List").firstMatch.swipeLeft()
+        app.buttons["Delete"].tap()
+        app.buttons["Delete Note"].tap()
+        let removed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: app.staticTexts["Reading List"])
+        XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 10), .completed)
+    }
+
+    func testFolderDragOrderPersists() {
+        let app = fixtureApp()
+        XCTAssertTrue(app.buttons["folder-toggle"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        app.buttons["folder-toggle"].tap()
+        let source = app.buttons["Personal"]
+        let target = app.buttons["Work Notes"]
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 1, thenDragTo: target.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
+        let reordered = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in source.frame.minY < target.frame.minY }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [reordered], timeout: 10), .completed)
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        app.buttons["folder-toggle"].tap()
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        XCTAssertLessThan(source.frame.minY, target.frame.minY)
+    }
+
+    func testCaptureReadmeScreenshots() {
+        let app = fixtureApp()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        // Exclude the binary-safety fixture from the demonstration screenshots.
+        app.cells.containing(.staticText, identifier: "sample.bin").firstMatch.swipeLeft()
+        app.buttons["Delete"].tap()
+        app.buttons["Delete Note"].tap()
+        let removed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: app.staticTexts["sample.bin"])
+        XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 10), .completed)
+        app.buttons["folder-toggle"].tap()
+        XCTAssertTrue(app.buttons["Personal"].waitForExistence(timeout: 5))
+        let library = XCTAttachment(screenshot: app.screenshot())
+        library.name = "ios-library"
+        library.lifetime = .keepAlways
+        add(library)
+        app.buttons["All Notes"].tap()
+        app.staticTexts["weekend.md"].tap()
+        XCTAssertTrue(app.scrollViews["note-editor"].waitForExistence(timeout: 10))
+        let editor = XCTAttachment(screenshot: app.screenshot())
+        editor.name = "ios-editor"
+        editor.lifetime = .keepAlways
+        add(editor)
+    }
+
+    func testMoveNoteAndEditFolderPersist() {
+        let app = fixtureApp()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        app.staticTexts["weekend.md"].press(forDuration: 1)
+        app.buttons["Move…"].tap()
+        XCTAssertTrue(app.navigationBars["Move Note"].waitForExistence(timeout: 5))
+        app.buttons["Work Notes"].tap()
+        let row = app.cells.containing(.staticText, identifier: "weekend.md").firstMatch
+        XCTAssertTrue(row.staticTexts["Work Notes"].waitForExistence(timeout: 10))
+        app.buttons["folder-toggle"].tap()
+        app.buttons["Work Notes"].press(forDuration: 1)
+        app.buttons["Edit Folder…"].tap()
+        let name = app.textFields["new-folder-name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap()
+        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Work Notes".count))
+        name.typeText("Writing")
+        app.buttons["folder-color-coral"].tap()
+        app.buttons["Save"].tap()
+        XCTAssertTrue(row.staticTexts["Writing"].waitForExistence(timeout: 10))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        app.buttons["folder-toggle"].tap()
+        XCTAssertTrue(app.buttons["Writing"].waitForExistence(timeout: 5))
+        app.buttons["Writing"].press(forDuration: 1)
+        app.buttons["Edit Folder…"].tap()
+        XCTAssertTrue(app.buttons["folder-color-coral"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["folder-color-coral"].isSelected)
+    }
+
+    func testFindAndPrepareNativeShareWithoutChangingNote() {
+        let app = fixtureApp()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
+        app.staticTexts["weekend.md"].tap()
+        let editor = app.scrollViews["note-editor"].textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let original = editor.value as? String
+        XCTAssertTrue(app.staticTexts["Saved locally"].exists)
+        app.buttons["find-in-note"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("walk")
+        XCTAssertEqual(editor.value as? String, original)
+        app.navigationBars.buttons["Done"].tap()
+        XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 10))
+        app.staticTexts["weekend.md"].tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        app.buttons["share-note"].tap()
+        XCTAssertTrue(app.navigationBars["Share Note"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["weekend.md"].exists)
+        XCTAssertTrue(app.buttons["share-export"].exists)
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "This copy is not encrypted.")).firstMatch.exists)
+        app.navigationBars["Share Note"].buttons["Done"].tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, original)
+        XCTAssertTrue(app.staticTexts["Saved locally"].exists)
+    }
+
+    private func fixtureApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["PAPERTRAIL_TEST_PROFILE"] = UUID().uuidString
+        app.launchEnvironment["PAPERTRAIL_TEST_FIXTURES"] = "1"
+        app.launch()
+        return app
     }
 }

@@ -1,4 +1,8 @@
 name: PaperTrail
+packages:
+  Runestone:
+    url: https://github.com/simonbs/Runestone
+    revision: 592434a103a4d1ab83e14f87ac6eef569dd7a99d # 0.5.2
 options:
   bundleIdPrefix: io.github.maennlse
   deploymentTarget:
@@ -18,6 +22,8 @@ targets:
   PaperTrail:
     type: application
     platform: iOS
+    dependencies:
+      - package: Runestone
     sources:
       - Sources
       - Resources
@@ -55,6 +61,16 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+  PaperTrailStateTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - UnitTests
+      - Sources/EditorSaveState.swift
+      - Sources/NoteExport.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   PaperTrail:
     build:
@@ -63,3 +79,4 @@ schemes:
     test:
       targets:
         - PaperTrailUITests
+        - PaperTrailStateTests

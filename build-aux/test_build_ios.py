@@ -18,6 +18,16 @@ import build_ios
 class IOSBuildTests(unittest.TestCase):
     """Exercise build plans without invoking Cargo or Apple tooling."""
 
+    def test_runestone_dependency_is_pinned_and_linked(self) -> None:
+        """Regenerating the Xcode project must retain the editor dependency."""
+        root = Path(__file__).resolve().parent.parent
+        project = (root / "ios/project.yml").read_text(encoding="utf-8")
+        self.assertIn("url: https://github.com/simonbs/Runestone", project)
+        self.assertIn(
+            "revision: 592434a103a4d1ab83e14f87ac6eef569dd7a99d", project
+        )
+        self.assertIn("- package: Runestone", project)
+
     def test_app_icon_is_wired_to_the_asset_catalog(self) -> None:
         """Xcode must compile the checked-in universal icon into the iOS app."""
         root = Path(__file__).resolve().parent.parent

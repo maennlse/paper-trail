@@ -42,6 +42,7 @@ pub struct FolderInfo {
     pub path: String,
     pub name: String,
     pub color: String,
+    pub badge: String,
 }
 #[derive(Clone, uniffi::Record)]
 pub struct NoteInfo {
@@ -161,13 +162,22 @@ impl PaperTrailClient {
         let folder = self.folder(settings, &parent.to_string_lossy())?;
         let target = fs::canonicalize(&path)?;
         if target.parent() != Some(folder.as_path())
-            || target.extension().is_none_or(|ext| ext != "txt")
+            || !target.is_file()
+            || fs::symlink_metadata(&path)?.file_type().is_symlink()
         {
             return Err(error(
-                "Only .txt files inside registered folders are allowed",
+                "Only regular files inside registered folders are allowed",
             ));
         }
         Ok(target)
+    }
+
+    fn require_text(path: &Path) -> Result<()> {
+        let bytes = fs::read(path)?;
+        if bytes.contains(&0) || std::str::from_utf8(&bytes).is_err() {
+            return Err(error("This file is not UTF-8 text and cannot be edited. Its contents have not been changed."));
+        }
+        Ok(())
     }
 
     fn configuration(&self, profile: SyncProfile, previous: Option<Config>) -> Result<Config> {
@@ -340,6 +350,7 @@ impl PaperTrailClient {
         let mut unavailable_folders = Vec::new();
         for path in &settings.note_folders {
             folders.push(FolderInfo {
+                badge: colors::badge(&settings.folder_name(path)),
                 path: path.to_string_lossy().into(),
                 name: settings.folder_name(path),
                 color: colors::hex(
@@ -367,19 +378,26 @@ impl PaperTrailClient {
             };
             for entry in entries {
                 let path = entry?.path();
-                if path.extension().is_none_or(|ext| ext != "txt")
-                    || !path.is_file()
-                    || fs::symlink_metadata(&path)?.file_type().is_symlink()
-                {
+                if !path.is_file() || fs::symlink_metadata(&path)?.file_type().is_symlink() {
                     continue;
                 }
-                let note = match Repository.load(&path) {
-                    Ok(note) => note,
+                let bytes = match fs::read(&path) {
+                    Ok(bytes) => bytes,
                     Err(e) => {
                         unavailable_folders.push(format!("{}: {e}", path.display()));
                         continue;
                     }
                 };
+                // Keep binary files visible, but never use lossy decoding in the editor.
+                let text = std::str::from_utf8(&bytes)
+                    .ok()
+                    .filter(|_| !bytes.contains(&0))
+                    .unwrap_or("");
+                let note = papertrail_core::Note::from_text(
+                    path.clone(),
+                    text.replace("\r\n", "\n").replace('\r', "\n"),
+                    fs::metadata(&path)?.modified()?,
+                );
                 if note.matches(&query) {
                     notes.push(note);
                 }
@@ -434,6 +452,7 @@ impl PaperTrailClient {
         let mut state = self.state()?;
         let path = self.note(&state.settings, &path)?;
         let _activity = self.service.local()?;
+        Self::require_text(&path)?;
         state.session.open(&Repository, &path)?;
         Ok(state.session.text.clone())
     }
@@ -492,14 +511,28 @@ impl PaperTrailClient {
         }
         let _activity = self.service.local()?;
         let mut filename = papertrail_core::note::normalize_filename(&filename, "untitled-note");
-        if !filename.ends_with(".txt") {
-            filename.push_str(".txt");
+        if Path::new(&filename).extension().is_none() {
+            if let Some(extension) = path.extension() {
+                filename.push('.');
+                filename.push_str(&extension.to_string_lossy());
+            }
         }
         let renamed = Repository.rename(&path, &filename)?;
         let mut updated = state.settings.clone();
         updated.rename_note(&path, &renamed.path);
         self.persist(&mut state, updated)?;
         Ok(renamed.path.to_string_lossy().into())
+    }
+
+    pub fn reorder_folders(&self, paths: Vec<String>) -> Result<()> {
+        let mut state = self.state()?;
+        let mut updated = state.settings.clone();
+        if !updated.reorder(paths.into_iter().map(PathBuf::from).collect()) {
+            return Err(error(
+                "Folder order must contain each registered folder exactly once",
+            ));
+        }
+        self.persist(&mut state, updated)
     }
     pub fn move_note(&self, path: String, folder: String) -> Result<String> {
         let mut state = self.state()?;
@@ -528,6 +561,33 @@ impl PaperTrailClient {
             .folder_colors
             .insert(folder, colors::normalize(&color.into()));
         self.persist(&mut state, updated)
+    }
+    /// Update presentation metadata, not the provider directory or its bookmark.
+    pub fn edit_folder(&self, path: String, name: String, color: String) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().any(char::is_control) {
+            return Err(error(
+                "Enter a nonempty folder display name without control characters",
+            ));
+        }
+        let mut state = self.state()?;
+        let path = PathBuf::from(path);
+        if !state.settings.note_folders.contains(&path) {
+            return Err(error("Folder is not registered"));
+        }
+        let mut updated = state.settings.clone();
+        updated.folder_labels.insert(path.clone(), name.into());
+        updated
+            .folder_colors
+            .insert(path, colors::normalize(&color.into()));
+        self.persist(&mut state, updated)
+    }
+
+    /// Export bytes unchanged, including files not supported by the text editor.
+    pub fn export_note(&self, path: String) -> Result<Vec<u8>> {
+        let state = self.state()?;
+        let path = self.note(&state.settings, &path)?;
+        Ok(fs::read(path)?)
     }
     pub fn delete_note(&self, path: String) -> Result<()> {
         let mut state = self.state()?;
@@ -1069,6 +1129,255 @@ mod tests {
         assert_eq!(snapshot.notes[0].folder_name, "Work");
         app.delete_note(path).unwrap();
         assert!(app.snapshot(None, "".into()).unwrap().notes.is_empty());
+    }
+
+    #[test]
+    fn all_regular_files_are_visible_but_only_utf8_text_is_editable() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let folder = PathBuf::from(app.snapshot(None, "".into()).unwrap().default_folder);
+        for name in ["plain.txt", "README", "journal.md", "UPPER.TXT"] {
+            fs::write(folder.join(name), format!("{name}\nSearchable contents")).unwrap();
+        }
+        let binary = folder.join("image.bin");
+        fs::write(&binary, [0, 255, 12]).unwrap();
+        let invalid_utf8 = folder.join("invalid");
+        fs::write(&invalid_utf8, [255, 254]).unwrap();
+        fs::create_dir(folder.join("not-a-note")).unwrap();
+        assert_eq!(app.snapshot(None, "".into()).unwrap().notes.len(), 6);
+        assert_eq!(
+            app.snapshot(None, "searchable".into()).unwrap().notes.len(),
+            4
+        );
+        let markdown = folder.join("journal.md").to_string_lossy().to_string();
+        app.open_note(markdown.clone()).unwrap();
+        app.edit("Updated Markdown\nPlain UTF-8".into()).unwrap();
+        app.close_note().unwrap();
+        assert_eq!(
+            fs::read_to_string(&markdown).unwrap(),
+            "Updated Markdown\nPlain UTF-8"
+        );
+        assert!(app.open_note(binary.to_string_lossy().into()).is_err());
+        assert!(app
+            .open_note(invalid_utf8.to_string_lossy().into())
+            .is_err());
+        assert_eq!(fs::read(binary).unwrap(), [0, 255, 12]);
+        assert_eq!(fs::read(invalid_utf8).unwrap(), [255, 254]);
+    }
+
+    #[test]
+    fn rename_preserves_extensions_contents_and_unpin_survives_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let folder = PathBuf::from(app.snapshot(None, "".into()).unwrap().default_folder);
+        for (original, requested, expected) in [
+            ("journal.md", "renamed", "renamed.md"),
+            ("README", "NOTES", "NOTES"),
+            ("upper.TXT", "upper-renamed", "upper-renamed.TXT"),
+        ] {
+            let path = folder.join(original);
+            fs::write(&path, "Keep my contents").unwrap();
+            let path = path.to_string_lossy().to_string();
+            app.set_pinned(path.clone(), true).unwrap();
+            let renamed = app.rename_note(path, requested.into()).unwrap();
+            assert_eq!(Path::new(&renamed).file_name().unwrap(), expected);
+            assert_eq!(fs::read_to_string(&renamed).unwrap(), "Keep my contents");
+            let snapshot = app.snapshot(None, "".into()).unwrap();
+            assert!(snapshot.notes.iter().any(|n| n.path == renamed && n.pinned));
+            app.set_pinned(renamed, false).unwrap();
+        }
+        assert!(client(root.path())
+            .snapshot(None, "".into())
+            .unwrap()
+            .notes
+            .iter()
+            .all(|n| !n.pinned));
+    }
+
+    #[test]
+    fn rename_does_not_overwrite_a_collision_or_rename_an_open_note() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        let existing = Path::new(&path).parent().unwrap().join("existing.txt");
+        fs::write(&existing, "Do not overwrite").unwrap();
+        app.open_note(path.clone()).unwrap();
+        assert!(app
+            .rename_note(path.clone(), "existing.txt".into())
+            .is_err());
+        app.close_note().unwrap();
+        let result = app.rename_note(path, "existing.txt".into());
+        if let Ok(renamed) = result {
+            assert_ne!(Path::new(&renamed), existing);
+        }
+        assert_eq!(fs::read_to_string(existing).unwrap(), "Do not overwrite");
+    }
+
+    #[test]
+    fn folder_order_is_validated_and_persisted_without_changing_selection_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        app.add_folder("Work Notes".into(), "#779b82".into())
+            .unwrap();
+        let snapshot = app.snapshot(None, "".into()).unwrap();
+        let default = snapshot.default_folder;
+        let mut paths: Vec<_> = snapshot.folders.iter().map(|f| f.path.clone()).collect();
+        paths.reverse();
+        app.reorder_folders(paths.clone()).unwrap();
+        let snapshot = client(root.path()).snapshot(None, "".into()).unwrap();
+        assert_eq!(
+            snapshot
+                .folders
+                .iter()
+                .map(|f| f.path.clone())
+                .collect::<Vec<_>>(),
+            paths
+        );
+        assert_eq!(snapshot.default_folder, default);
+        let work = snapshot
+            .folders
+            .iter()
+            .find(|f| f.name == "Work Notes")
+            .unwrap();
+        assert_eq!(work.color, "#779b82");
+        assert_eq!(work.badge, colors::badge("Work Notes"));
+        assert!(app.reorder_folders(vec![paths[0].clone()]).is_err());
+        assert!(app
+            .reorder_folders(vec![paths[0].clone(); paths.len()])
+            .is_err());
+        let mut unknown = paths.clone();
+        unknown[0] = root.path().to_string_lossy().into();
+        assert!(app.reorder_folders(unknown).is_err());
+        assert_eq!(
+            app.snapshot(None, "".into())
+                .unwrap()
+                .folders
+                .iter()
+                .map(|f| f.path.clone())
+                .collect::<Vec<_>>(),
+            paths
+        );
+    }
+
+    #[test]
+    fn folder_edit_changes_only_labels_and_colors_even_when_unavailable() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        app.set_pinned(path.clone(), true).unwrap();
+        let before = app.snapshot(None, "".into()).unwrap();
+        let folder = before.folders[0].path.clone();
+        app.edit_folder(folder.clone(), "  My Notes  ".into(), "#abc".into())
+            .unwrap();
+        let after = client(root.path()).snapshot(None, "".into()).unwrap();
+        assert_eq!(after.default_folder, before.default_folder);
+        assert_eq!(after.folders[0].path, folder);
+        assert_eq!(after.folders[0].name, "My Notes");
+        assert_eq!(after.folders[0].color, "#aabbcc");
+        assert_eq!(after.notes[0].path, path);
+        assert!(after.notes[0].pinned);
+        assert_eq!(after.notes[0].folder_name, "My Notes");
+        assert!(Path::new(&folder).is_dir());
+        assert!(app
+            .edit_folder(folder.clone(), " ".into(), "#fff".into())
+            .is_err());
+        assert!(app
+            .edit_folder(folder.clone(), "Bad\nLabel".into(), "#fff".into())
+            .is_err());
+        assert!(app
+            .edit_folder(
+                root.path().to_string_lossy().into(),
+                "Outside".into(),
+                "#fff".into()
+            )
+            .is_err());
+        let unavailable = PathBuf::from(&folder).with_file_name("temporarily-away");
+        fs::rename(&folder, unavailable).unwrap();
+        app.edit_folder(folder.clone(), "Offline Notes".into(), "#779b82".into())
+            .unwrap();
+        let after = app.snapshot(None, "".into()).unwrap();
+        assert_eq!(after.folders[0].name, "Offline Notes");
+        assert_eq!(after.folders[0].path, folder);
+        assert!(!Path::new(&folder).exists());
+        assert!(!after.unavailable_folders.is_empty());
+    }
+
+    #[test]
+    fn moving_preserves_both_files_on_collision_and_keeps_pins() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        app.add_folder("Destination".into(), "#abc".into()).unwrap();
+        let snapshot = app.snapshot(None, "".into()).unwrap();
+        let source = Path::new(&snapshot.default_folder).join("README");
+        let destination = &snapshot
+            .folders
+            .iter()
+            .find(|f| f.name == "Destination")
+            .unwrap()
+            .path;
+        let existing = Path::new(destination).join("README");
+        fs::write(&source, "Source contents").unwrap();
+        fs::write(&existing, "Destination contents").unwrap();
+        let source = source.to_string_lossy().to_string();
+        app.set_pinned(source.clone(), true).unwrap();
+        app.open_note(source.clone()).unwrap();
+        assert!(app.move_note(source.clone(), destination.clone()).is_err());
+        app.close_note().unwrap();
+        let moved = app.move_note(source.clone(), destination.clone()).unwrap();
+        assert!(!Path::new(&source).exists());
+        assert_ne!(Path::new(&moved), existing);
+        assert_eq!(fs::read_to_string(&moved).unwrap(), "Source contents");
+        assert_eq!(
+            fs::read_to_string(existing).unwrap(),
+            "Destination contents"
+        );
+        let after = client(root.path()).snapshot(None, "".into()).unwrap();
+        assert!(after
+            .notes
+            .iter()
+            .any(|n| n.path == moved && n.pinned && n.folder == *destination));
+        assert!(app
+            .move_note(moved, root.path().to_string_lossy().into())
+            .is_err());
+    }
+
+    #[test]
+    fn export_preserves_binary_bytes_and_does_not_flush_or_replace_editor_drafts() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        fs::write(&path, "Saved version").unwrap();
+        app.open_note(path.clone()).unwrap();
+        app.edit("Unsaved version".into()).unwrap();
+        assert_eq!(app.export_note(path.clone()).unwrap(), b"Saved version");
+        assert_eq!(app.state().unwrap().session.text, "Unsaved version");
+        let binary = Path::new(&path).parent().unwrap().join("data.bin");
+        fs::write(&binary, [0, 255, 254, 13, 10]).unwrap();
+        assert_eq!(
+            app.export_note(binary.to_string_lossy().into()).unwrap(),
+            [0, 255, 254, 13, 10]
+        );
+        let outside = root.path().join("outside");
+        fs::write(&outside, "Private").unwrap();
+        assert!(app.export_note(outside.to_string_lossy().into()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_neither_listed_nor_accepted_for_note_operations() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        let link = Path::new(&path).parent().unwrap().join("linked.md");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert_eq!(app.snapshot(None, "".into()).unwrap().notes.len(), 1);
+        let link = link.to_string_lossy().to_string();
+        assert!(app.open_note(link.clone()).is_err());
+        assert!(app.export_note(link.clone()).is_err());
+        assert!(app.set_pinned(link.clone(), true).is_err());
+        assert!(app.rename_note(link.clone(), "escape".into()).is_err());
+        assert!(app.delete_note(link).is_err());
+        assert!(Path::new(&path).exists());
     }
 
     #[test]

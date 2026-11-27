@@ -2,7 +2,8 @@
 
 Paper Trail for iOS is an iOS 17+ SwiftUI app backed by the same Rust note,
 storage, metadata, crypto, and sync crates as the desktop and TUI clients.
-Local notes remain UTF-8 `.txt` files. Sync encryption does **not** encrypt
+New notes are UTF-8 `.txt` files; existing notes may use any extension or none.
+Sync encryption does **not** encrypt
 local note files.
 
 ## Get an unsigned IPA without a Mac
@@ -71,12 +72,53 @@ executable archives and cannot be built on the Linux host.
 - Folder access is file-coordinated. Bookmark failures are reported rather than
   silently replacing unavailable folders with an empty library.
 - Folder tiles represent registered folders; All Notes aggregates their direct
-  `.txt` children. Search always checks full note contents across those folders.
+  regular files, regardless of extension. Symlinks are excluded. Search checks
+  filenames and full text across those folders. Non-UTF-8/NUL-containing files
+  remain visible but cannot be opened in the editor, preventing lossy writes.
 - The 76pt rail overlays a dimmed list without reflow. Open it with the sidebar
-  button or a rightward left-edge swipe; dismiss with a scrim tap or left swipe.
+  button or a rightward left-edge swipe; dismiss with a scrim tap or left swipe
+  on the scrim. Folder gestures are reserved for native drag and drop.
+- Colored folder silhouettes, initials, and selection indicators follow GTK.
+  Drag folders above/below another folder to reorder them. All Notes stays fixed;
+  Move Up/Down context-menu and accessibility actions offer the same ordering.
+  The order is persisted locally without changing the default compose folder.
 - Notes autosave after a short debounce. Failed/conflicting writes retain the
   editor state and offer **Save a Copy** without overwriting the external edit.
-- Long-press a note to pin/unpin or delete it. New folders have named color
+- Swipe right on a note to pin/unpin, or left to rename/delete. Deletion requires
+  confirmation. Long-press offers the same actions. Rename changes the filename,
+  not the first-line title; omitted extensions retain the original extension.
+- Runestone provides the plain-text editor through a SwiftUI/UIKit bridge, with
+  wrapping, native selection/undo, Dynamic Type, and the existing autosave and
+  conflict protections. Its Swift package is pinned in `ios/project.yml`.
+- **Find** in the editor toolbar (or Command-F on a hardware keyboard) opens
+  Runestone's native find navigator with highlighted matches and next/previous
+  navigation. Finding text does not change the note or reset its undo history.
+- The editor distinguishes **Unsaved changes**, **Saving…**, **Saved locally**,
+  and **Not saved**. Revision/attempt tokens prevent stale save results from
+  describing newer edits as saved or failed. Failed writes keep the draft and
+  offer **Retry** and **Save a Copy**.
+- Sync feedback is separate from local saving: the library and Sync sheet show
+  synchronization activity, actionable failures, and the last successful sync.
+  The timestamp is device/profile-local and cleared on sign-out or confirmed
+  reconfiguration. Failed, cancelled, or warning-bearing runs do not advance it.
+- Long-press a note and choose **Move…** to select another registered folder.
+  Contents, pins, and sync identity are preserved; filename collisions choose a
+  unique name rather than overwriting either note. Open notes must be closed
+  before moving.
+- **Share…** in a note menu, or **Share** in the editor toolbar, prepares a
+  temporary exported copy and explains that it is unencrypted. **Share File…**
+  opens the native share sheet, including the iPad popover. The editor exports
+  its current buffer even if saving failed, without modifying the original or
+  its conflict baseline. List exports preserve original bytes, including binary
+  files. Export directories are removed when their owning share screen is released.
+- Long-press a folder for **Edit Folder…**, or use its Preferences entry.
+  Editing changes its display label and color only, not its directory path,
+  Files/iCloud bookmark, ordering, note pins, or sync mappings. Labels/colors can
+  also be edited while a registered folder is temporarily unavailable.
+- Preferences live in the upper-right header; New Note uses the native bottom
+  toolbar. The rail's reload-style Sync menu offers Sync Now and Sync Settings;
+  the icon rotates during synchronization (unless Reduce Motion is enabled).
+- New folders have named color
   swatches and a selection checkmark in native form rows, rather than
   monochrome-tinted picker symbols. The existing saved color tokens are unchanged.
 - Light appearance is the first-run default; light/dark/system and font size are
@@ -116,7 +158,7 @@ metadata rewriting and the sync relocation journal.
 
 ## Encrypted sync
 
-Open **Sync** from the folder rail and enter the **HTTPS server URL** plus upload
+Open **Sync → Sync Settings** from the folder rail and enter the **HTTPS server URL** plus upload
 folder selections. The shared Rust client discovers `/v1/auth/config` and validates
 the advertised OIDC provider. A new or changed provider requires explicit
 **Trust and Save** confirmation before anything is persisted or authentication
@@ -175,8 +217,26 @@ python3 -m unittest discover -s build-aux -p test_build_ios.py
 ```
 
 The macOS workflow additionally compiles generated Swift, builds unsigned device
-and simulator apps, and tests rail navigation plus a persisted plaintext edit in
-an isolated test profile, never the user's notes or bookmarks.
+and simulator apps, and runs isolated UI tests plus Foundation-only state/export
+unit tests (`PaperTrailStateTests`). Coverage includes stale-save completions,
+retry/note-switch state, sync timestamp rules, export bytes/cleanup, moves,
+folder editing, find/share preparation, navigation, and persisted text edits.
+Tests never use the user's notes or bookmarks.
 Before distribution, manually test Files/iCloud provider availability, revoked
 bookmarks, concurrent external edits, OAuth and recovery against a real server,
 VoiceOver/Dynamic Type, and signing/installing with your chosen sideloading tool.
+Also verify actual share destinations on iPhone/iPad (including cancellation),
+Command-F and find dismissal/selection, and save/sync recovery while editing
+offline or after an external conflicting edit.
+
+### README screenshots
+
+`testCaptureReadmeScreenshots` captures the actual library/rail and Runestone editor
+with isolated demonstration files. It never reads real notes or bookmarks.
+The macOS workflow exports its XCTest attachments as the
+`paper-trail-ios-screenshots` artifact, including on successful runs.
+Download it from **Actions → Unsigned iOS**; its manifest identifies the
+`ios-library` and `ios-editor` PNG attachments. Review the captures, copy the
+library image to `data/screenshots/ios-library.png`, and embed it alongside the
+desktop/TUI screenshots in `README.md`. Do not substitute a mockup for a real
+simulator/device capture.
