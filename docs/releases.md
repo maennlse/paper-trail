@@ -2,7 +2,9 @@
 
 `.github/workflows/release.yml` runs only when a `v*` tag is pushed. The tag must
 exactly match `v` plus `[workspace.package].version` in `Cargo.toml`; a mismatched
-tag fails before any build or publication. Prerelease versions such as
+tag fails before any build or publication. The same gate validates workspace
+crates, lockfile entries, Meson/Flatpak metadata, iOS marketing version, and release
+notes against the workspace version. Prerelease versions such as
 `v0.3.0-rc.1` are published as GitHub prereleases.
 
 The release workflow reuses the Rust/GTK, standalone TUI, standalone server, and iOS
@@ -42,8 +44,8 @@ the publish job has `contents: write`; build jobs use read-only permissions.
 3. Create and push the matching version tag. For the current Cargo version:
 
    ```sh
-    git tag -a v0.7.0 -m "Release 0.7.0"
-    git push origin v0.7.0
+    git tag -a v0.8.0 -m "Release 0.8.0"
+    git push origin v0.8.0
    ```
 
 4. Watch the **Release** workflow. Inspect the resulting downloads and release notes.
@@ -62,7 +64,7 @@ releases are not silently overwritten.
 
 ```sh
 python3 -m unittest discover -s build-aux -p test_release.py
-python3 build-aux/prepare_release.py validate-tag v0.7.0
+python3 build-aux/prepare_release.py validate-tag v0.8.0
 python3 build-aux/package_desktop.py
 python3 build-aux/package_server.py x86_64-unknown-linux-musl
 ```

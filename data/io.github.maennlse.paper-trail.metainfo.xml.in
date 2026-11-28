@@ -35,7 +35,20 @@
   <url type="vcs-browser">https://github.com/maennlse/paper-trail</url>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="@APP_VERSION@" date="2026-11-22">
+    <release version="@APP_VERSION@" date="2026-11-28">
+      <description>
+        <p>Native ARM64 desktop downloads, improved iOS browsing, floating Find,
+        text sharing, additional syntax languages, and safer cross-platform
+        sync-folder discovery, renaming, downloads, and deletion.</p>
+      </description>
+    </release>
+    <release version="0.7.0" date="2026-11-28">
+      <description>
+        <p>Experimental native iOS app with shared Rust behavior, syntax
+        highlighting, encrypted sync, and unsigned device downloads.</p>
+      </description>
+    </release>
+    <release version="0.6.0" date="2026-11-22">
       <description>
         <p>Confirmed server-side folder erasure, safer device-local folder closing,
         matching desktop and terminal sync controls, optional remembered vault

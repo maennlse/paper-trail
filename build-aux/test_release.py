@@ -21,6 +21,7 @@ from prepare_release import (
     PACKAGES,
     collect,
     validate_tag,
+    validate_versions,
 )
 
 
@@ -61,6 +62,7 @@ class ReleaseTests(unittest.TestCase):
     def test_ios_release_is_required_and_versions_match(self) -> None:
         """The release must build iOS and present the same public version."""
         root = Path(__file__).resolve().parent.parent
+        validate_versions(root)
         version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"][
             "package"
         ]["version"]
@@ -71,6 +73,41 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("needs: [validate, tui, gtk, server, ios]", workflow)
         ios = (root / ".github/workflows/ios.yml").read_text()
         self.assertIn("  workflow_call:", ios)
+
+    def test_platform_version_drift_prevents_release(self) -> None:
+        """The tag gate rejects mismatched native metadata and locked crates."""
+        root = Path(__file__).resolve().parent.parent
+        version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"][
+            "package"
+        ]["version"]
+        original = Path.read_text
+        for relative in (
+            "meson.build",
+            "ios/project.yml",
+            "docs/release-notes.md",
+            "Cargo.lock",
+            "crates/papertrail-ffi/Cargo.toml",
+            "data/io.github.maennlse.paper-trail.metainfo.xml.in",
+        ):
+
+            def drift(
+                path: Path, *args, target: Path = root / relative, **kwargs
+            ) -> str:
+                text = original(path, *args, **kwargs)
+                if path == target:
+                    return (
+                        text.replace(version, "9.9.9")
+                        .replace("version.workspace = true", 'version = "9.9.9"')
+                        .replace("@APP_VERSION@", "9.9.9")
+                    )
+                return text
+
+            with (
+                self.subTest(file=relative),
+                patch.object(Path, "read_text", drift),
+                self.assertRaises(ValueError),
+            ):
+                validate_versions(root)
 
     def test_windows_allows_system_crypto_but_rejects_dynamic_crt(self) -> None:
         """System randomness DLLs are allowed, but the C runtime stays static."""

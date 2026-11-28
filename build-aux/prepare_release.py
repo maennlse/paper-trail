@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import sys
 import tomllib
@@ -42,6 +43,36 @@ def validate_tag(tag: str, manifest: Path) -> None:
         raise ValueError(f"Tag {tag!r} must match Cargo workspace version v{version}")
 
 
+def validate_versions(root: Path) -> None:
+    """Reject platform, packaging, or lockfile version drift before release builds."""
+    workspace = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+    version = workspace["workspace"]["package"]["version"]
+    for relative, pattern in (
+        ("meson.build", r"version:\s*'([^']+)'"),
+        ("ios/project.yml", r'MARKETING_VERSION:\s*"([^"]+)"'),
+        ("docs/release-notes.md", r"^# Paper Trail (\S+)"),
+    ):
+        match = re.search(pattern, (root / relative).read_text(encoding="utf-8"))
+        if match is None or match[1] != version:
+            raise ValueError(f"{relative} must use release version {version}")
+    lock = tomllib.loads((root / "Cargo.lock").read_text(encoding="utf-8"))
+    locked = {entry["name"]: entry["version"] for entry in lock["package"]}
+    for member in workspace["workspace"]["members"]:
+        crate = tomllib.loads(
+            (root / member / "Cargo.toml").read_text(encoding="utf-8")
+        )["package"]
+        declared = crate["version"]
+        actual = version if declared == {"workspace": True} else declared
+        if actual != version or locked.get(crate["name"]) != version:
+            raise ValueError(f"{member} and Cargo.lock must use version {version}")
+    metadata = (root / "data/io.github.maennlse.paper-trail.metainfo.xml.in").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r'<release version="([^"]+)"', metadata)
+    if match is None or match[1] != "@APP_VERSION@":
+        raise ValueError("AppStream must inherit the Meson release version")
+
+
 def collect(artifacts: Path, destination: Path) -> None:
     """Fail closed on missing, duplicate, malformed, or corrupt packages."""
     verified = []
@@ -78,6 +109,7 @@ def main() -> None:
     """Run a local validation/collection step; never create a tag or release."""
     if len(sys.argv) == 3 and sys.argv[1] == "validate-tag":
         validate_tag(sys.argv[2], Path(__file__).resolve().parent.parent / "Cargo.toml")
+        validate_versions(Path(__file__).resolve().parent.parent)
     elif len(sys.argv) == 4 and sys.argv[1] == "collect":
         collect(Path(sys.argv[2]), Path(sys.argv[3]))
     else:
