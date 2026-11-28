@@ -1,6 +1,6 @@
 # Paper Trail GTK desktop downloads
 
-## Recommended: Flatpak (Linux x86_64)
+## Recommended: Flatpak (Linux x86_64 and aarch64)
 
 Install `paper-trail-gtk-linux-x86_64.flatpak` with Flatpak:
 
@@ -10,17 +10,23 @@ flatpak install --user ./paper-trail-gtk-linux-x86_64.flatpak
 flatpak run io.github.maennlse.paper-trail
 ```
 
+On ARM64 Linux, use `paper-trail-gtk-linux-aarch64.flatpak` instead.
+Choose the bundle matching `uname -m`; the architectures are not interchangeable.
+
 The bundle includes the app, not the GNOME runtime itself. Flatpak downloads the
 required GNOME 50 runtime from Flathub if it is not already installed. An initial
 installation therefore needs network access. External folders use the file
 chooser portal. The executable does not need Python or a Rust installation.
 
-## Native executable (Linux x86_64)
+## Native executable (Linux x86_64 and aarch64)
 
 Extract `paper-trail-gtk-linux-x86_64.tar.gz` and run `./paper-trail` in the
 extracted directory. Executable permissions are preserved in the archive. UI,
 CSS, and the app icon are embedded, so there are no loose application resources
 to install alongside the executable.
+
+ARM64 Linux uses `paper-trail-gtk-linux-aarch64.tar.gz`. Both architectures
+are built/tested on native runners, not through emulation.
 
 This build is **dynamically linked**, not a standalone/static Linux executable.
 It requires compatible system libraries, including:
@@ -31,7 +37,7 @@ It requires compatible system libraries, including:
 - Compatible GLib, glibc, and their runtime dependencies
 
 Release builds currently use Fedora 44. `BUILD-INFO.txt` in the archive records
-the actual distribution, GNOME library versions, and dynamic dependencies used
+the architecture, actual distribution, GNOME library versions, and dynamic dependencies used
 for that build. Those versions may imply newer requirements than the source
 minimums above. Older distributions may not run this binary even if they provide
 some GTK libraries; prefer Flatpak rather than replacing system libraries.

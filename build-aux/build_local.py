@@ -88,8 +88,12 @@ def standalone_target(host: str) -> str:
 
 
 def available(host: str, mode: str) -> tuple[str, ...]:
-    """GTK archives currently support Linux x86_64 and always require shared GNOME libs."""
-    if mode == "native" and host.startswith("x86_64-") and "linux" in host:
+    """Native GTK archives support Linux x86_64/aarch64 with shared GNOME libs."""
+    if (
+        mode == "native"
+        and host.split("-")[0] in ("x86_64", "aarch64")
+        and "linux" in host
+    ):
         return tuple(COMPONENTS)
     return ("tui", "server")
 
@@ -257,7 +261,10 @@ def execute(build: Build) -> Path:
         binary = build.binary(component)
         if component == "gtk":
             archive = package_desktop(
-                build.root, binary=binary, destination=destination
+                build.root,
+                binary=binary,
+                destination=destination,
+                architecture=build.target.split("-")[0],
             )
         elif build.mode == "standalone":
             archive = package_standalone(

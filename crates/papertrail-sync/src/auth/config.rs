@@ -65,10 +65,10 @@ fn fetch_with(client: &reqwest::blocking::Client, server: &str) -> io::Result<Pu
             crate::http_error::discovery_error("Authentication configuration request failed", e)
         })?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err(error("Server does not offer authentication discovery; use manual issuer/client/scopes configuration"));
+        return Err(error("Server does not offer authentication discovery. Upgrade the server and configure its /v1/auth/config endpoint"));
     }
     if !response.status().is_success() {
-        return Err(error("Server authentication configuration is unavailable; check deployment settings or explicitly configure authentication manually"));
+        return Err(error("Server authentication configuration is unavailable; check the HTTPS server address and its deployment settings"));
     }
     let config: PublicConfig = decode(response, 16384)?;
     config.validate()?;
@@ -228,7 +228,7 @@ mod tests {
             &mock(response("404 Not Found", "PRIVATE_PROVIDER_ERROR")),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("manual"));
+        assert!(err.to_string().contains("/v1/auth/config"));
         assert!(!err.to_string().contains("PRIVATE_PROVIDER_ERROR"));
         for status in ["503 Service Unavailable", "401 Unauthorized"] {
             assert!(fetch_with(&client(), &mock(response(status, "PRIVATE_ERROR"))).is_err());

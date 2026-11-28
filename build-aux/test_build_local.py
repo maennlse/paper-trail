@@ -151,6 +151,9 @@ class LocalBuildTests(unittest.TestCase):
         self.assertIn(
             "gtk", build_local.available("x86_64-unknown-linux-gnu", "native")
         )
+        self.assertIn(
+            "gtk", build_local.available("aarch64-unknown-linux-gnu", "native")
+        )
         self.assertNotIn(
             "gtk", build_local.available("x86_64-pc-windows-msvc", "native")
         )

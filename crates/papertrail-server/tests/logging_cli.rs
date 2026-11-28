@@ -67,15 +67,92 @@ fn verbose_flags_and_environment_filter_control_debug_logs() {
 
 #[test]
 fn help_describes_logging_without_requiring_configuration() {
-    let output = command().arg("--help").output().unwrap();
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("--verbose"));
-    assert!(text.contains("RUST_LOG"));
-    assert!(text.contains("PAPERTRAIL_NATIVE_CLIENT_ID"));
-    assert!(text.contains("PAPERTRAIL_NATIVE_SCOPES"));
-    assert!(text.contains("openid offline_access"));
+    for flag in ["--help", "-h"] {
+        let output = command().arg(flag).output().unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        let text = String::from_utf8(output.stdout).unwrap();
+        for expected in [
+            "Usage: paper-trail-server [OPTIONS]",
+            "-h, --help",
+            "-V, --version",
+            "-v, --verbose",
+            env!("CARGO_PKG_VERSION"),
+            "RUST_LOG",
+            "PAPERTRAIL_OIDC_ISSUER",
+            "PAPERTRAIL_API_AUDIENCE",
+            "PAPERTRAIL_DATABASE",
+            "papertrail.sqlite3",
+            "PAPERTRAIL_LISTEN",
+            "127.0.0.1:8787",
+            "PAPERTRAIL_TOKEN_VALIDATION",
+            "PAPERTRAIL_NATIVE_CLIENT_ID",
+            "PAPERTRAIL_NATIVE_SCOPES",
+            "openid offline_access",
+            "PAPERTRAIL_INTROSPECTION_CLIENT_ID",
+            "PAPERTRAIL_INTROSPECTION_CLIENT_SECRET_FILE",
+            "HTTPS reverse proxy",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+    }
+}
+
+#[test]
+fn version_matches_the_shared_release_version_without_configuration() {
+    for flag in ["--version", "-V"] {
+        let output = command().arg(flag).output().unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("paper-trail-server {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+}
+
+#[test]
+fn informational_flags_ignore_broken_server_configuration_and_logging() {
+    for flag in ["--help", "-h", "--version", "-V"] {
+        let database = std::env::temp_dir().join(format!(
+            "papertrail-cli-{}-{}.sqlite3",
+            std::process::id(),
+            flag.trim_start_matches('-')
+        ));
+        assert!(!database.exists());
+        let output = command()
+            .args(["--verbose", flag])
+            .env("PAPERTRAIL_LISTEN", "not-an-address")
+            .env("PAPERTRAIL_DATABASE", &database)
+            .env("PAPERTRAIL_TOKEN_VALIDATION", "not-a-mode")
+            .env("PAPERTRAIL_NATIVE_CLIENT_ID", "")
+            .env("RUST_LOG", "[")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert!(output.stderr.is_empty());
+        assert!(!output.stdout.is_empty());
+        assert!(!database.exists());
+    }
+}
+
+#[test]
+fn invalid_arguments_exit_with_usage_error_before_startup() {
+    for args in [
+        vec!["--unknown"],
+        vec!["--version=private"],
+        vec!["private-positional"],
+        vec!["-v", "--unknown"],
+        vec!["--help", "--unknown"],
+        vec!["--", "--version"],
+    ] {
+        let output = command().args(args).env("RUST_LOG", "[").output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let text = stderr(&output);
+        assert!(text.contains("--help"));
+        assert!(!text.contains("Starting encrypted sync server"));
+        assert!(!text.contains("private"));
+    }
 }
 
 #[test]

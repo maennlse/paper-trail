@@ -65,6 +65,10 @@ class IOSBuildTests(unittest.TestCase):
             "Swift",
             "TOML",
             "YAML",
+            "Bash",
+            "HTML",
+            "CSS",
+            "SQL",
         ]:
             self.assertIn(f"product: TreeSitter{language}Runestone", project)
         self.assertNotIn("product: RunestoneLanguageSupport", project)

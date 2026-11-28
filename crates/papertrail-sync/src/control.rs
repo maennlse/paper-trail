@@ -287,7 +287,20 @@ impl Service {
         let state = self.snapshot()?;
         let mut choices = Vec::new();
         if let Some(state) = &state {
-            if let Some(catalog) = state.catalog_draft.as_ref().or(state.catalog.as_ref()) {
+            // A stale unpublished draft must never hide newly discovered IDs.
+            let mut visible_catalog = state.catalog.clone().or(state.catalog_draft.clone());
+            if let (Some(visible), Some(draft)) = (&mut visible_catalog, &state.catalog_draft) {
+                for (id, data) in &draft.folders {
+                    visible
+                        .folders
+                        .entry(id.clone())
+                        .or_insert_with(|| data.clone());
+                }
+                visible
+                    .deleted_folders
+                    .extend(draft.deleted_folders.iter().cloned());
+            }
+            if let Some(catalog) = &visible_catalog {
                 for (id, data) in &catalog.folders {
                     if catalog.deleted_folders.contains(id) {
                         continue;
@@ -297,6 +310,20 @@ impl Service {
                         .get(id)
                         .cloned()
                         .or_else(|| state.bindings.get(id).map(|b| b.path.clone()));
+                    let published = state
+                        .catalog
+                        .as_ref()
+                        .is_some_and(|c| c.folders.contains_key(id));
+                    if !published
+                        && !path.as_ref().is_some_and(|p| {
+                            settings
+                                .note_folders
+                                .iter()
+                                .any(|open| crate::same_directory(open, p))
+                        })
+                    {
+                        continue;
+                    }
                     let selected = !config.excluded_folders.contains(id)
                         && path
                             .as_ref()
@@ -319,11 +346,18 @@ impl Service {
                         name: data.name.clone(),
                         selected,
                         conflict: state.folder_conflicts.contains(id),
+                        stored_path: state.bindings.get(id).and_then(|b| {
+                            config
+                                .folder_mappings
+                                .get(id)
+                                .filter(|path| !crate::same_directory(path, &b.path))
+                                .map(|_| b.path.clone())
+                        }),
                     });
                 }
             }
         }
-        for path in settings.note_folders.iter().chain(&config.folders) {
+        for path in &settings.note_folders {
             if state.as_ref().is_some_and(|s| {
                 s.bindings.iter().any(|(id, b)| {
                     crate::same_directory(&b.path, path)
@@ -349,6 +383,7 @@ impl Service {
                         .iter()
                         .any(|folder| crate::same_directory(folder, path)),
                     conflict: false,
+                    stored_path: None,
                 });
             }
         }
@@ -385,6 +420,7 @@ impl Service {
                 .to_string_lossy()
                 .into();
             b.observed_color = settings.folder_colors.get(&b.path).cloned();
+            b.observed_label = settings.folder_labels.get(&b.path).cloned();
         }
         engine.state.folder_conflicts.remove(id);
         engine.save()
@@ -560,6 +596,7 @@ impl Service {
             }
             let activity = self.local()?;
             if let Some(state) = self.snapshot()? {
+                crate::folders::validate_folder_mappings(&state, &config, &activity.protected)?;
                 if let Some(catalog) = state.catalog.as_ref().or(state.catalog_draft.as_ref()) {
                     if config.folder_mappings.keys().any(|id| {
                         !catalog.folders.contains_key(id)
@@ -571,15 +608,6 @@ impl Service {
                         return Err(error(
                             "Unknown remote folder ID in local mapping; use the listed folder IDs",
                         ));
-                    }
-                }
-                for (id, path) in &config.folder_mappings {
-                    if let Some(old) = state.bindings.get(id).filter(|b| b.path != *path) {
-                        if activity.protected.iter().any(|p| p.starts_with(&old.path)) {
-                            return Err(error(
-                                "Close notes in a folder before changing its local mapping",
-                            ));
-                        }
                     }
                 }
             }
@@ -1242,6 +1270,7 @@ mod tests {
                     path: path.clone(),
                     managed: true,
                     observed_name: String::new(),
+                    observed_label: None,
                     observed_color: None,
                 },
             );

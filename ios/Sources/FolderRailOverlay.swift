@@ -100,19 +100,7 @@ struct FolderRailOverlay: View {
     private func tile(badge: String, color: Color,
                       selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            ZStack {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 38))
-                    .foregroundStyle(color)
-                Text(badge)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(width: 30)
-                    .offset(y: 3)
-            }
-            .frame(width: 48, height: 48)
+            FolderBadge(badge: badge, color: color)
             .background(selected ? color.opacity(0.15) : .clear,
                         in: RoundedRectangle(cornerRadius: 10))
             .overlay {

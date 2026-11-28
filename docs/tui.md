@@ -104,7 +104,7 @@ The folder column defaults to **7 terminal cells**, configurable with
 `:set folder-width 7` through `:set folder-width 30`. Existing custom widths are preserved;
 `:path` opens a wrapping, scrollable full-path dialog. Below 80 columns the folder
 pane hides automatically; pane navigation skips it. Folders remain accessible
-through `:folder PATH` or `:folder NUMBER`.
+through `:folder-open PATH` or `:folder-open NUMBER`.
 
 The note column uses automatic sizing by default. Set a fixed width with
 `:set note-width N` (10–80 terminal cells), or restore automatic sizing with
@@ -114,7 +114,7 @@ the rendered width shrinks as needed to leave at least 20 cells for the editor.
 The folder column shows only **[All]** and GTK-style two-letter badges, without
 numbers, leading markers, or full names. The active folder badge is underlined.
 All stays first and does not change folder numbers used by
-`:folder NUMBER` or `:move NUMBER`; `:path` shows full folder information.
+`:folder-open NUMBER` or `:move NUMBER`; `:path` shows full folder information.
 No special icon font is needed.
 Folder badges and note titles use GTK's exact shared RGB presets and custom
 colors, including in All/search views. Focused rows use the folder color with
@@ -164,39 +164,52 @@ Press **:** in built-in normal mode, or **F2** from either editor, type a comman
 then **Enter**. **Esc** cancels. `:` inside the Neovim pane belongs to Neovim.
 
 **Tab / Shift-Tab** completes and cycles matching commands, `:set` options and
-folder widths, preset colors, and saved folder numbers. `:folder` and `:move`
+folder widths, preset colors, and saved folder numbers. `:folder-open` and `:move`
 complete directory paths; `:saveas` completes files and directories. Paths with
 spaces or Unicode and `~/` home paths are supported. A unique directory can be
 completed further with another Tab. Suggestions appear above the prompt and
 never execute a command; Enter is still required. Typing, pasting, or Backspace
 starts a new completion cycle. Tab switches panes only when no prompt is open.
 
-| Command                               | Action                                                            |
-| ------------------------------------- | ----------------------------------------------------------------- |
-| `:w`, `:q`, `:wq`                     | Save / save and quit; failed saves prevent quitting               |
-| `:q!`                                 | Explicitly discard pending edits and quit                         |
-| `:new [NAME]`, `:rename NAME`         | Create / rename a note                                            |
-| `:move PATH` or `:move NUMBER`        | Move into an existing folder                                      |
-| `:folder PATH` or `:folder NUMBER`    | Add / select an existing folder                                   |
-| `:all`, `:search TEXT`                | Show all notes / search across folders                            |
-| `:close-folder`                       | Close active folder and pause its sync on this device; keep files |
-| `:folder-up`, `:folder-down`          | Reorder the highlighted folder                                    |
-| `:pin`, `:color #rrggbb`              | Toggle current note pin / set active folder color                 |
-| `:color preset-0` through `preset-11` | Use a built-in folder color                                       |
-| `:delete`                             | Delete current note after typing `yes` and Enter                  |
-| `:replace 'OLD' 'NEW'`                | Undoable replacement of all literal matches                       |
-| `:edit`                               | Save and launch an external editor                                |
-| `:refresh`, `:reload`                 | Rescan notes / reload a clean current note                        |
-| `:saveas PATH`                        | Save pending text into a new file, never overwrite                |
-| `:reload!`                            | Explicitly discard edits and load the disk version                |
-| `:set number`, `:set nonumber`        | TUI-only line-number preference                                   |
-| `:set folder-width N`                 | TUI-only folder width, 7–30 terminal cells                        |
-| `:set note-width N` or `auto`         | TUI-only note width, 10–80 cells, or automatic sizing             |
-| `:set editor builtin/neovim`          | Choose the built-in or embedded Neovim editor                     |
-| `:set nvim-config clean/user`         | Choose Neovim defaults or personal config/plugins                 |
-| `:path`                               | Show the full highlighted folder/current note path                |
+Commands are grouped consistently as `folder-*`, `login-*`, `vault-*`, and
+`sync-*`. Note/editing commands and familiar Vim shortcuts (`:w`, `:q`, `:wq`,
+`:q!`, `:x`, `:quit`) are unchanged. Retired names are not executable aliases:
+they return a replacement hint without performing any action.
 
-Paths after `:folder`, `:move`, `:rename`, and `:saveas` can contain spaces without
+| Retired command                                                                           | Replacement                                                     |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `:folder`, `:close-folder`, `:all`, `:color`                                              | `:folder-open`, `:folder-close`, `:folder-all`, `:folder-color` |
+| `:login`, `:logout`                                                                       | `:login-start`, `:login-sign-out`                               |
+| `:unlock`, `:lock`                                                                        | `:vault-unlock`, `:vault-lock`                                  |
+| `:create-vault`, `:recover-vault`, `:change-passphrase`                                   | `:vault-create`, `:vault-recover`, `:vault-change-passphrase`   |
+| `:sync-add-folder`, `:sync-remove-folder`, `:sync-select-folder`, `:sync-unselect-folder` | Select/uncheck rows in `:sync-folders`                          |
+
+| Command                                      | Action                                                            |
+| -------------------------------------------- | ----------------------------------------------------------------- |
+| `:w`, `:q`, `:wq`                            | Save / save and quit; failed saves prevent quitting               |
+| `:q!`                                        | Explicitly discard pending edits and quit                         |
+| `:new [NAME]`, `:rename NAME`                | Create / rename a note                                            |
+| `:move PATH` or `:move NUMBER`               | Move into an existing folder                                      |
+| `:folder-open PATH` or `:folder-open NUMBER` | Open / select an existing folder                                  |
+| `:folder-all`, `:search TEXT`                | Show all notes / search across folders                            |
+| `:folder-close`                              | Close active folder and pause its sync on this device; keep files |
+| `:folder-up`, `:folder-down`                 | Reorder the highlighted folder                                    |
+| `:pin`, `:folder-color #rrggbb`              | Toggle current note pin / set active folder color                 |
+| `:folder-color preset-0` through `preset-11` | Use a built-in folder color                                       |
+| `:delete`                                    | Delete current note after typing `yes` and Enter                  |
+| `:replace 'OLD' 'NEW'`                       | Undoable replacement of all literal matches                       |
+| `:edit`                                      | Save and launch an external editor                                |
+| `:refresh`, `:reload`                        | Rescan notes / reload a clean current note                        |
+| `:saveas PATH`                               | Save pending text into a new file, never overwrite                |
+| `:reload!`                                   | Explicitly discard edits and load the disk version                |
+| `:set number`, `:set nonumber`               | TUI-only line-number preference                                   |
+| `:set folder-width N`                        | TUI-only folder width, 7–30 terminal cells                        |
+| `:set note-width N` or `auto`                | TUI-only note width, 10–80 cells, or automatic sizing             |
+| `:set editor builtin/neovim`                 | Choose the built-in or embedded Neovim editor                     |
+| `:set nvim-config clean/user`                | Choose Neovim defaults or personal config/plugins                 |
+| `:path`                                      | Show the full highlighted folder/current note path                |
+
+Paths after `:folder-open`, `:move`, `:rename`, and `:saveas` can contain spaces without
 quotes. `:replace` arguments use shell-style quotes. Moves and renames resolve
 filename collisions without overwriting another note. Deletion permanently
 removes the file, rather than using a desktop trash service.
@@ -220,16 +233,16 @@ server and advertised identity-provider URLs, then type `yes` to trust the issue
 PageUp/PageDown scroll long trust details; Esc rejects without saving. Discovery
 runs without blocking editing; `:sync-discovery-cancel` discards its result.
 
-Existing manual profiles remain manual. To use an older server or explicitly retain
-manual authentication, use
-`:sync-configure HTTPS_SERVER HTTPS_ISSUER PUBLIC_CLIENT_ID 'SCOPES'` (scopes optional).
-Discovery failures never silently replace these values. An unchanged accepted issuer
+Existing legacy profiles remain usable without resetting accounts or vaults.
+New setup accepts only the HTTPS server URL; manual issuer/client/scopes arguments
+are rejected. Servers must provide `/v1/auth/config`.
+Discovery failures never silently replace saved values. An unchanged accepted issuer
 needs no new confirmation; a change stops authentication/sync and requires reviewing
 setup. Existing journal-bound identities require a separate profile and notes
 directory, not an issuer/account migration. Non-interactive shared-client calls
 reject unconfirmed changes. See [configuration ownership and precedence](encrypted-sync.md#configuration-ownership-and-precedence).
 
-`:login` uses OAuth Device Authorization (RFC 8628), not a browser on the TUI host.
+`:login-start` uses OAuth Device Authorization (RFC 8628), not a browser on the TUI host.
 It shows an HTTPS verification URL and a short-lived user code. Open that URL on
 another trusted device, enter the code, and approve the sign-in you started.
 `:login-show` displays the full URL/code; Esc closes that view without cancelling.
@@ -260,22 +273,22 @@ In a graphical session, Tab in the masked create/unlock/change-passphrase prompt
 toggles **Remember password in keyring** (off by default). Remembered passwords
 use Secret Service on Linux, visible in Seahorse. Anyone with access to your
 unlocked keyring can unlock sync. Subsequent launches restore login, unlock the
-vault, and sync automatically. `:lock` pauses auto-unlock until the next launch;
-`:logout` removes both the saved login and password. SSH/headless sessions do not
+vault, and sync automatically. `:vault-lock` pauses auto-unlock until the next launch;
+`:login-sign-out` removes both the saved login and password. SSH/headless sessions do not
 offer this option. See [remembered credentials](encrypted-sync.md#user-flow).
 
-Device login authenticates the account only. Unlock separately with `:unlock` and
+Device login authenticates the account only. Unlock separately with `:vault-unlock` and
 the masked vault passphrase; **never enter that passphrase on the provider's
 verification page**. The SSH host must be trusted: it holds the plaintext working
 files and the vault key in memory after unlock. Cancellation stops client polling,
 not the provider's open approval page. An in-flight HTTPS call may take up to its
 timeout to finish. If approval/identity validation has already committed, the UI
-says cancellation is too late; use `:logout` to clear that session instead.
+says cancellation is too late; use `:login-sign-out` to clear that session instead.
 
 Optional encrypted synchronization is available through `:sync-configure`,
-`:login`, `:unlock`, `:sync`, and `:sync-status`. Use `:create-vault` for the first
-device and save its recovery key. `:lock` clears the memory-only vault key;
-`:logout` also removes secure-stored credentials. Local files remain plaintext.
+`:login-start`, `:vault-unlock`, `:sync`, and `:sync-status`. Use `:vault-create` for the first
+device and save its recovery key. `:vault-lock` clears the memory-only vault key;
+`:login-sign-out` also removes secure-stored credentials. Local files remain plaintext.
 See [encrypted sync](encrypted-sync.md) for setup, threat boundaries, and limitations.
 
 Use **`:sync-folders`** to select collections interactively: arrows/`j`/`k` move,
@@ -288,8 +301,8 @@ or the configured download root. Unchecking every folder is supported without
 resetting the vault, journal, or mappings. Automatic sync pauses while this dialog
 is open; saving a stale configuration is rejected instead of overwriting changes
 from another frontend. Editor contents are never replaced by selection changes.
-Closing a folder with `:close-folder` also pauses its sync on this device, so
-automatic sync will not reopen it. Reopening with `:folder PATH` does not resume
+Closing a folder with `:folder-close` also pauses its sync on this device, so
+automatic sync will not reopen it. Reopening with `:folder-open PATH` does not resume
 sync: explicitly check it again in `:sync-folders`. Server copies, other devices
 and pending edits are unaffected.
 
@@ -313,8 +326,7 @@ Esc may close the picker, but **does not cancel a confirmed deletion or undo a
 confirmed resync**. Those operations take effect independently of saving/cancelling
 the selection draft. Automatic sync resumes after the picker closes.
 
-`:sync-add-folder PATH`, `:sync-remove-folder PATH`, `:sync-select-folder ID`, and
-`:sync-unselect-folder ID` remain compatibility shortcuts, not required for normal
+`:sync-folders` replaces the retired direct add/remove/select/unselect commands for
 selection. `:sync-map-folder ID '/absolute/path'` explicitly chooses a device's
 directory; `:sync-download-dir PATH` sets where newly discovered collections are
 created. Empty folders sync too. Legacy assignments that cannot be proven stop

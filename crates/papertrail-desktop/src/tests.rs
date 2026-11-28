@@ -1222,28 +1222,23 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
         .unwrap()
         .activate(None);
     settle();
-    assert!(!d
-        .widget::<adw::SwitchRow>("sync_config_discovery")
-        .is_active());
+    {
+        let widgets = d.sync_config_widgets.borrow();
+        let widgets = widgets.as_ref().unwrap();
+        for id in [
+            "sync_config_discovery",
+            "sync_config_issuer",
+            "sync_config_client",
+            "sync_config_scopes",
+        ] {
+            assert!(widgets.object::<gtk::Widget>(id).is_none());
+        }
+    }
     assert_eq!(
         d.widget::<adw::EntryRow>("sync_config_server").text(),
         "https://sync.example"
     );
-    assert_eq!(
-        d.widget::<adw::EntryRow>("sync_config_issuer").text(),
-        "https://issuer.example"
-    );
-    assert_eq!(
-        d.widget::<adw::EntryRow>("sync_config_client").text(),
-        "public-native"
-    );
-    assert_eq!(
-        d.widget::<adw::EntryRow>("sync_config_scopes").text(),
-        "openid offline_access custom-audience"
-    );
     capture(&d, "sync-configure-folders");
-    d.widget::<adw::EntryRow>("sync_config_scopes")
-        .set_text("openid offline_access changed-scope");
     let dialog = d
         .window
         .visible_dialog()
@@ -1257,7 +1252,7 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
     assert!(config.folders.contains(&a));
     assert!(config.folders.contains(&b));
     assert!(!config.folders.contains(&c));
-    assert_eq!(config.scopes, "openid offline_access changed-scope");
+    assert_eq!(config.scopes, "openid offline_access custom-audience");
     assert_eq!(config.download_dir, Some(root.join("Downloads")));
     assert!(d.window.lookup_action("sync-status").is_none());
     // Only published folders get a direct trash button, and deletion always
@@ -1294,6 +1289,7 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
                     path: path.clone(),
                     managed: false,
                     observed_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+                    observed_label: None,
                     observed_color: None,
                 },
             );
@@ -1382,8 +1378,8 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
         .is_empty());
     // Completing deletion updates this dialog, not a rebuilt replacement, so
     // unrelated edits remain in the same widgets on both failure and success.
-    d.widget::<adw::EntryRow>("sync_config_scopes")
-        .set_text("openid unsaved-scope");
+    d.widget::<adw::EntryRow>("sync_config_downloads")
+        .set_text("/unsaved-download-root");
     let row = trash
         .ancestor(adw::ActionRow::static_type())
         .unwrap()
@@ -1444,8 +1440,8 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
         ))
     .is_none());
     assert_eq!(
-        d.widget::<adw::EntryRow>("sync_config_scopes").text(),
-        "openid unsaved-scope"
+        d.widget::<adw::EntryRow>("sync_config_downloads").text(),
+        "/unsaved-download-root"
     );
     {
         let mut engine =
@@ -1486,12 +1482,12 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
     assert!(!selected.is_active());
     assert!(row.parent().is_none());
     assert_eq!(
-        d.widget::<adw::EntryRow>("sync_config_scopes").text(),
-        "openid unsaved-scope"
+        d.widget::<adw::EntryRow>("sync_config_downloads").text(),
+        "/unsaved-download-root"
     );
     assert_eq!(
         d.sync.saved_config().unwrap().unwrap().scopes,
-        "openid offline_access changed-scope"
+        "openid offline_access custom-audience"
     );
     let again = descendant(config_dialog.upcast_ref(), &|widget| {
         widget
@@ -1549,7 +1545,11 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
     config_dialog.close();
     settle();
     let saved = d.sync.saved_config().unwrap().unwrap();
-    assert_eq!(saved.scopes, "openid unsaved-scope");
+    assert_eq!(saved.scopes, "openid offline_access custom-audience");
+    assert_eq!(
+        saved.download_dir,
+        Some(std::path::PathBuf::from("/unsaved-download-root"))
+    );
     assert!(saved.excluded_folders.contains(&folder_id));
     assert!(!saved.folders.contains(&a));
     assert!(saved.folders.contains(&b));
@@ -1620,11 +1620,15 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
                 path: root.join("unavailable"),
                 managed: true,
                 observed_name: "unavailable".into(),
+                observed_label: None,
                 observed_color: None,
             },
         );
         engine.save().unwrap();
     }
+    // An existing retained directory is not a reason to list a closed folder.
+    d.close_folder(&a).unwrap();
+    assert!(a.is_dir());
     let journal = fs::read(root.join("sync/state.json")).unwrap();
     d.window
         .lookup_action("sync-configure")
@@ -1633,6 +1637,7 @@ fn sync_configuration_prefills_and_preserves_multiple_selected_folders(
     settle();
     let config_dialog = d.window.visible_dialog().unwrap();
     for title in [
+        "Personal",
         "Server-only deleted folder",
         "Unavailable deleted folder",
         "Removed from Sync",
@@ -1676,11 +1681,13 @@ fn sync_discovery_trust_is_explicit(app: &adw::Application, root: &std::path::Pa
         .activate(None);
     settle();
     assert!(d
-        .widget::<adw::SwitchRow>("sync_config_discovery")
-        .is_active());
-    assert!(!d
-        .widget::<adw::EntryRow>("sync_config_issuer")
-        .is_sensitive());
+        .sync_config_widgets
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .object::<adw::EntryRow>("sync_config_issuer")
+        .is_none());
+    assert_eq!(d.widget::<adw::EntryRow>("sync_config_server").text(), "");
     d.window.visible_dialog().unwrap().close();
     settle();
     let config = papertrail_sync::Config {
@@ -1811,7 +1818,7 @@ fn transient_dialog_regressions(app: &adw::Application, root: &std::path::Path) 
         .activate(None);
     settle();
     assert_eq!(
-        d.widget::<adw::EntryRow>("sync_config_scopes").text(),
+        d.sync.saved_config().unwrap().unwrap().scopes,
         config.scopes
     );
     let dialog = d

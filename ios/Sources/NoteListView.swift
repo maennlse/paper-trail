@@ -27,8 +27,8 @@ struct NoteListView: View {
         ZStack(alignment: .leading) {
             NavigationStack {
                 VStack(spacing: 0) {
-                    if model.configured || model.syncFeedback.failure != nil {
-                        SyncFeedbackView(settings: { showSync = true })
+                    if model.syncing || model.syncFeedback.failure != nil {
+                        SyncFeedbackView(settings: { showSync = true }, showLastSync: false)
                             .padding(.horizontal, 16).padding(.bottom, 8)
                     }
                     if let warning = model.storageWarning ?? model.snapshot?.unavailableFolders.first {
@@ -53,16 +53,6 @@ struct NoteListView: View {
                         }
                     }
                     .listStyle(.insetGrouped)
-                    .contentMargins(.bottom, 88, for: .scrollContent)
-                    .searchable(text: $model.query,
-                                placement: .navigationBarDrawer(displayMode: .automatic),
-                                prompt: "Search across folders")
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .background(InitiallyCollapsedSearch(
-                        ready: model.snapshot != nil,
-                        queryIsEmpty: model.query.isEmpty
-                    ))
                     .overlay {
                         if model.notes.isEmpty {
                             ContentUnavailableView(
@@ -73,7 +63,7 @@ struct NoteListView: View {
                             .allowsHitTesting(false)
                         }
                     }
-                    .refreshable { await model.refresh() }
+                    .refreshable { await model.refreshAndSync() }
                 }
                 .background(Color(uiColor: .systemGroupedBackground))
                 .navigationTitle(model.title)
@@ -94,19 +84,26 @@ struct NoteListView: View {
                         .accessibilityIdentifier("preferences")
                     }
                 }
-                .overlay(alignment: .bottomTrailing) {
-                    Button { Task { await model.compose() } } label: {
-                        Image(systemName: "square.and.pencil")
-                            .font(.title2.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 56, height: 56, alignment: .center)
-                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
-                            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: 0) {
+                        HStack(spacing: 8) {
+                            LibrarySearchBar(text: $model.query)
+                                .frame(height: 52)
+                            Button { Task { await model.compose() } } label: {
+                                Image(systemName: "plus").font(.title2.weight(.semibold))
+                                    .frame(width: 32, height: 32)
+                            }
+                            .buttonStyle(.borderedProminent).buttonBorderShape(.circle)
+                            .accessibilityLabel("New note").accessibilityIdentifier("compose")
+                            .disabled(model.snapshot == nil)
+                            .padding(.trailing, 16)
+                        }
+                        if model.configured {
+                            SyncFeedbackView(settings: { showSync = true }, showStatus: false)
+                                .padding(.horizontal, 16).padding(.bottom, 6)
+                        }
                     }
-                    .accessibilityLabel("New note")
-                    .accessibilityIdentifier("compose")
-                    .disabled(model.snapshot == nil)
-                    .padding(20)
+                    .background(.bar)
                 }
             }
             .accessibilityHidden(model.railOpen)
@@ -201,12 +198,14 @@ struct NoteListView: View {
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
         .contextMenu { noteActions(note) }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button("Delete", systemImage: "trash", role: .destructive) { pendingDelete = note }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            // Keep the row until the native confirmation is accepted; a
+            // destructive swipe button would optimistically animate it away.
+            Button("Delete", systemImage: "trash") { pendingDelete = note }.tint(.red)
             Button("Rename", systemImage: "pencil") { pendingRename = note }
                 .tint(.blue)
         }
-        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
             Button(note.pinned ? "Unpin" : "Pin",
                    systemImage: note.pinned ? "pin.slash" : "pin") {
                 Task { await model.pin(note) }
@@ -254,17 +253,23 @@ struct NoteRowView: View {
             RoundedRectangle(cornerRadius: 2)
                 .fill(Color(folderHex: note.color)).frame(width: 3)
             VStack(alignment: .leading, spacing: 7) {
-                Text(note.title).font(.body.weight(.semibold))
-                    .foregroundStyle(.primary).lineLimit(2)
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(note.title).font(.body.weight(.semibold))
+                        .foregroundStyle(.primary).lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        Text(NoteTimestamp.description(
+                            Date(timeIntervalSince1970: Double(note.modified)), now: context.date))
+                            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
                 Text(URL(fileURLWithPath: note.path).lastPathComponent)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 10) {
-                    Label {
-                        Text(Date(timeIntervalSince1970: Double(note.modified)), style: .date)
-                    } icon: { Image(systemName: "clock") }
-                    Label(note.folderName, systemImage: "folder")
-                        .foregroundStyle(Color(folderHex: note.color))
-                        .lineLimit(1)
+                    FolderBadge(badge: note.folderBadge, color: Color(folderHex: note.color), size: 25)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Folder: \(note.folderName)")
                     Spacer(minLength: 0)
                     Text(fileType).font(.caption2.monospaced())
                         .padding(.horizontal, 5).padding(.vertical, 2)

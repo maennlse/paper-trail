@@ -7,7 +7,7 @@ tag fails before any build or publication. Prerelease versions such as
 
 The release workflow reuses the Rust/GTK, standalone TUI, standalone server, and iOS
 workflows. All tests, six native TUI and six server target builds/linkage checks,
-the native GTK build, the GTK Flatpak build, and unsigned iOS builds with simulator
+both native GTK and GTK Flatpak architectures, and unsigned iOS builds with simulator
 UI/state/grammar tests must succeed before publishing.
 Normal branch pushes and PRs still upload CI artifacts, but do not create releases.
 
@@ -18,13 +18,14 @@ Normal branch pushes and PRs still upload CI artifacts, but do not create releas
 - Six server archives for the same targets: Linux musl and macOS `.tar.gz`,
   Windows MSVC with static CRT `.zip`, each for x86_64 and ARM64. Archives include
   the server executable and deployment readme, never configuration or credentials.
-- Native GTK Linux x86_64 `.tar.gz`: executable, `README.md`, and build/dependency info.
-- GTK Linux x86_64 `.flatpak` bundle, with runtime-repository information.
+- Native GTK Linux x86_64 and aarch64 `.tar.gz` archives: executable, `README.md`,
+  and build/dependency info. GTK packaging validates the ELF architecture.
+- GTK Linux x86_64 and aarch64 `.flatpak` bundles, with runtime-repository information.
 - Experimental iOS 17+ ARM64 unsigned device IPA:
   `paper-trail-ios-arm64-unsigned.ipa`. Installation requires signing with a
   sideloading tool; no Apple credentials are used in CI. Simulator apps,
   screenshots, and test reports remain CI artifacts, not release assets.
-- Per-package `.sha256` files and a combined `SHA256SUMS` (fifteen packages total).
+- Per-package `.sha256` files and a combined `SHA256SUMS` (seventeen packages total).
 
 The publish job downloads artifacts from the same workflow run, rejects missing
 or duplicate packages, verifies every checksum, and stages only the expected

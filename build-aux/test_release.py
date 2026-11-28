@@ -12,10 +12,16 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from package_desktop import package
+from package_desktop import ARCHITECTURES, package
 from package_server import package as package_server
 from package_tui import verify
-from prepare_release import NATIVE_TARGETS, PACKAGES, collect, validate_tag
+from prepare_release import (
+    GTK_ARCHITECTURES,
+    NATIVE_TARGETS,
+    PACKAGES,
+    collect,
+    validate_tag,
+)
 
 
 class ReleaseTests(unittest.TestCase):
@@ -91,12 +97,12 @@ class ReleaseTests(unittest.TestCase):
         (source / "debug.png").write_bytes(b"not a release asset")
         destination = self.root / "release"
         collect(source, destination)
-        self.assertEqual(len(PACKAGES), 15)
+        self.assertEqual(len(PACKAGES), 17)
         self.assertIn("paper-trail-ios-arm64-unsigned.ipa", PACKAGES)
-        self.assertEqual(len(list(destination.iterdir())), 31)
+        self.assertEqual(len(list(destination.iterdir())), 35)
         self.assertFalse((destination / "debug.png").exists())
         lines = (destination / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(lines), 15)
+        self.assertEqual(len(lines), 17)
         for line in lines:
             digest, name = line.split()
             self.assertEqual(
@@ -248,28 +254,78 @@ class ReleaseTests(unittest.TestCase):
         """The dynamic GTK download is explicit about its system dependencies."""
         binary = self.root / "target/release/paper-trail"
         binary.parent.mkdir(parents=True)
-        binary.write_bytes(b"\x7fELF\x02\x01" + bytes(12) + b"\x3e\x00")
-        binary.chmod(0o755)
         docs = self.root / "docs"
         docs.mkdir()
         (docs / "desktop-release.md").write_text("GTK requirements", encoding="utf-8")
         distribution = self.root / "os-release"
         distribution.write_text('NAME="Test Linux"\n', encoding="utf-8")
         libraries = "libgtk-4.so.1\nlibadwaita-1.so.0\nlibgtksourceview-5.so.0\n"
-        with patch(
-            "package_desktop.subprocess.check_output",
-            side_effect=[libraries, "versions"],
-        ):
-            archive = package(self.root, distribution)
-        with tarfile.open(archive) as bundle:
-            self.assertEqual(
-                bundle.getnames(), ["paper-trail", "README.md", "BUILD-INFO.txt"]
-            )
-            self.assertTrue(bundle.getmember("paper-trail").mode & 0o111)
-            info = bundle.extractfile("BUILD-INFO.txt")
-            self.assertIsNotNone(info)
-            self.assertIn(b"not a standalone/static binary", info.read())
-        self.assertTrue(archive.with_suffix(".gz.sha256").exists())
+        for architecture, machine in ARCHITECTURES.items():
+            with self.subTest(architecture=architecture):
+                binary.write_bytes(
+                    b"\x7fELF\x02\x01" + bytes(12) + machine.to_bytes(2, "little")
+                )
+                binary.chmod(0o755)
+                with patch(
+                    "package_desktop.subprocess.check_output",
+                    side_effect=[libraries, "versions"],
+                ):
+                    archive = package(
+                        self.root, distribution, architecture=architecture
+                    )
+                self.assertEqual(
+                    archive.name, f"paper-trail-gtk-linux-{architecture}.tar.gz"
+                )
+                with tarfile.open(archive) as bundle:
+                    self.assertEqual(
+                        bundle.getnames(),
+                        ["paper-trail", "README.md", "BUILD-INFO.txt"],
+                    )
+                    self.assertTrue(bundle.getmember("paper-trail").mode & 0o111)
+                    info = bundle.extractfile("BUILD-INFO.txt")
+                    self.assertIsNotNone(info)
+                    contents = info.read()
+                    self.assertIn(b"not a standalone/static binary", contents)
+                    self.assertIn(f"Architecture: {architecture}".encode(), contents)
+                self.assertEqual(
+                    archive.with_suffix(".gz.sha256").read_text(),
+                    f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
+                )
+
+    def test_gtk_wrong_or_unsupported_architectures_fail_before_packaging(self) -> None:
+        """Never label an x86 binary as ARM64, accept a truncated header, or run ldd."""
+        binary = self.root / "paper-trail"
+        for header, expected in [
+            (b"", None),
+            (b"\x7fELF\x02\x01", None),
+            (b"\x7fELF\x02\x01" + bytes(12) + b"\x03\x00", None),
+            (b"\x7fELF\x02\x01" + bytes(12) + b"\x3e\x00", "aarch64"),
+            (b"\x7fELF\x02\x01" + bytes(12) + b"\xb7\x00", "x86_64"),
+        ]:
+            binary.write_bytes(header)
+            with patch("package_desktop.subprocess.check_output") as check:
+                with self.assertRaises(ValueError):
+                    package(self.root, binary=binary, architecture=expected)
+                check.assert_not_called()
+            self.assertFalse((self.root / "dist").exists())
+
+    def test_gtk_workflows_build_both_architectures_and_require_all_four_packages(
+        self,
+    ) -> None:
+        """GTK and Flatpak each run natively with architecture-separated artifacts."""
+        root = Path(__file__).resolve().parent.parent
+        workflow = (root / ".github/workflows/rust.yml").read_text()
+        self.assertEqual(set(GTK_ARCHITECTURES), set(ARCHITECTURES))
+        for architecture in GTK_ARCHITECTURES:
+            self.assertEqual(workflow.count(f"arch: {architecture}\n"), 2)
+            for extension in ("tar.gz", "flatpak"):
+                self.assertIn(
+                    f"paper-trail-gtk-linux-{architecture}.{extension}", PACKAGES
+                )
+        self.assertEqual(workflow.count("runner: ubuntu-24.04-arm\n"), 2)
+        self.assertIn("arch: ${{ matrix.arch }}", workflow)
+        self.assertIn("cache-key: flatpak-builder-${{ matrix.arch }}-", workflow)
+        self.assertIn("package_desktop.py --arch ${{ matrix.arch }}", workflow)
 
 
 if __name__ == "__main__":

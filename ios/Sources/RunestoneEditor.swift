@@ -8,7 +8,7 @@ import UIKit
 struct RunestoneEditor: UIViewRepresentable {
     @Binding var text: String
     let fontScale: Double
-    var findRequest = 0
+    @ObservedObject var find: NoteFindState
     var preferences: EditorPreferences? = nil
     var languageID = "plain"
     @Environment(\.isEnabled) private var isEnabled
@@ -20,7 +20,9 @@ struct RunestoneEditor: UIViewRepresentable {
         let view = Runestone.TextView()
         view.text = text
         view.editorDelegate = context.coordinator
-        view.isFindInteractionEnabled = true
+        // The floating panel uses Runestone's public search/highlight APIs,
+        // not UIKit's inline find accessory.
+        view.isFindInteractionEnabled = false
         view.smartQuotesType = .no
         view.smartDashesType = .no
         view.textContainerInset = UIEdgeInsets(top: 12, left: 16, bottom: 24, right: 16)
@@ -61,12 +63,7 @@ struct RunestoneEditor: UIViewRepresentable {
         if view.theme.font != font {
             view.theme = NoteEditorTheme(font: font)
         }
-        if context.coordinator.findRequest != findRequest {
-            context.coordinator.findRequest = findRequest
-            DispatchQueue.main.async { [weak view] in
-                view?.findInteraction?.presentFindNavigator(showingReplace: false)
-            }
-        }
+        context.coordinator.updateFind(in: view, state: find)
     }
 
     static func dismantleUIView(_ view: Runestone.TextView, coordinator: Coordinator) {
@@ -75,13 +72,76 @@ struct RunestoneEditor: UIViewRepresentable {
 
     final class Coordinator: TextViewDelegate {
         var text: Binding<String>
-        var findRequest = 0
+        private var finding = false
+        private var originalSelection = NSRange(location: 0, length: 0)
+        private var lastQuery: SearchQuery?
+        private var lastText: String?
+        private var ranges: [NSRange] = []
+        private var selectedIndex = 0
+        private var navigationVersion = 0
         var highlightCurrentLine: Bool?
         var languageID: String?
         let highlighter = SyntaxHighlighter()
         init(text: Binding<String>) { self.text = text }
         func textViewDidChange(_ textView: Runestone.TextView) {
             text.wrappedValue = textView.text
+        }
+
+        func updateFind(in view: Runestone.TextView, state: NoteFindState) {
+            guard state.isPresented else {
+                if finding {
+                    view.highlightedRanges = []
+                    let length = view.text.utf16.count
+                    let location = min(originalSelection.location, length)
+                    view.selectedRange = NSRange(location: location,
+                        length: min(originalSelection.length, length - location))
+                    finding = false
+                    lastText = nil
+                    lastQuery = nil
+                    DispatchQueue.main.async { [weak view] in _ = view?.becomeFirstResponder() }
+                }
+                return
+            }
+            if !finding {
+                finding = true
+                originalSelection = view.selectedRange
+            }
+            let query = state.searchQuery
+            let text = view.text
+            if query != lastQuery || text != lastText {
+                lastQuery = query
+                lastText = text
+                ranges = query.map { view.search(for: $0).map(\.range) } ?? []
+                selectedIndex = 0
+                navigationVersion = state.navigationVersion
+                showMatches(in: view)
+                let results = ranges
+                // Publish after UIViewRepresentable's update, and reject stale
+                // results if the query, text, or presentation has since changed.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.finding, state.isPresented,
+                          self.lastQuery == query, self.lastText == text,
+                          state.searchQuery == query else { return }
+                    state.setResults(results)
+                }
+            } else if selectedIndex != state.selectedIndex || navigationVersion != state.navigationVersion {
+                selectedIndex = state.selectedIndex
+                navigationVersion = state.navigationVersion
+                showMatches(in: view)
+            }
+        }
+
+        private func showMatches(in view: Runestone.TextView) {
+            view.highlightedRanges = ranges.enumerated().map { index, range in
+                HighlightedRange(id: "find-\(index)", range: range,
+                    color: (index == selectedIndex ? UIColor.systemOrange : .systemYellow).withAlphaComponent(0.4),
+                    cornerRadius: 3)
+            }
+            if ranges.indices.contains(selectedIndex) {
+                let range = ranges[selectedIndex]
+                view.selectedRange = range
+                view.scrollRangeToVisible(range)
+            }
         }
     }
 }

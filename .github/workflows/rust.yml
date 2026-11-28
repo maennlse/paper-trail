@@ -33,7 +33,15 @@ jobs:
           -p papertrail-server --all-targets -- -D warnings
 
   desktop:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     container: fedora:44
     steps:
       - run: >-
@@ -64,18 +72,27 @@ jobs:
       - run: cargo build --release --locked --bin paper-trail
       - run: meson setup _build && meson compile -C _build
       - name: Package native GTK executable
-        run: python3 build-aux/package_desktop.py
+        run: python3 build-aux/package_desktop.py --arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: paper-trail-linux
+          name: paper-trail-gtk-linux-${{ matrix.arch }}
           path: |
             target/release/paper-trail
             desktop-smoke*.png
-            dist/paper-trail-gtk-linux-x86_64.tar.gz
-            dist/paper-trail-gtk-linux-x86_64.tar.gz.sha256
+            dist/paper-trail-gtk-linux-${{ matrix.arch }}.tar.gz
+            dist/paper-trail-gtk-linux-${{ matrix.arch }}.tar.gz.sha256
+          if-no-files-found: error
 
   flatpak:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       # SDK updates rename/link OSTree files; keep the preinstalled repository
@@ -88,17 +105,18 @@ jobs:
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
         with:
           bundle: paper-trail.flatpak
+          arch: ${{ matrix.arch }}
           manifest-path: io.github.maennlse.paper-trail.json
-          cache-key: flatpak-builder-${{ github.sha }}
+          cache-key: flatpak-builder-${{ matrix.arch }}-${{ github.sha }}
           upload-artifact: false
       - name: Package Flatpak bundle
         run: |
           mkdir -p dist
-          cp paper-trail.flatpak dist/paper-trail-gtk-linux-x86_64.flatpak
+          cp paper-trail.flatpak dist/paper-trail-gtk-linux-${{ matrix.arch }}.flatpak
           cd dist
-          sha256sum paper-trail-gtk-linux-x86_64.flatpak > paper-trail-gtk-linux-x86_64.flatpak.sha256
+          sha256sum paper-trail-gtk-linux-${{ matrix.arch }}.flatpak > paper-trail-gtk-linux-${{ matrix.arch }}.flatpak.sha256
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: paper-trail-gtk-flatpak-x86_64
+          name: paper-trail-gtk-flatpak-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error

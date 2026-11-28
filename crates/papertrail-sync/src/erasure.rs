@@ -13,7 +13,7 @@ impl Engine {
         remote: &impl Remote,
         config: &Config,
         key: &Secret,
-        settings: &Settings,
+        _settings: &Settings,
         folder: &str,
     ) -> io::Result<()> {
         remote.check_cancelled()?;
@@ -23,7 +23,8 @@ impl Engine {
         }
         self.state.highwater = first.through;
         self.save()?;
-        self.prepare_folders(remote, config, key, settings, &first)?;
+        self.check_config(config)?;
+        self.refresh_folders(remote, key, &first)?;
         let mut catalog = self
             .state
             .catalog
@@ -148,14 +149,13 @@ impl Engine {
         remote.erase_folder(&request)?;
         self.state.catalog = Some(catalog);
         self.state.catalog_head = Some(revision.id.clone());
-        self.state.catalog_draft = None;
         self.state.incoming = None;
         self.state.through = self.state.through.max(cursor + 1);
         self.state.highwater = self.state.highwater.max(cursor + 1);
         self.remember(&revision, cursor + 1)?;
-        // Reconcile the marker just as another device would. Never touch files.
-        self.save()?;
-        let page = remote.changes(self.state.cursor, None)?;
-        self.prepare_folders(remote, config, key, settings, &page)
+        // Reconcile only journal state. A successful server deletion must not
+        // become a failure because an unrelated local folder needs attention.
+        self.reconcile_deleted_folders(key, &membership)?;
+        self.save()
     }
 }

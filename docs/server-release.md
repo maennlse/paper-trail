@@ -18,13 +18,18 @@ Windows/macOS binaries are not signed or notarized.
 
 The server requires an existing OIDC provider and an **HTTPS reverse proxy**.
 It listens only on loopback (`127.0.0.1:8787` by default). Never expose its HTTP
-listener directly or forward it over an unencrypted network. `--help` prints
-configuration guidance without contacting the provider or creating a database.
+listener directly or forward it over an unencrypted network. `--help`/`-h` prints
+usage, options, configuration variables and defaults. `--version`/`-V` prints the
+shared release version (`-v` means verbose logging, not version).
+Both exit successfully without reading server configuration, contacting the
+provider, initializing logging, or creating a database. Invalid arguments exit
+with status 2 and a hint to use `--help`.
 
 Example for Linux/macOS (replace all placeholders with your deployment values):
 
 ```sh
 ./paper-trail-server --help
+./paper-trail-server --version
 PAPERTRAIL_OIDC_ISSUER=https://YOUR_IDENTITY_PROVIDER \
 PAPERTRAIL_API_AUDIENCE=YOUR_API_AUDIENCE \
 PAPERTRAIL_NATIVE_CLIENT_ID=YOUR_PUBLIC_NATIVE_CLIENT_ID \

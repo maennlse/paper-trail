@@ -12,7 +12,7 @@
   edge swipe, floating New Note, pull-down search, and clearer local/sync feedback.
 - Settings About shows the installed version/build and source link. Updated
   screenshots and regression tests cover the native interfaces.
-- All fifteen release packages require verified checksums and successful builds;
+- All seventeen release packages require verified checksums and successful builds;
   iOS simulator UI, state, and grammar tests now gate release publication.
 
 Sync is experimental and has not had an independent security audit. Local working
@@ -36,10 +36,10 @@ login callback tab from closing automatically; manual close remains available.
   signing with your chosen sideloading tool before installation. It is not an
   App Store or TestFlight build. No Apple credentials are used in CI. See the
   [iOS build and sideloading guide](https://github.com/maennlse/paper-trail/blob/v0.7.0/docs/ios.md).
-- **GTK desktop, Linux x86_64:** `paper-trail-gtk-linux-x86_64.flatpak` is the
-  recommended download. Flatpak installs the separate GNOME runtime from Flathub
+- **GTK desktop, Linux x86_64/aarch64:** `paper-trail-gtk-linux-ARCH.flatpak` is the
+  recommended download (replace `ARCH` with `x86_64` or `aarch64`). Flatpak installs the separate GNOME runtime from Flathub
   as needed; the bundle does not include the runtime for offline installation.
-- **Native GTK, Linux x86_64:** `paper-trail-gtk-linux-x86_64.tar.gz` requires
+- **Native GTK, Linux x86_64/aarch64:** `paper-trail-gtk-linux-ARCH.tar.gz` requires
   compatible GTK/libadwaita/GtkSourceView and glibc libraries. It is not static.
   The archive includes installation guidance and exact build/dependency details.
 - **TUI:** choose `paper-trail-tui-<target>.tar.gz` (Linux/macOS) or `.zip`

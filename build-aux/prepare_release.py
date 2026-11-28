@@ -17,14 +17,19 @@ NATIVE_TARGETS = (
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
 )
-PACKAGES = tuple(
-    f"paper-trail-{component}-{target}.{'zip' if 'windows' in target else 'tar.gz'}"
-    for component in ("tui", "server")
-    for target in NATIVE_TARGETS
-) + (
-    "paper-trail-gtk-linux-x86_64.tar.gz",
-    "paper-trail-gtk-linux-x86_64.flatpak",
-    "paper-trail-ios-arm64-unsigned.ipa",
+GTK_ARCHITECTURES = ("x86_64", "aarch64")
+PACKAGES = (
+    tuple(
+        f"paper-trail-{component}-{target}.{'zip' if 'windows' in target else 'tar.gz'}"
+        for component in ("tui", "server")
+        for target in NATIVE_TARGETS
+    )
+    + tuple(
+        f"paper-trail-gtk-linux-{arch}.{extension}"
+        for arch in GTK_ARCHITECTURES
+        for extension in ("tar.gz", "flatpak")
+    )
+    + ("paper-trail-ios-arm64-unsigned.ipa",)
 )
 
 

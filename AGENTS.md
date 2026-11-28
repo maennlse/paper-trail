@@ -21,6 +21,24 @@ desktop/metainfo assets, and `io.github.maennlse.paper-trail.json` for
 Flatpak. Treat `_build/`, `flatpak-build/`, and `.flatpak-builder/` as
 generated output.
 
+## Cross-Platform Parity
+
+For shared behavior changes, audit desktop, TUI, and iOS, including UniFFI
+bindings and native UI. Implement applicable changes across all platforms unless
+the user explicitly scopes the work otherwise. Add relevant tests, and clearly
+report any remaining platform gaps or verification that could not be performed.
+Use each platform's native UI conventions when exposing shared behavior.
+
+## Release Version Parity
+
+Every platform, build variant, and artifact in a release must use the same release
+version, matching the release tag. Audit Cargo workspace/crate versions,
+iOS/Xcode marketing versions, packaging metadata, and displayed app versions
+before release. Update version declarations together; never publish a release
+with platform-specific version drift. Platform build numbers may remain separate
+but must not replace or contradict the shared release version. Add or maintain
+automated release checks that fail on version mismatches.
+
 ## Build, Test, and Development Commands
 
 Run with `cargo run --locked --bin paper-trail`. Build the release executable
@@ -57,7 +75,7 @@ Run `meson compile -C _build` for packaging regressions. Regenerate
 
 Release builds reuse `.github/workflows/rust.yml`, `tui.yml`, `server.yml`, and `ios.yml` from the
 tag-triggered `release.yml`. Keep write permissions confined to the publish job
-and require all fifteen checksum-verified packages before publishing. Run release
+and require all seventeen checksum-verified packages before publishing. Run release
 helper tests with `python3 -m unittest discover -s build-aux -p test_release.py`.
 Creating/pushing version tags and publishing releases require explicit user intent;
 see `docs/releases.md`.

@@ -33,13 +33,10 @@ x dd yy p             Delete character/line, copy line, paste
 u / Ctrl-R            Undo / redo (including replacement)
 / text, n / N         Literal find, next / previous match
 
-COMMANDS (: opens the prompt; Enter executes)
+NOTES & FILES (: opens the prompt; Enter executes)
 :w  :q  :wq           Save / save-and-quit; :q! explicitly discards
 :new [NAME]           Create note; :rename NAME; :move PATH or NUMBER
-:folder PATH          Add/select existing directory; :all shows all folders
-:close-folder         Remove active bookmark, not files
-:folder-up/down       Reorder highlighted folder
-:color #rrggbb        Or preset-0 through preset-11; :pin toggles pin
+:pin                  Toggle pin on the current note
 :delete               Type yes and Enter to confirm
 :search TEXT          Search filename/title/full content across folders
 :replace 'OLD' 'NEW'   Replace all literal matches (undoable)
@@ -47,6 +44,15 @@ COMMANDS (: opens the prompt; Enter executes)
 :refresh / :reload    Rescan notes / reload current note
 :saveas PATH          Save edits to a new file (never overwrites)
 :reload!              Explicitly discard edits and load disk version
+
+FOLDERS
+:folder-open PATH     Open/select existing directory (or use its NUMBER)
+:folder-close         Close active folder; keep files and pause its sync
+:folder-all           Show notes from all opened folders
+:folder-up / :folder-down  Reorder highlighted folder
+:folder-color COLOR   preset-0 through preset-11, or #rrggbb
+
+EDITOR & DISPLAY
 :set number           Or :set nonumber (TUI-only preference)
 :set folder-width 7   Folder column width, 7–30; hidden below 80 columns
 :set note-width 24    Note column width, 10–80; auto restores automatic sizing
@@ -56,28 +62,35 @@ COMMANDS (: opens the prompt; Enter executes)
 F2                    Paper Trail command prompt (also from Neovim)
 F6 / Shift-F6         Next/previous pane; Neovim keeps Tab, H/L and :
 :path                 Show the full highlighted folder/current note path
-:sync-configure URL   Discover authentication and sync the active folder
-:sync-configure URL ISSUER CLIENT ['SCOPES']  Manual/older-server setup
-:sync-discovery-cancel  Cancel authentication discovery
-:login               Device code sign-in (works over SSH)
+
+SIGN-IN
+:login-start         Device code sign-in (works over SSH)
 :login-show          Show the full verification URL/code
 :login-cancel        Cancel pending device sign-in (or Ctrl-C)
 :login-browser       Optional browser/PKCE login on this machine
-:unlock :sync        Separate vault unlock and manual sync
-:create-vault         Create vault; save and confirm recovery key
-:recover-vault        Unlock using recovery key
-:change-passphrase    Rewrap vault; save replacement recovery key
-:lock :logout         Clear vault key / credentials; files stay plaintext
+:login-sign-out      Clear credentials and lock the vault; keep local files
+
+VAULT
+:vault-unlock         Unlock with a masked passphrase prompt
+:vault-lock           Clear the vault key; files stay plaintext
+:vault-create         Create vault; save and confirm recovery key
+:vault-recover        Unlock using recovery key
+:vault-change-passphrase  Rewrap vault; save replacement recovery key
+
+SYNC
+:sync-configure URL   Discover authentication for an HTTPS sync server
+:sync-discovery-cancel  Cancel authentication discovery
+:sync                 Sync selected folders (sign in and unlock first)
 :sync-status          Show synchronization status
 :sync-folders         Space/click toggles; Enter saves; d deletes with confirmation
                       s syncs a retained local-only folder as new (with confirmation)
-:sync-add-folder PATH / :sync-remove-folder PATH  Compatibility shortcuts
 :sync-map-folder ID PATH / :sync-download-dir PATH  Device-local directories
+:sync-auto-download on|off  Download newly discovered remote folders
 :sync-map-legacy NOTE_ID FOLDER_ID  Confirm an ambiguous legacy assignment
 :sync-accept-remote ID Accept remote name/color; keep local directory
 Tab / Shift-Tab       Complete commands/options/paths while : prompt is open
 
-Paths after :folder, :move, :rename, :saveas may contain spaces
+Paths after :folder-open, :move, :rename, :saveas may contain spaces
 without quotes; :replace uses shell-style quoted arguments.
 Autosave runs 350 ms after editing. Failed saves prevent preview switches.
 On conflict, edits remain in memory and autosave pauses; :saveas preserves

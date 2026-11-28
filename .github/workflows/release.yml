@@ -59,7 +59,7 @@ jobs:
           pattern: paper-trail-*
           path: downloaded-artifacts
           merge-multiple: false
-      - name: Validate all fifteen packages and collect release assets
+      - name: Validate all seventeen packages and collect release assets
         run: >-
           python3 build-aux/prepare_release.py collect
           downloaded-artifacts dist/release

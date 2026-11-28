@@ -14,6 +14,12 @@ struct NoteExportSheet: View {
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 Section {
+                    if let text = export.text {
+                        ShareLink(item: text) {
+                            Label("Share Text…", systemImage: "text.alignleft")
+                        }
+                        .accessibilityIdentifier("share-text")
+                    }
                     // ShareLink supplies the native activity sheet and the
                     // correct iPad popover anchor; do not share a live note URL.
                     ShareLink(item: export.url) {

@@ -57,6 +57,26 @@ pub const LANGUAGES: &[Language] = &[
         name: "YAML",
         extensions: &["yaml", "yml"],
     },
+    Language {
+        id: "sh",
+        name: "Bash / Shell",
+        extensions: &["sh", "bash"],
+    },
+    Language {
+        id: "html",
+        name: "HTML",
+        extensions: &["html", "htm"],
+    },
+    Language {
+        id: "css",
+        name: "CSS",
+        extensions: &["css"],
+    },
+    Language {
+        id: "sql",
+        name: "SQL",
+        extensions: &["sql"],
+    },
 ];
 
 pub fn by_id(id: &str) -> Option<&'static Language> {
@@ -66,6 +86,12 @@ pub fn by_id(id: &str) -> Option<&'static Language> {
 }
 
 pub fn detect(path: &Path) -> &'static Language {
+    if matches!(
+        path.file_name().and_then(|s| s.to_str()),
+        Some(".bashrc" | ".bash_profile" | ".bash_login" | ".bash_logout" | ".profile")
+    ) {
+        return by_id("sh").unwrap();
+    }
     let extension = path
         .extension()
         .and_then(|s| s.to_str())
