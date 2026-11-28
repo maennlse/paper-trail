@@ -188,7 +188,9 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Move Note"].waitForExistence(timeout: 5))
         app.buttons["Work Notes"].tap()
         let row = app.cells.containing(.staticText, identifier: "weekend.md").firstMatch
-        XCTAssertTrue(row.staticTexts["Work Notes"].waitForExistence(timeout: 10))
+        let folderBadge = row.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "Folder: Work Notes")).firstMatch
+        XCTAssertTrue(folderBadge.waitForExistence(timeout: 10))
         app.buttons["folder-toggle"].tap()
         app.buttons["Work Notes"].press(forDuration: 1)
         app.buttons["Edit Folder…"].tap()
@@ -199,7 +201,9 @@ final class PaperTrailUITests: XCTestCase {
         name.typeText("Writing")
         app.buttons["folder-color-coral"].tap()
         app.buttons["Save"].tap()
-        XCTAssertTrue(row.staticTexts["Writing"].waitForExistence(timeout: 10))
+        let renamedBadge = row.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "Folder: Writing")).firstMatch
+        XCTAssertTrue(renamedBadge.waitForExistence(timeout: 10))
         app.terminate()
         app.launch()
         XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
