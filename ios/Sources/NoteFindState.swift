@@ -101,17 +101,16 @@ final class NoteFindState: ObservableObject {
         }
         let edits = replacementEdits(in: document, ranges: targets)
         guard !edits.isEmpty else { return false }
-        if all {
-            view.replaceText(in: BatchReplaceSet(replacements: edits.map {
-                BatchReplaceSet.Replacement(range: $0.0, text: $0.1)
-            }))
-        } else if let (range, text) = edits.first {
-            view.undoManager?.endUndoGrouping()
-            view.undoManager?.beginUndoGrouping()
+        // Runestone 0.5.2's batch API closes undo groups inside its inverse,
+        // which corrupts NSUndoManager on iOS 26. Group primitive range edits
+        // instead; their inverses do not close the active undo group.
+        view.undoManager?.endUndoGrouping()
+        view.undoManager?.beginUndoGrouping()
+        for (range, text) in edits.reversed() {
             view.replace(range, withText: text)
-            view.undoManager?.setActionName("Replace")
-            view.undoManager?.endUndoGrouping()
         }
+        view.undoManager?.setActionName(all ? "Replace All" : "Replace")
+        view.undoManager?.endUndoGrouping()
         return true
     }
 

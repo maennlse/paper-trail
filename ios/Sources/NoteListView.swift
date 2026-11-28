@@ -80,10 +80,11 @@ struct NoteListView: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     VStack(spacing: 8) {
                         HStack(spacing: 10) {
-                            Button { model.railOpen.toggle() } label: {
+                            Button { model.railOpen = true } label: {
                                 Image(systemName: "line.3.horizontal.decrease")
                                     .font(.title3.weight(.medium))
                                     .frame(width: 54, height: 54)
+                                    .contentShape(Circle())
                             }
                             .buttonStyle(.plain)
                             .controlGlass(radius: 27, interactive: true)
@@ -109,6 +110,7 @@ struct NoteListView: View {
                     .padding(.top, 8).padding(.bottom, 6)
                 }
             }
+            .allowsHitTesting(!model.railOpen)
             .accessibilityHidden(model.railOpen)
 
             // Edge-only hit target does not interfere with scrolling or text selection.
@@ -123,15 +125,17 @@ struct NoteListView: View {
                     .accessibilityHidden(true)
             }
             if model.railOpen {
-                Color.black.opacity(0.25)
-                    .ignoresSafeArea()
-                    .onTapGesture { model.railOpen = false }
+                Button { model.railOpen = false } label: {
+                    Color.black.opacity(0.25).ignoresSafeArea()
+                }
+                    .buttonStyle(.plain)
                     .gesture(DragGesture(minimumDistance: 20).onEnded {
                         if $0.translation.width < -30 { model.railOpen = false }
                     })
                     .accessibilityLabel("Dismiss folders")
                     .accessibilityAddTraits(.isButton)
                     .transition(.opacity)
+                    .zIndex(1)
                 FolderRailOverlay(
                     newFolder: { showNewFolder = true },
                     sync: { model.railOpen = false; showSync = true },
@@ -139,6 +143,7 @@ struct NoteListView: View {
                 )
                 .transition(.move(edge: .leading))
                 .accessibilityIdentifier("folder-rail")
+                .zIndex(2)
             }
         }
         .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.88), value: model.railOpen)
@@ -188,6 +193,7 @@ struct NoteListView: View {
                     pendingDelete = nil
                 }
             }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
         }
     }
 
