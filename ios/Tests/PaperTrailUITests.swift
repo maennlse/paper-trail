@@ -223,6 +223,7 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         let original = editor.value as? String
         XCTAssertTrue(app.staticTexts["Saved locally"].exists)
+        app.buttons["note-actions"].tap()
         app.buttons["find-in-note"].tap()
         let search = app.textFields["note-find-query"]
         let findPresented = XCTNSPredicateExpectation(
@@ -233,12 +234,21 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["note-find-count"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["note-find-options"].exists)
         XCTAssertTrue(app.buttons["note-find-next"].exists)
+        app.buttons["note-find-expand"].tap()
+        XCTAssertTrue(app.buttons["note-find-result-0"].waitForExistence(timeout: 5))
+        app.buttons["note-find-result-0"].tap()
+        let findScreenshot = XCTAttachment(screenshot: app.screenshot())
+        findScreenshot.name = "ios-find-expanded"
+        findScreenshot.lifetime = .keepAlways
+        add(findScreenshot)
+        app.buttons["note-find-expand"].tap()
         XCTAssertEqual(editor.value as? String, original)
         app.buttons["note-find-close"].tap()
         app.navigationBars.buttons["Done"].tap()
         XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 10))
         app.staticTexts["weekend.md"].tap()
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        app.buttons["note-actions"].tap()
         app.buttons["share-note"].tap()
         XCTAssertTrue(app.navigationBars["Share Note"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["weekend.md"].exists)
@@ -418,9 +428,7 @@ final class PaperTrailUITests: XCTestCase {
     }
 
     private func librarySearch(in app: XCUIApplication) -> XCUIElement {
-        app.searchFields.matching(NSPredicate(
-            format: "identifier == %@ OR placeholderValue == %@",
-            "library-search", "Search across folders")).firstMatch
+        app.textFields["library-search"]
     }
 
     private func setSwitch(_ control: XCUIElement, enabled: Bool,

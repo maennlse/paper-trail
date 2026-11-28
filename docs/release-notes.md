@@ -6,8 +6,12 @@
   Every platform and build variant uses the unified version 0.8.0.
 - Improved iOS note browsing with bottom search, a `+` button, folder badges,
   upper-right timestamps, and native full-swipe actions with delete confirmation.
+- Native iOS 26 Liquid Glass controls and navigation, with readable content,
+  older-system material fallbacks, and opaque high-contrast/accessibility surfaces.
 - Floating Runestone-powered Find with match counts, navigation, case/matching
   options, and regular expressions; share note text as well as files.
+- Expand Find for tappable match previews; undo-aware Replace and Replace All
+  support regular-expression capture groups.
 - Bash/shell, HTML, CSS, and SQL highlighting alongside existing languages.
 - Fixed remote-folder downloads, sync after successful note close, and pull-to-sync.
 - Independent server-folder deletion, clearer folder discovery and mappings,

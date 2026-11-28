@@ -88,6 +88,11 @@ struct RunestoneEditor: UIViewRepresentable {
         }
 
         func updateFind(in view: Runestone.TextView, state: NoteFindState) {
+            state.replaceAction = { [weak self, weak view, weak state] all in
+                guard let self, let view, let state, state.replace(in: view, all: all) else { return }
+                self.text.wrappedValue = view.text
+                self.updateFind(in: view, state: state)
+            }
             guard state.isPresented else {
                 if finding {
                     view.highlightedRanges = []
@@ -122,7 +127,7 @@ struct RunestoneEditor: UIViewRepresentable {
                     guard let self, self.finding, state.isPresented,
                           self.lastQuery == query, self.lastText == text,
                           state.searchQuery == query else { return }
-                    state.setResults(results)
+                    state.setResults(results, text: text)
                 }
             } else if selectedIndex != state.selectedIndex || navigationVersion != state.navigationVersion {
                 selectedIndex = state.selectedIndex

@@ -89,10 +89,8 @@ struct FolderRailOverlay: View {
         }
         .padding(.top, 8).padding(.bottom, 8)
         .frame(width: 76)
-        .background(.regularMaterial, in: UnevenRoundedRectangle(
-            bottomTrailingRadius: 20, topTrailingRadius: 20
-        ))
-        .shadow(color: .black.opacity(0.12), radius: 12, x: 4)
+        .controlGlass(radius: 28)
+        .padding(.leading, 8).padding(.vertical, 8)
         .accessibilityAddTraits(.isModal)
         .accessibilityAction(.escape) { model.railOpen = false }
     }

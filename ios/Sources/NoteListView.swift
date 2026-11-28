@@ -69,13 +69,6 @@ struct NoteListView: View {
                 .navigationTitle(model.title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button { model.railOpen.toggle() } label: {
-                            Image(systemName: "sidebar.left")
-                        }
-                        .accessibilityLabel("Show folders")
-                        .accessibilityIdentifier("folder-toggle")
-                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showPreferences = true } label: {
                             Image(systemName: "gearshape")
@@ -85,25 +78,35 @@ struct NoteListView: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 8) {
-                            LibrarySearchBar(text: $model.query)
-                                .frame(height: 52)
-                            Button { Task { await model.compose() } } label: {
-                                Image(systemName: "plus").font(.title2.weight(.semibold))
-                                    .frame(width: 32, height: 32)
+                    VStack(spacing: 8) {
+                        HStack(spacing: 10) {
+                            Button { model.railOpen.toggle() } label: {
+                                Image(systemName: "line.3.horizontal.decrease")
+                                    .font(.title3.weight(.medium))
+                                    .frame(width: 54, height: 54)
                             }
-                            .buttonStyle(.borderedProminent).buttonBorderShape(.circle)
+                            .buttonStyle(.plain)
+                            .controlGlass(radius: 27, interactive: true)
+                            .accessibilityLabel("Show folders")
+                            .accessibilityIdentifier("folder-toggle")
+                            LibrarySearchBar(text: $model.query)
+                            Button { Task { await model.compose() } } label: {
+                                Image(systemName: "plus").font(.title2.weight(.medium))
+                                    .frame(width: 54, height: 54)
+                            }
+                            .buttonStyle(.plain)
+                            .controlGlass(radius: 27, interactive: true)
                             .accessibilityLabel("New note").accessibilityIdentifier("compose")
                             .disabled(model.snapshot == nil)
-                            .padding(.trailing, 16)
                         }
+                        .padding(.horizontal, 16)
+                        .frame(maxWidth: 720)
                         if model.configured {
                             SyncFeedbackView(settings: { showSync = true }, showStatus: false)
                                 .padding(.horizontal, 16).padding(.bottom, 6)
                         }
                     }
-                    .background(.bar)
+                    .padding(.top, 8).padding(.bottom, 6)
                 }
             }
             .accessibilityHidden(model.railOpen)
@@ -144,10 +147,10 @@ struct NoteListView: View {
             catch { return }
             await model.refresh()
         }
-        .sheet(isPresented: $showSync) { SyncSheet() }
-        .sheet(isPresented: $showPreferences) { PreferencesSheet() }
+        .sheet(isPresented: $showSync) { SyncSheet().nativeSheet() }
+        .sheet(isPresented: $showPreferences) { PreferencesSheet().nativeSheet() }
         .sheet(isPresented: $showNewFolder) { NewFolderSheet() }
-        .sheet(item: $export) { NoteExportSheet(export: $0) }
+        .sheet(item: $export) { NoteExportSheet(export: $0).nativeSheet() }
         .sheet(isPresented: Binding(
             get: { pendingMove != nil },
             set: { if !$0 { pendingMove = nil } }
@@ -280,8 +283,6 @@ struct NoteRowView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .combine)
     }
 

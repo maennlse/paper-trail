@@ -32,24 +32,29 @@ struct PlainTextEditorView: View {
                     languageID: model.editorSyntax?.languageId ?? "plain"
                 )
                 if !find.isPresented {
-                    HStack(spacing: 6) {
-                        if model.editorSave.phase == .saving { ProgressView().controlSize(.mini) }
-                        Text(model.editorSave.phase.rawValue)
-                            .accessibilityIdentifier("editor-save-status")
-                        Spacer()
-                        Button { showLanguage = true } label: {
-                            Label(model.editorSyntax?.name ?? "Plain Text", systemImage: "chevron.up.chevron.down")
+                    VStack(spacing: 4) {
+                        HStack(spacing: 6) {
+                            if model.editorSave.phase == .saving { ProgressView().controlSize(.mini) }
+                            Text(model.editorSave.phase.rawValue)
+                                .accessibilityIdentifier("editor-save-status")
+                            Spacer()
+                            Button { showLanguage = true } label: {
+                                Label(model.editorSyntax?.name ?? "Plain Text", systemImage: "chevron.up.chevron.down")
+                            }
+                            .accessibilityLabel("Language: \(model.editorSyntax?.name ?? "Plain Text")")
+                            .accessibilityIdentifier("note-language")
+                            .disabled(model.closingEditor)
                         }
-                        .accessibilityLabel("Language: \(model.editorSyntax?.name ?? "Plain Text")")
-                        .accessibilityIdentifier("note-language")
-                        .disabled(model.closingEditor)
+                        .font(.caption).foregroundStyle(model.saveFailed ? Color.orange : Color.secondary)
+                        .padding(.horizontal).frame(minHeight: 44)
+                        if model.configured || model.syncFeedback.failure != nil {
+                            SyncFeedbackView(settings: { showSync = true })
+                                .padding(.horizontal).padding(.bottom, 6)
+                        }
                     }
-                    .font(.caption).foregroundStyle(model.saveFailed ? Color.orange : Color.secondary)
-                    .padding(.horizontal).padding(.vertical, 6)
-                    if model.configured || model.syncFeedback.failure != nil {
-                        SyncFeedbackView(settings: { showSync = true })
-                            .padding(.horizontal).padding(.bottom, 6)
-                    }
+                    .padding(.vertical, 4).controlGlass(radius: 24)
+                    .frame(maxWidth: 620)
+                    .padding(.horizontal, 16).padding(.bottom, 8)
                 }
             }
             .disabled(model.closingEditor)
@@ -66,19 +71,26 @@ struct PlainTextEditorView: View {
                             .accessibilityIdentifier("editor-note-filename")
                     }
                 }
-                ToolbarItemGroup(placement: .topBarLeading) {
-                    Button {
-                        find.isPresented = true
-                    } label: { Label("Find", systemImage: "magnifyingglass") }
-                    .keyboardShortcut("f", modifiers: .command)
-                    .accessibilityIdentifier("find-in-note")
-                    Button {
-                        do { export = try model.exportEditor() }
-                        catch { model.errorMessage = error.localizedDescription }
-                    } label: { Label("Share", systemImage: "square.and.arrow.up") }
-                    .accessibilityIdentifier("share-note")
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            find.isPresented = true
+                        } label: { Label("Find", systemImage: "magnifyingglass") }
+                        .keyboardShortcut("f", modifiers: .command)
+                        .accessibilityIdentifier("find-in-note")
+                        Button {
+                            do { export = try model.exportEditor() }
+                            catch { model.errorMessage = error.localizedDescription }
+                        } label: { Label("Share", systemImage: "square.and.arrow.up") }
+                        .accessibilityIdentifier("share-note")
+                        Button("Language", systemImage: "textformat") { showLanguage = true }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                    }
+                    .accessibilityLabel("Note actions")
+                    .accessibilityIdentifier("note-actions")
                 }
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { Task { await model.closeEditor() } }
                         .disabled(model.closingEditor)
                 }
@@ -86,9 +98,9 @@ struct PlainTextEditorView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if find.isPresented { NoteFindPanel(state: find) }
             }
-            .sheet(item: $export) { NoteExportSheet(export: $0) }
-            .sheet(isPresented: $showSync) { SyncSheet() }
-            .sheet(isPresented: $showLanguage) { NoteLanguageSheet() }
+            .sheet(item: $export) { NoteExportSheet(export: $0).nativeSheet() }
+            .sheet(isPresented: $showSync) { SyncSheet().nativeSheet() }
+            .sheet(isPresented: $showLanguage) { NoteLanguageSheet().nativeSheet() }
             .alert("Paper Trail", isPresented: Binding(
                 get: { model.errorMessage != nil },
                 set: { if !$0 { model.errorMessage = nil } }

@@ -33,7 +33,7 @@ behavior still need verification on Apple's platforms.
 
 ## Build on a Mac
 
-Prerequisites: Apple Silicon macOS, Xcode with iOS/simulator SDKs, Python 3.11+,
+Prerequisites: Apple Silicon macOS, Xcode 26.2 with iOS/simulator SDKs, Python 3.11+,
 Rust stable (1.88+), and XcodeGen. Install prerequisites yourself; build helpers
 do not install tools.
 
@@ -66,6 +66,24 @@ magick -background none -density 768 \
 separate helper because Xcode app bundles and unsigned IPA packaging are not
 executable archives and cannot be built on the Linux host.
 
+## Native glass design
+
+The iOS 26 build uses Apple's Liquid Glass for floating controls, with native
+navigation bars, menus, grouped forms, share sheets, and confirmation dialogs.
+Glass stays in the navigation/control layer; the note canvas and list content
+remain clear reading surfaces, without stacked blur or tinted text backgrounds.
+The library has a floating search capsule between circular folder and **+**
+controls. The editor uses **Done** and a **Note actions** menu, with a separate
+save/language accessory. Sheets use the system presentation and drag indicator.
+
+On iOS 17/18, floating controls use system material instead. Reduce Transparency
+and Increase Contrast replace custom glass with opaque, outlined surfaces.
+Reduce Motion disables custom panel/rail transitions; controls retain VoiceOver
+labels and Dynamic Type. Native system components handle their own accessibility.
+CI builds with Xcode 26.2, runs the full suite on iOS 26, and exercises Find,
+sharing, and state behavior on an iOS 18 simulator as a fallback check.
+Physical-device appearance, landscape, large text, and VoiceOver need manual review.
+
 ## Storage and UI behavior
 
 - Default storage: `Documents/Paper Trail`, exposed in Files through
@@ -79,7 +97,7 @@ executable archives and cannot be built on the Linux host.
   regular files, regardless of extension. Symlinks are excluded. Search checks
   filenames and full text across those folders. Non-UTF-8/NUL-containing files
   remain visible but cannot be opened in the editor, preventing lossy writes.
-- Note-list search uses a native search bar at the bottom, next to the **+** New
+- Note-list search uses a floating search field at the bottom, next to the **+** New
   Note button. Queries search full contents across folders, including pinned notes.
   Each note shows its modification time at the upper-right: `HH:mm` today,
   abbreviated month/day this year, or `YYYY-MM-DD` for older years, matching GTK.
@@ -126,13 +144,18 @@ executable archives and cannot be built on the Linux host.
   Syntax changes preserve the buffer, selection, and undo history; they do not
   enable bracket insertion, grammar-driven indentation, or other code-editing
   features.
-- **Find** in the editor toolbar (or Command-F on a hardware keyboard) opens a
+- **Find** in the editor's **Note actions** menu (or Command-F on a hardware keyboard) opens a
   floating panel above the keyboard, with match count, options, close, and
   previous/next buttons. It uses Runestone's public search/highlight APIs rather
   than UIKit's inline find accessory. Options include match case, whole words,
   starts/ends with, and regular expressions. Invalid patterns are reported without
-  changing the document. Closing Find restores the original selection; finding
-  does not replace the editor, change text, or reset undo history. The save/sync
+  changing the document. Pull the handle up (or tap it with VoiceOver) to reveal
+  match previews; tapping a result selects and reveals it in the editor. Pull down
+  to collapse without closing Find. **Replace** reveals single/all replacement
+  controls, including regex capture templates such as `$1`. Replacements use
+  Runestone's undo-aware editing APIs, and stale/read-only results cannot be edited.
+  Closing Find restores the original selection, clamped to the current document.
+  Finding alone does not change text or reset undo history. The save/sync
   footer is hidden while Find is open to avoid overlapping the panel.
 - The editor distinguishes **Unsaved changes**, **Saving…**, **Saved locally**,
   and **Not saved**. Revision/attempt tokens prevent stale save results from

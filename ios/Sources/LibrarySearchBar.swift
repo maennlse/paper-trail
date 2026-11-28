@@ -1,48 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import SwiftUI
-import UIKit
 
-/// Native bottom search on every supported iOS version, including iOS 17.
-struct LibrarySearchBar: UIViewRepresentable {
+/// A floating search capsule, separate from folder and compose controls.
+struct LibrarySearchBar: View {
     @Binding var text: String
+    @FocusState private var focused: Bool
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
-
-    func makeUIView(context: Context) -> UISearchBar {
-        let bar = UISearchBar()
-        bar.searchBarStyle = .minimal
-        bar.placeholder = "Search across folders"
-        bar.autocapitalizationType = .none
-        bar.autocorrectionType = .no
-        bar.delegate = context.coordinator
-        bar.searchTextField.accessibilityIdentifier = "library-search"
-        return bar
-    }
-
-    func updateUIView(_ bar: UISearchBar, context: Context) {
-        context.coordinator.text = $text
-        if bar.text != text { bar.text = text }
-    }
-
-    final class Coordinator: NSObject, UISearchBarDelegate {
-        var text: Binding<String>
-        init(text: Binding<String>) { self.text = text }
-        func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
-            text.wrappedValue = searchText
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Search", text: $text)
+                .focused($focused)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .submitLabel(.search).onSubmit { focused = false }
+                .accessibilityLabel("Search across folders")
+                .accessibilityIdentifier("library-search")
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .accessibilityLabel("Clear search")
+            }
         }
-        func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) {
-            searchBar.setShowsCancelButton(true, animated: true)
-        }
-        func searchBarTextDidEndEditing(_ searchBar: UISearchBar) {
-            searchBar.setShowsCancelButton(false, animated: true)
-        }
-        func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
-            searchBar.resignFirstResponder()
-        }
-        func searchBarCancelButtonClicked(_ searchBar: UISearchBar) {
-            searchBar.text = ""
-            text.wrappedValue = ""
-            searchBar.resignFirstResponder()
-        }
+        .padding(.leading, 16).padding(.trailing, text.isEmpty ? 16 : 2)
+        .frame(minHeight: 54)
+        .controlGlass(radius: 30, interactive: true)
+        .accessibilityAction(.escape) { focused = false }
     }
 }

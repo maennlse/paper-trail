@@ -17,6 +17,8 @@ permissions:
 jobs:
   ios:
     runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,7 +41,7 @@ jobs:
         run: python3 build-aux/build_ios.py --output-dir dist/ios
       - name: Run simulator UI and state tests
         run: |
-          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for group in d["devices"].values() for x in group if x["name"].startswith("iPhone")))')
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for runtime in sorted(d, reverse=True) if "iOS-26-" in runtime for x in d[runtime] if x["name"].startswith("iPhone")))')
           xcrun simctl bootstatus "$DEVICE_ID" -b
           xcodebuild -project ios/PaperTrail.xcodeproj -scheme PaperTrail \
             -configuration Release -sdk iphonesimulator \
@@ -47,6 +49,19 @@ jobs:
             -derivedDataPath ios/build/DerivedData \
             -resultBundlePath ios/build/UITests.xcresult \
             test CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+             CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= ARCHS=arm64
+      - name: Test material fallback on iOS 18
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for runtime in sorted(d, reverse=True) if "iOS-18-" in runtime for x in d[runtime] if x["name"].startswith("iPhone")))')
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          xcodebuild -project ios/PaperTrail.xcodeproj -scheme PaperTrail \
+            -configuration Release -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -derivedDataPath ios/build/DerivedData \
+            -resultBundlePath ios/build/FallbackTests.xcresult \
+            -only-testing:PaperTrailStateTests \
+            -only-testing:PaperTrailUITests/PaperTrailUITests/testFindAndPrepareNativeShareWithoutChangingNote \
+            test-without-building CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= ARCHS=arm64
       - name: Export simulator screenshots
         if: always()
@@ -72,5 +87,5 @@ jobs:
         if: failure()
         with:
           name: paper-trail-ios-test-results
-          path: ios/build/UITests.xcresult
+          path: ios/build/*.xcresult
           if-no-files-found: ignore

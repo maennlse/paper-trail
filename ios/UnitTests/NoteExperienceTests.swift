@@ -77,4 +77,51 @@ final class NoteExperienceTests: XCTestCase {
         state.isPresented = false
         XCTAssertNil(state.searchQuery)
     }
+
+    @MainActor
+    func testFindPreviewsSelectionReplacementAndUndo() throws {
+        let state = NoteFindState()
+        let view = Runestone.TextView()
+        let original = "🌿 café walk\nanother walk"
+        view.text = original
+        state.isPresented = true
+        state.query = "walk"
+        state.setResults(view.search(for: try XCTUnwrap(state.searchQuery)).map(\.range), text: original)
+        XCTAssertTrue(state.preview(at: 0).contains("café walk"))
+        state.select(1)
+        XCTAssertEqual(state.countDescription, "2 of 2")
+        state.select(9)
+        XCTAssertEqual(state.selectedIndex, 1)
+        state.replacement = "stroll"
+        XCTAssertTrue(state.replace(in: view, all: false))
+        XCTAssertEqual(view.text, "🌿 café walk\nanother stroll")
+        view.undoManager?.undo()
+        XCTAssertEqual(view.text, original)
+        XCTAssertTrue(state.replace(in: view, all: true))
+        XCTAssertEqual(view.text, "🌿 café stroll\nanother stroll")
+        view.undoManager?.undo()
+        XCTAssertEqual(view.text, original)
+        view.text = "A different unsaved document"
+        XCTAssertFalse(state.replace(in: view, all: true))
+        XCTAssertEqual(view.text, "A different unsaved document")
+    }
+
+    @MainActor
+    func testRegexReplacementCapturesAndReadOnlySafeguards() throws {
+        let state = NoteFindState()
+        let view = Runestone.TextView()
+        view.text = "café-1 café-2"
+        state.isPresented = true
+        state.method = .regularExpression
+        state.query = "café-(\\d)"
+        state.replacement = "$1-café"
+        state.setResults(view.search(for: try XCTUnwrap(state.searchQuery)).map(\.range), text: view.text)
+        view.isEditable = false
+        XCTAssertFalse(state.replace(in: view, all: true))
+        view.isEditable = true
+        XCTAssertTrue(state.replace(in: view, all: true))
+        XCTAssertEqual(view.text, "1-café 2-café")
+        state.isPresented = false
+        XCTAssertFalse(state.replace(in: view, all: true))
+    }
 }
