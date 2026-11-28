@@ -33,7 +33,7 @@ behavior still need verification on Apple's platforms.
 
 ## Build on a Mac
 
-Prerequisites: Apple Silicon macOS, Xcode with iOS/simulator SDKs, Python 3.11+,
+Prerequisites: Apple Silicon macOS, Xcode 26.2 with iOS/simulator SDKs, Python 3.11+,
 Rust stable (1.88+), and XcodeGen. Install prerequisites yourself; build helpers
 do not install tools.
 
@@ -66,6 +66,24 @@ magick -background none -density 768 \
 separate helper because Xcode app bundles and unsigned IPA packaging are not
 executable archives and cannot be built on the Linux host.
 
+## Native glass design
+
+The iOS 26 build uses Apple's Liquid Glass for floating controls, with native
+navigation bars, menus, grouped forms, share sheets, and confirmation dialogs.
+Glass stays in the navigation/control layer; the note canvas and list content
+remain clear reading surfaces, without stacked blur or tinted text backgrounds.
+The library has a floating search capsule between circular folder and **+**
+controls. The editor uses **Done** and a **Note actions** menu, with a separate
+save/language accessory. Sheets use the system presentation and drag indicator.
+
+On iOS 17/18, floating controls use system material instead. Reduce Transparency
+and Increase Contrast replace custom glass with opaque, outlined surfaces.
+Reduce Motion disables custom panel/rail transitions; controls retain VoiceOver
+labels and Dynamic Type. Native system components handle their own accessibility.
+CI builds with Xcode 26.2, runs the full suite on iOS 26, and exercises Find,
+sharing, and state behavior on an iOS 18 simulator as a fallback check.
+Physical-device appearance, landscape, large text, and VoiceOver need manual review.
+
 ## Storage and UI behavior
 
 - Default storage: `Documents/Paper Trail`, exposed in Files through
@@ -79,8 +97,12 @@ executable archives and cannot be built on the Linux host.
   regular files, regardless of extension. Symlinks are excluded. Search checks
   filenames and full text across those folders. Non-UTF-8/NUL-containing files
   remain visible but cannot be opened in the editor, preventing lossy writes.
-- Note-list search is a native collapsible navigation-bar search field: pull
-  down on the list to reveal it. Queries still search full contents across folders.
+- Note-list search uses a floating search field at the bottom, next to the **+** New
+  Note button. Queries search full contents across folders, including pinned notes.
+  Each note shows its modification time at the upper-right: `HH:mm` today,
+  abbreviated month/day this year, or `YYYY-MM-DD` for older years, matching GTK.
+  A colored folder silhouette with initials replaces the visible folder name;
+  the note overview and sidebar reuse the same badge and shared initials.
 - The 76pt rail overlays a dimmed list without reflow. Open it with the sidebar
   button or a rightward left-edge swipe; dismiss with a scrim tap or left swipe
   on the scrim. Folder gestures are reserved for native drag and drop.
@@ -90,8 +112,10 @@ executable archives and cannot be built on the Linux host.
   The order is persisted locally without changing the default compose folder.
 - Notes autosave after a short debounce. Failed/conflicting writes retain the
   editor state and offer **Save a Copy** without overwriting the external edit.
-- Swipe right on a note to pin/unpin, or left to rename/delete. Deletion requires
-  confirmation. Long-press offers the same actions. Rename changes the filename,
+- Swipe right on a note to pin/unpin, or left to rename/delete. Full swipes activate
+  pin/unpin or the deletion confirmation; a cancelled deletion keeps the row.
+  Buttons use the platform's native swipe appearance (rounding varies by iOS).
+  Long-press offers the same actions. Rename changes the filename,
   not the first-line title; omitted extensions retain the original extension.
 - Runestone provides the plain-text editor through a SwiftUI/UIKit bridge, with
   wrapping, native selection/undo, Dynamic Type, and the existing autosave and
@@ -99,11 +123,17 @@ executable archives and cannot be built on the Linux host.
 - The editor header shows the note's first-line title above its filename, using
   the same Rust title/fallback rules as GTK. Titles update while editing.
   **Done** or a rightward swipe from the left edge uses the same save-before-close
-  path; failed saves keep the editor and draft open. The rest of the canvas
+  path; failed saves keep the editor and draft open. A successful close requests
+  sync when configured, signed in, and unlocked. Requests wait/coalesce behind
+  active work; lock, sign-out, and cancellation clear queued automatic sync.
+  Pulling down past the list's native refresh threshold also requests sync and a
+  local refresh. Locked/local-only sessions still refresh without signing in or
+  unlocking automatically. The rest of the canvas
   remains available for text selection and horizontal scrolling.
 - Syntax highlighting uses pinned TreeSitterLanguages 0.1.10 grammars compatible
   with Runestone 0.5.2. Filename detection covers Markdown, JSON, Python,
-  Rust, JavaScript, Swift, TOML, and YAML, including uppercase extensions.
+  Rust, JavaScript, Swift, TOML, YAML, Bash/shell, HTML, CSS, and SQL, including
+  uppercase extensions. Bash profile filenames such as `.bashrc` are recognized.
   The editor's **Language** button offers Automatic, Plain Text, and those
   bundled languages. Overrides use shared `note_language_overrides` metadata
   and survive rename/move/sync; GTK also recognizes explicit Plain Text.
@@ -114,9 +144,19 @@ executable archives and cannot be built on the Linux host.
   Syntax changes preserve the buffer, selection, and undo history; they do not
   enable bracket insertion, grammar-driven indentation, or other code-editing
   features.
-- **Find** in the editor toolbar (or Command-F on a hardware keyboard) opens
-  Runestone's native find navigator with highlighted matches and next/previous
-  navigation. Finding text does not change the note or reset its undo history.
+- **Find** in the editor's **Note actions** menu (or Command-F on a hardware keyboard) opens a
+  floating panel above the keyboard, with match count, options, close, and
+  previous/next buttons. It uses Runestone's public search/highlight APIs rather
+  than UIKit's inline find accessory. Options include match case, whole words,
+  starts/ends with, and regular expressions. Invalid patterns are reported without
+  changing the document. Pull the handle up (or tap it with VoiceOver) to reveal
+  match previews; tapping a result selects and reveals it in the editor. Pull down
+  to collapse without closing Find. **Replace** reveals single/all replacement
+  controls, including regular expression capture templates such as `$1`. Replacements use
+  Runestone's undo-aware editing APIs, and stale/read-only results cannot be edited.
+  Closing Find restores the original selection, clamped to the current document.
+  Finding alone does not change text or reset undo history. The save/sync
+  footer is hidden while Find is open to avoid overlapping the panel.
 - The editor distinguishes **Unsaved changes**, **Saving…**, **Saved locally**,
   and **Not saved**. Revision/attempt tokens prevent stale save results from
   describing newer edits as saved or failed. Failed writes keep the draft and
@@ -126,14 +166,17 @@ executable archives and cannot be built on the Linux host.
   The timestamp is device/profile-local and cleared on sign-out or confirmed
   reconfiguration. Failed, cancelled, or warning-bearing runs do not advance it.
   Ages show **Just now**, then minutes, hours, or days; they refresh at minute
-  intervals, with no seconds display.
+  intervals, with no seconds display. **Last synced** sits at the bottom of the
+  overview, below search; sync progress and actionable failures remain at the top.
 - Long-press a note and choose **Move…** to select another registered folder.
   Contents, pins, and sync identity are preserved; filename collisions choose a
   unique name rather than overwriting either note. Open notes must be closed
   before moving.
 - **Share…** in a note menu, or **Share** in the editor toolbar, prepares a
   temporary exported copy and explains that it is unencrypted. **Share File…**
-  opens the native share sheet, including the iPad popover. The editor exports
+  opens the native share sheet, including the iPad popover. **Share Text…** shares
+  UTF-8 content directly instead of attaching a file; binary/NUL-containing notes
+  offer file sharing only. The editor exports
   its current buffer even if saving failed, without modifying the original or
   its conflict baseline. List exports preserve original bytes, including binary
   files. Export directories are removed when their owning share screen is released.
@@ -141,9 +184,13 @@ executable archives and cannot be built on the Linux host.
   Editing changes its display label and color only, not its directory path,
   Files/iCloud bookmark, ordering, note pins, or sync mappings. Labels/colors can
   also be edited while a registered folder is temporarily unavailable.
-- Preferences live in the upper-right header; New Note floats at the bottom-right
-  above the safe area, without reserving a full-width toolbar. List content has
-  enough bottom scroll padding to bring the final note clear of the button.
+  Display-name changes sync as logical folder metadata and survive subsequent
+  syncs without renaming local directories. Competing device renames stop for
+  explicit metadata confirmation rather than silently reverting the local edit:
+  use **Sync Settings → Remote Folders → Review Name and Color**, confirm the
+  remote name/color, then **Sync Now**. Rename again afterward if desired.
+- Preferences live in the upper-right header; **+** New Note sits beside bottom
+  search. The safe-area inset keeps the final note clear of the bottom controls.
   The rail's reload-style Sync menu offers Sync Now and Sync Settings;
   the icon rotates during synchronization (unless Reduce Motion is enabled).
 - New folders have named color
@@ -187,6 +234,35 @@ executable archives and cannot be built on the Linux host.
 - Native OAuth/PKCE: `auth::LoginFlow::{begin,complete}`, `Service::install_tokens`.
 - E2EE: existing `papertrail-sync` engine and `papertrail-crypto`; not reimplemented.
 
+### Sync folder management
+
+In **Sync Settings → Remote Folders**, rows show the stable folder ID and
+configured directory. Pending remaps also show the currently bound directory,
+so duplicate names cannot conceal which folder owns a path.
+
+**Download** explicitly selects that remote ID, clears its device-local exclusion,
+and starts sync when signed in and unlocked. It does not implicitly accept a
+metadata conflict or change mappings/other folder selections. Downloaded notes
+are registered in the library when sync applies them.
+
+Published folders have a trash button. Sign in and unlock first; deletion is
+disabled while another operation or recovery-key confirmation is pending.
+The native confirmation includes the folder name and ID, a destructive
+**Delete from Server** action, and **Cancel**. Deletion permanently erases that
+collection's server note history while retaining local files and unsaved edits
+on every device. Server backups are outside this operation.
+
+Deletion uses the shared independent erasure path, without syncing, flushing the
+editor, applying mappings, or coordinating unrelated Files/iCloud folders.
+The serial worker and cancellation/lock/sign-out handling still apply. The
+sync sheet stays open and preserves unsaved connection/folder selections;
+its remote rows refresh after the request, including after a lost response.
+Opened retained deleted folders appear as **Local only** with no delete or download
+button. Closed local folders and server-only deletion markers are not listed;
+their bindings and deletion history remain intact. Retained files are not
+automatically published again. iOS does not yet offer the desktop/TUI
+**Sync as New Folder** action or a directory-remapping picker.
+
 `crates/papertrail-ffi` exposes typed UniFFI records, errors, and a
 `PaperTrailClient` object. Swift owns view state, file-provider coordination,
 document bookmarks, and `ASWebAuthenticationSession`. It does not implement
@@ -211,10 +287,10 @@ starts. Cancelling, changing the draft, failed discovery, and stale confirmation
 do not replace the saved profile. Existing bound account/vault identities cannot
 be silently switched.
 
-For older servers, expand **Advanced Authentication**, enable manual setup, and
-enter the trusted issuer, public client ID, and scopes. Discovery mode is saved
-with the profile, so authentication continues checking the server's advertised
-settings against the accepted provider.
+Account setup has no manual issuer, client ID, or scope controls. The server must
+provide `/v1/auth/config`; failures require correcting/upgrading the server rather
+than falling back to manual setup. Saved legacy profiles remain readable and usable;
+reviewing setup again uses discovery without resetting accounts, vaults, or mappings.
 
 Register this redirect URI with the OIDC provider:
 

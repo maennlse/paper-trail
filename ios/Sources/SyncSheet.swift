@@ -5,21 +5,18 @@ struct SyncSheet: View {
     @EnvironmentObject private var model: LibraryModel
     @Environment(\.dismiss) private var dismiss
     @State private var server = ""
-    @State private var issuer = ""
-    @State private var clientID = ""
-    @State private var scopes = "openid profile offline_access"
-    @State private var manualAuthentication = false
-    @State private var advancedExpanded = false
     @State private var folders = Set<String>()
     @State private var remoteFolders: [SyncFolder] = []
     @State private var setup: SyncSetup?
     @State private var confirmTrust = false
     @State private var draftLoaded = false
     @State private var savedDraft: SyncProfile?
+    @State private var folderDeletion: SyncFolderDeletion?
+    @State private var folderMetadata: SyncFolder?
 
     private var profile: SyncProfile {
-        SyncProfile(server: server, issuer: issuer, clientId: clientID,
-                    scopes: scopes, folders: folders.sorted(), discoverAuth: !manualAuthentication)
+        SyncProfile(server: server, issuer: "", clientId: "",
+                    scopes: "", folders: folders.sorted(), discoverAuth: true)
     }
 
     var body: some View {
@@ -53,6 +50,9 @@ struct SyncSheet: View {
                 }
             }
             .task { await load() }
+            .onChange(of: model.busy) { _, busy in
+                if !busy { Task { await loadFolders() } }
+            }
             .onChange(of: profile) { _, _ in invalidateSetup() }
             .onDisappear { invalidateSetup() }
             .confirmationDialog("Trust Identity Provider?", isPresented: $confirmTrust, titleVisibility: .visible) {
@@ -67,6 +67,39 @@ struct SyncSheet: View {
             }
             .sheet(item: $model.vaultPrompt) { prompt in
                 VaultPassphraseSheet(prompt: prompt)
+            }
+            .confirmationDialog("Delete Folder from Server?", isPresented: Binding(
+                get: { folderDeletion != nil },
+                set: { if !$0 { folderDeletion = nil } }
+            ), titleVisibility: .visible, presenting: folderDeletion) { target in
+                Button("Delete from Server", role: .destructive) {
+                    folderDeletion = nil
+                    Task {
+                        await model.sync(.deleteFolder(id: target.id))
+                        await loadFolders()
+                    }
+                }
+                .disabled(!canDeleteFolder)
+                Button("Cancel", role: .cancel) { folderDeletion = nil }
+            } message: { target in
+                Text(target.message)
+            }
+            .confirmationDialog("Accept Remote Folder Name and Color?", isPresented: Binding(
+                get: { folderMetadata != nil },
+                set: { if !$0 { folderMetadata = nil } }
+            ), titleVisibility: .visible, presenting: folderMetadata) { folder in
+                Button("Use Remote Name and Color") {
+                    folderMetadata = nil
+                    if let id = folder.id {
+                        Task {
+                            await model.acceptRemoteFolder(id)
+                            await loadFolders()
+                        }
+                    }
+                }.disabled(model.busy || model.recovery != nil)
+                Button("Cancel", role: .cancel) { folderMetadata = nil }
+            } message: { folder in
+                Text("This folder changed on both devices. Use the remote name “\(folder.name)” and color on the next sync? Local directories and notes are kept. You can rename it again afterward.\n\nFolder ID: \(folder.id ?? "")")
             }
             .alert("Paper Trail", isPresented: Binding(
                 get: { model.errorMessage != nil },
@@ -99,24 +132,8 @@ struct SyncSheet: View {
         Section {
             TextField("Server URL (HTTPS)", text: $server)
                 .keyboardType(.URL).accessibilityIdentifier("sync-server")
-            Text(manualAuthentication
-                 ? "Manual authentication is enabled under Advanced Authentication."
-                 : "Enter your sync server URL. Authentication settings are discovered automatically; you will be asked before trusting a new identity provider.")
+            Text("Enter your HTTPS sync server URL. Authentication settings are discovered automatically; you will be asked before trusting a new identity provider.")
                 .font(.caption).foregroundStyle(.secondary)
-            DisclosureGroup("Advanced Authentication", isExpanded: $advancedExpanded) {
-                Toggle("Configure authentication manually", isOn: $manualAuthentication)
-                    .accessibilityIdentifier("sync-manual-auth")
-                if manualAuthentication {
-                    TextField("OIDC issuer URL (HTTPS)", text: $issuer)
-                        .keyboardType(.URL).accessibilityIdentifier("sync-issuer")
-                    TextField("Public client ID", text: $clientID)
-                        .accessibilityIdentifier("sync-client-id")
-                    TextField("Scopes", text: $scopes)
-                        .accessibilityIdentifier("sync-scopes")
-                }
-                Text("The identity provider must register io.github.maennlse.paper-trail://oauth/callback for the public client. No client secret is used.")
-                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            }
             ForEach(model.folders, id: \.path) { folder in
                 Toggle(folder.name, isOn: Binding(
                     get: { folders.contains(folder.path) },
@@ -179,25 +196,64 @@ struct SyncSheet: View {
         if !remoteFolders.isEmpty {
             Section("Remote Folders") {
                 ForEach(remoteFolders, id: \.id) { folder in
-                    HStack {
-                        Text(folder.name)
-                        Spacer()
-                        if folder.selected {
-                            Image(systemName: "checkmark")
-                        } else if let id = folder.id {
-                            Button("Download") {
-                                Task {
-                                    do {
-                                        try await model.call { try $0.acceptSyncFolder(id: id) }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(folder.name)
+                            Spacer()
+                            if folder.deleted {
+                                Text("Local only").foregroundStyle(.secondary)
+                            } else if folder.conflict {
+                                Button("Review Name and Color") { folderMetadata = folder }
+                                    .buttonStyle(.borderless)
+                                    .disabled(model.busy || model.recovery != nil)
+                            } else if folder.selected {
+                                Image(systemName: "checkmark")
+                            } else if let id = folder.id {
+                                Button("Download") {
+                                    Task {
+                                        await model.downloadRemoteFolder(id)
                                         await loadFolders()
-                                    } catch { model.errorMessage = error.localizedDescription }
+                                    }
                                 }
-                            }.disabled(model.busy)
+                                .buttonStyle(.borderless)
+                                .disabled(model.busy || model.recovery != nil || !model.signedIn || !model.unlocked)
+                            }
+                            if let target = SyncFolderDeletion(
+                                id: folder.id, name: folder.name,
+                                published: folder.published, deleted: folder.deleted
+                            ) {
+                                Button(role: .destructive) { folderDeletion = target } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Delete \(folder.name) from Server")
+                                .accessibilityIdentifier("sync-delete-\(target.id)")
+                                .disabled(!canDeleteFolder)
+                            }
+                        }
+                        Text(folder.path ?? "Automatic download directory")
+                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        if let storedPath = folder.storedPath {
+                            Text("Current directory: \(storedPath) (mapping change pending)")
+                                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                        if let id = folder.id {
+                            Text("ID: \(id)")
+                                .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                        if folder.deleted {
+                            Text("Removed from server. Local files are kept and will not be uploaded again automatically.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }
             }
         }
+    }
+
+    private var canDeleteFolder: Bool {
+        SyncFolderDeletion.isAvailable(signedIn: model.signedIn, unlocked: model.unlocked,
+                                       busy: model.busy, hasRecovery: model.recovery != nil)
     }
 
     private func invalidateSetup() {
@@ -211,10 +267,6 @@ struct SyncSheet: View {
         do {
             let saved = try await model.call { try $0.syncProfile() }
             server = saved.server
-            issuer = saved.issuer
-            clientID = saved.clientId
-            if !saved.scopes.isEmpty { scopes = saved.scopes }
-            manualAuthentication = !saved.server.isEmpty && !saved.discoverAuth
             folders = Set(saved.folders)
             model.updateSyncStatus()
             savedDraft = profile
@@ -225,7 +277,9 @@ struct SyncSheet: View {
 
     private func loadFolders() async {
         do {
-            remoteFolders = try await model.call { try $0.syncFolders() }.filter { $0.id != nil }
+            remoteFolders = try await model.call(coordinatingFiles: false) {
+                try $0.syncFolders()
+            }.filter { $0.id != nil }
         } catch { model.errorMessage = error.localizedDescription }
     }
 

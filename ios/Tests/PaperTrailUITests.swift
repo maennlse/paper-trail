@@ -57,17 +57,9 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertEqual(app.buttons.matching(identifier: "sync-lock-unlock").count, 1)
         XCTAssertEqual(app.buttons["sync-lock-unlock"].label, "Unlock Vault")
         XCTAssertFalse(app.buttons["Lock Vault"].exists)
-        for _ in 0..<4 where !app.buttons["Advanced Authentication"].isHittable { app.swipeDown() }
-        app.buttons["Advanced Authentication"].tap()
-        let manualAuthentication = app.switches["sync-manual-auth"]
-        XCTAssertTrue(manualAuthentication.waitForExistence(timeout: 5))
-        manualAuthentication.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == '1'"),
-                                               object: manualAuthentication)
-        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 5), .completed, app.debugDescription)
-        for _ in 0..<4 where !app.textFields["sync-issuer"].exists { app.swipeUp() }
-        XCTAssertTrue(app.textFields["sync-issuer"].waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertTrue(app.textFields["sync-client-id"].exists, app.debugDescription)
+        XCTAssertFalse(app.buttons["Advanced Authentication"].exists)
+        XCTAssertFalse(app.switches["sync-manual-auth"].exists)
+        XCTAssertFalse(app.textFields["sync-scopes"].exists)
     }
 
     func testRailAndPlainTextRoundTrip() {
@@ -81,6 +73,13 @@ final class PaperTrailUITests: XCTestCase {
         app.buttons["folder-toggle"].tap()
         XCTAssertTrue(app.buttons["All Notes"].waitForExistence(timeout: 5))
         app.buttons["All Notes"].tap()
+        let railClosed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: app.otherElements["folder-rail"])
+        XCTAssertEqual(XCTWaiter.wait(for: [railClosed], timeout: 5), .completed)
+        let composeReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true AND enabled == true"),
+            object: app.buttons["compose"])
+        XCTAssertEqual(XCTWaiter.wait(for: [composeReady], timeout: 5), .completed)
         app.buttons["compose"].tap()
         let editor = app.scrollViews["note-editor"].textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
@@ -196,7 +195,9 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Move Note"].waitForExistence(timeout: 5))
         app.buttons["Work Notes"].tap()
         let row = app.cells.containing(.staticText, identifier: "weekend.md").firstMatch
-        XCTAssertTrue(row.staticTexts["Work Notes"].waitForExistence(timeout: 10))
+        let folderBadge = row.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "Folder: Work Notes")).firstMatch
+        XCTAssertTrue(folderBadge.waitForExistence(timeout: 10))
         app.buttons["folder-toggle"].tap()
         app.buttons["Work Notes"].press(forDuration: 1)
         app.buttons["Edit Folder…"].tap()
@@ -207,7 +208,9 @@ final class PaperTrailUITests: XCTestCase {
         name.typeText("Writing")
         app.buttons["folder-color-coral"].tap()
         app.buttons["Save"].tap()
-        XCTAssertTrue(row.staticTexts["Writing"].waitForExistence(timeout: 10))
+        let renamedBadge = row.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "Folder: Writing")).firstMatch
+        XCTAssertTrue(renamedBadge.waitForExistence(timeout: 10))
         app.terminate()
         app.launch()
         XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
@@ -227,26 +230,37 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         let original = editor.value as? String
         XCTAssertTrue(app.staticTexts["Saved locally"].exists)
+        app.buttons["note-actions"].tap()
         app.buttons["find-in-note"].tap()
-        // The library's native search field may remain in the accessibility
-        // tree underneath the full-screen editor. Only target document Find.
-        let search = app.searchFields.matching(NSPredicate(
-            format: "identifier != %@ AND placeholderValue != %@",
-            "library-search", "Search across folders")).firstMatch
+        let search = app.textFields["note-find-query"]
         let findPresented = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == true AND hittable == true"), object: search)
-        XCTAssertEqual(XCTWaiter.wait(for: [findPresented], timeout: 5), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [findPresented], timeout: 20), .completed)
         search.tap()
         search.typeText("walk")
+        XCTAssertTrue(app.staticTexts["note-find-count"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["note-find-options"].exists)
+        XCTAssertTrue(app.buttons["note-find-next"].exists)
+        app.buttons["note-find-expand"].tap()
+        XCTAssertTrue(app.buttons["note-find-result-0"].waitForExistence(timeout: 5))
+        app.buttons["note-find-result-0"].tap()
+        let findScreenshot = XCTAttachment(screenshot: app.screenshot())
+        findScreenshot.name = "ios-find-expanded"
+        findScreenshot.lifetime = .keepAlways
+        add(findScreenshot)
+        app.buttons["note-find-expand"].tap()
         XCTAssertEqual(editor.value as? String, original)
+        app.buttons["note-find-close"].tap()
         app.navigationBars.buttons["Done"].tap()
         XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 10))
         app.staticTexts["weekend.md"].tap()
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        app.buttons["note-actions"].tap()
         app.buttons["share-note"].tap()
         XCTAssertTrue(app.navigationBars["Share Note"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["weekend.md"].exists)
         XCTAssertTrue(app.buttons["share-export"].exists)
+        XCTAssertTrue(app.buttons["share-text"].exists)
         XCTAssertTrue(app.staticTexts.matching(
             NSPredicate(format: "label BEGINSWITH %@", "This copy is not encrypted.")).firstMatch.exists)
         app.navigationBars["Share Note"].buttons["Done"].tap()
@@ -350,20 +364,16 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, edited)
     }
 
-    func testPullDownSearchAndFloatingCompose() {
+    func testBottomSearchAndPlusCompose() {
         let app = fixtureApp()
         XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["compose"].isHittable)
         XCTAssertEqual(app.toolbars.buttons.matching(identifier: "compose").count, 0)
         let search = librarySearch(in: app)
-        let initiallyHidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            !search.exists || !search.isHittable
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [initiallyHidden], timeout: 5), .completed)
-        app.collectionViews.firstMatch.swipeDown()
-        let revealed = XCTNSPredicateExpectation(
+        let visible = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == true AND hittable == true"), object: search)
-        XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 5), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed)
+        XCTAssertGreaterThan(search.frame.midY, app.frame.midY)
         search.tap()
         search.typeText("long walk")
         XCTAssertTrue(app.staticTexts["weekend.md"].waitForExistence(timeout: 5))
@@ -378,7 +388,7 @@ final class PaperTrailUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["ideas.txt"].exists)
     }
 
-    func testEmptyLibraryStillRevealsSearchOnPullDown() {
+    func testEmptyLibraryKeepsBottomSearchVisibleAfterPullToRefresh() {
         let app = XCUIApplication()
         app.launchEnvironment["PAPERTRAIL_TEST_PROFILE"] = UUID().uuidString
         app.launch()
@@ -387,14 +397,25 @@ final class PaperTrailUITests: XCTestCase {
             predicate: NSPredicate(format: "enabled == true"), object: app.buttons["compose"])
         XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 20), .completed)
         let search = librarySearch(in: app)
-        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            !search.exists || !search.isHittable
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
+        XCTAssertTrue(search.isHittable)
+        XCTAssertGreaterThan(search.frame.midY, app.frame.midY)
         app.collectionViews.firstMatch.swipeDown()
         let revealed = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == true AND hittable == true"), object: search)
         XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 5), .completed)
+    }
+
+    func testFullSwipeDeleteStillRequiresConfirmationAndCancelKeepsTheNote() {
+        let app = fixtureApp()
+        let note = app.staticTexts["weekend.md"]
+        XCTAssertTrue(note.waitForExistence(timeout: 20))
+        let y = note.frame.midY / app.frame.height
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: y))
+        start.press(forDuration: 0.1, thenDragTo: app.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.02, dy: y)))
+        XCTAssertTrue(app.buttons["Delete Note"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
     }
 
     func testAboutShowsVersionAndSourceLink() {
@@ -414,9 +435,7 @@ final class PaperTrailUITests: XCTestCase {
     }
 
     private func librarySearch(in app: XCUIApplication) -> XCUIElement {
-        app.searchFields.matching(NSPredicate(
-            format: "identifier == %@ OR placeholderValue == %@",
-            "library-search", "Search across folders")).firstMatch
+        app.textFields["library-search"]
     }
 
     private func setSwitch(_ control: XCUIElement, enabled: Bool,

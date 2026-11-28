@@ -31,6 +31,130 @@ fn type_text(app: &mut App, text: &str) {
     }
 }
 
+// Seed an already trusted profile without performing network discovery. The
+// public command only accepts a server URL; fixtures are not a setup interface.
+fn configure_sync_fixture(app: &mut App, scopes: &str) -> std::io::Result<()> {
+    let previous = app.sync.saved_config()?;
+    let fresh = previous.is_none();
+    let mut config = previous.unwrap_or_default();
+    config.server = "https://sync.example".into();
+    config.issuer = "https://issuer.example".into();
+    config.client_id = "native".into();
+    config.scopes = scopes.into();
+    if fresh {
+        config.folders = vec![app.settings.notes_dir.clone()];
+    }
+    app.sync.configure(config)
+}
+
+fn select_sync_folder(app: &mut App, path: &Path, selected: bool) {
+    app.command("sync-folders").unwrap();
+    let choice = app
+        .sync_folders
+        .as_mut()
+        .unwrap()
+        .choices
+        .iter_mut()
+        .find(|c| {
+            c.path
+                .as_ref()
+                .is_some_and(|p| papertrail_sync::same_directory(p, path))
+        })
+        .unwrap();
+    choice.selected = selected;
+    key(app, KeyCode::Enter);
+    assert!(app.sync_folders.is_none());
+}
+
+#[test]
+fn retired_commands_only_explain_the_replacement_without_running_or_echoing_arguments() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
+    app.command("new retained.txt").unwrap();
+    app.paste("unsaved private text");
+    let text = app.session.text.clone();
+    let path = app.current_path().unwrap();
+    let contents = fs::read(&path).unwrap();
+    let config = app.sync.saved_config().unwrap();
+    let settings = serde_json::to_vec(&app.settings).unwrap();
+    let disk_settings = fs::read(temp.path().join("config/settings.json")).ok();
+    for (old, replacement) in crate::completion::RETIRED {
+        let error = app
+            .command(&format!("{old} PRIVATE_ARGUMENT"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(replacement), "{old}: {error}");
+        assert!(!error.contains("PRIVATE_ARGUMENT"));
+        assert_eq!(app.session.text, text);
+        assert_eq!(fs::read(&path).unwrap(), contents);
+        assert_eq!(
+            fs::read(temp.path().join("config/settings.json")).ok(),
+            disk_settings
+        );
+        assert_eq!(serde_json::to_vec(&app.settings).unwrap(), settings);
+        assert!(app.sync.saved_config().unwrap() == config);
+        assert!(app.prompt.is_none());
+        assert!(app.sync_job.is_none());
+        assert!(!app.quit);
+    }
+}
+
+#[test]
+fn completion_uses_unique_canonical_commands_and_retired_names_have_valid_replacements() {
+    use crate::completion::{COMMANDS, RETIRED};
+    let commands: std::collections::BTreeSet<_> = COMMANDS.iter().map(|c| c.trim()).collect();
+    assert_eq!(commands.len(), COMMANDS.len());
+    for (old, replacement) in RETIRED {
+        assert!(!commands.contains(old));
+        let canonical = replacement
+            .trim_start_matches(':')
+            .split_whitespace()
+            .next()
+            .unwrap();
+        assert!(commands.contains(canonical), "{old}: {replacement}");
+    }
+    for prefix in ["folder-", "login-", "vault-", "sync-"] {
+        assert!(COMMANDS.iter().any(|c| c.starts_with(prefix)));
+    }
+    for vim in ["w", "q", "q!", "wq", "x", "quit"] {
+        assert!(commands.contains(vim));
+    }
+    for group in [
+        "FOLDERS",
+        "SIGN-IN",
+        "VAULT",
+        "SYNC",
+        "NOTES & FILES",
+        "EDITOR & DISPLAY",
+    ] {
+        assert!(ui::KEYS.contains(group));
+    }
+    for command in COMMANDS.iter().map(|c| c.trim()).filter(|c| {
+        c.starts_with("folder-")
+            || c.starts_with("login-")
+            || c.starts_with("vault-")
+            || c.starts_with("sync-")
+    }) {
+        assert!(
+            ui::KEYS.contains(&format!(":{command}")),
+            "Missing help for {command}"
+        );
+    }
+}
+
+#[test]
+fn sync_configuration_rejects_manual_arguments_without_changing_saved_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = app(temp.path());
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
+    let before = app.sync.saved_config().unwrap();
+    assert!(app
+        .command("sync-configure https://sync.example https://issuer.example native")
+        .is_err());
+    assert!(app.sync.saved_config().unwrap() == before);
+}
+
 #[test]
 fn discovered_issuer_requires_confirmation_and_persists_only_on_acceptance() {
     let temp = tempfile::tempdir().unwrap();
@@ -98,8 +222,7 @@ fn discovered_issuer_requires_confirmation_and_persists_only_on_acceptance() {
 fn stale_discovery_confirmation_cannot_overwrite_manual_configuration() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = app(temp.path());
-    app.command("sync-configure https://sync.example https://manual.example manual")
-        .unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
     let previous = app.sync.saved_config().unwrap().unwrap();
     assert!(!previous.discover_auth);
     let mut changed = previous.clone();
@@ -121,12 +244,11 @@ fn stale_discovery_confirmation_cannot_overwrite_manual_configuration() {
 fn sync_secret_prompts_are_masked_and_never_completed_or_written_to_settings() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = app(temp.path());
-    app.command("sync-configure https://sync.example https://issuer.example native")
-        .unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
     assert!(app
-        .command("unlock never-put-secrets-in-arguments")
+        .command("vault-unlock never-put-secrets-in-arguments")
         .is_err());
-    app.command("unlock").unwrap();
+    app.command("vault-unlock").unwrap();
     type_text(&mut app, "private vault passphrase");
     key(&mut app, KeyCode::Tab);
     assert!(!app.prompt.as_ref().unwrap().completion.active);
@@ -151,7 +273,7 @@ fn sync_secret_prompts_are_masked_and_never_completed_or_written_to_settings() {
 fn remember_password_toggle_is_explicit_masked_and_not_used_for_recovery_keys() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = app(temp.path());
-    for command in ["unlock", "create-vault", "change-passphrase"] {
+    for command in ["vault-unlock", "vault-create", "vault-change-passphrase"] {
         app.command(command).unwrap();
         // Exercise the graphical-session option without mutating process-wide
         // DISPLAY/SSH variables or contacting a real credential store.
@@ -177,7 +299,7 @@ fn remember_password_toggle_is_explicit_masked_and_not_used_for_recovery_keys() 
         assert!(app.prompt.is_none());
         assert!(app.sync_job.is_none());
     }
-    app.command("recover-vault").unwrap();
+    app.command("vault-recover").unwrap();
     assert_eq!(app.prompt.as_ref().unwrap().remember, None);
     assert!(!temp.path().join("config/sync/config.json").exists());
 }
@@ -191,7 +313,7 @@ fn lock_queued_during_startup_restore_prevents_automatic_sync() {
     app.sync_job = Some(rx);
     app.sync_restoring = true;
     // Simulate a startup worker completing after a lock request.
-    app.command("lock").unwrap();
+    app.command("vault-lock").unwrap();
     tx.send(Ok(Outcome {
         message: "Signed in automatically; vault unlocked".into(),
         warning: None,
@@ -227,7 +349,7 @@ fn startup_restore_does_not_block_edits_or_replace_a_password_prompt() {
     type_text(&mut app, "edits during startup");
     assert_eq!(app.session.text, "edits during startup");
     assert!(app.session.is_dirty());
-    app.command("unlock").unwrap();
+    app.command("vault-unlock").unwrap();
     type_text(&mut app, "a private passphrase");
     tx.send(Ok(Outcome {
         message: "Signed in automatically; vault unlocked".into(),
@@ -252,17 +374,16 @@ fn startup_restore_does_not_block_edits_or_replace_a_password_prompt() {
 fn sync_folder_selection_is_explicit_and_account_edits_preserve_it() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = app(temp.path());
-    app.command("sync-configure https://sync.example https://issuer.example native 'openid offline_access audience'").unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access audience").unwrap();
     let first = app.settings.notes_dir.clone();
     let other = temp.path().join("other folder");
     fs::create_dir(&other).unwrap();
     fs::write(other.join("keep.txt"), "keep").unwrap();
-    app.command(&format!("folder {}", other.display())).unwrap();
-    app.command(&format!("sync-add-folder {}", other.display()))
+    app.command(&format!("folder-open {}", other.display()))
         .unwrap();
-    app.command(&format!("sync-remove-folder {}", first.display()))
-        .unwrap();
-    app.command("sync-configure https://sync.example https://issuer.example native 'openid offline_access updated'").unwrap();
+    select_sync_folder(&mut app, &other, true);
+    select_sync_folder(&mut app, &first, false);
+    configure_sync_fixture(&mut app, "openid offline_access updated").unwrap();
     let config = app.sync.saved_config().unwrap().unwrap();
     assert_eq!(config.folders, vec![fs::canonicalize(&other).unwrap()]);
     assert!(config.download_dir.is_some());
@@ -287,18 +408,15 @@ fn sync_selection_recognizes_directory_aliases_without_duplicate_choices() {
     let alias = temp.path().join("alias");
     std::os::unix::fs::symlink(&real, &alias).unwrap();
     let mut app = app(&alias);
-    app.command("sync-configure https://sync.example https://issuer.example native")
-        .unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
     let first = app.settings.notes_dir.clone();
     let canonical = fs::canonicalize(&first).unwrap();
-    app.command(&format!("sync-add-folder {}", canonical.display()))
-        .unwrap();
+    select_sync_folder(&mut app, &canonical, true);
     assert_eq!(app.sync.saved_config().unwrap().unwrap().folders.len(), 1);
     let choices = app.sync.folder_choices(&app.settings).unwrap();
     assert_eq!(choices.len(), 1);
     assert!(choices[0].selected);
-    app.command(&format!("sync-remove-folder {}", canonical.display()))
-        .unwrap();
+    select_sync_folder(&mut app, &canonical, false);
     assert!(app.sync.saved_config().unwrap().unwrap().folders.is_empty());
     let choices = app.sync.folder_choices(&app.settings).unwrap();
     assert_eq!(choices.len(), 1);
@@ -312,7 +430,7 @@ fn login_defaults_to_device_flow_without_invoking_a_browser() {
     // command must nevertheless select device flow, not the browser variant.
     let temp = tempfile::tempdir().unwrap();
     let mut app = app(temp.path());
-    app.command("login").unwrap();
+    app.command("login-start").unwrap();
     assert!(app.device_cancel.is_some());
     assert!(app.device_notifications.is_some());
     assert!(app.status.contains("device login code"));
@@ -448,7 +566,7 @@ fn lock_requested_during_device_login_survives_a_failed_local_save() {
     let cancel = Cancellation::default();
     app.sync_job = Some(rx);
     app.device_cancel = Some(cancel.clone());
-    app.command("lock").unwrap();
+    app.command("vault-lock").unwrap();
     assert!(cancel.is_cancelled());
     tx.send(Err(std::io::Error::new(
         std::io::ErrorKind::Interrupted,
@@ -510,9 +628,9 @@ fn full_note_workflow_preserves_metadata_and_files() {
     let moved = app.current_path().unwrap();
     assert!(!old.exists());
     assert!(app.settings.pinned_notes.contains(&moved));
-    app.command("color #aabbcc").unwrap();
+    app.command("folder-color #aabbcc").unwrap();
     assert_eq!(app.settings.folder_colors[&other], "#aabbcc");
-    app.command("all").unwrap();
+    app.command("folder-all").unwrap();
     app.command("search SEARCHABLE").unwrap();
     assert_eq!(app.notes.len(), 1);
     app.command("replace 'searchable body' 'changed text'")
@@ -564,7 +682,7 @@ fn missing_bookmark_recovers_and_external_editor_reload_is_explicit() {
     assert!(app.settings.note_folders.contains(&missing));
     assert_eq!(app.settings.notes_dir, temp.path().join("notes"));
     assert!(app
-        .command(&format!("folder {}", missing.display()))
+        .command(&format!("folder-open {}", missing.display()))
         .is_err());
     app.command("new external.txt").unwrap();
     type_text(&mut app, "before");
@@ -603,7 +721,7 @@ fn headless_rendering_and_prompts_work_at_various_sizes() {
     assert_eq!(app.help_scroll, 1);
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Char(':'));
-    type_text(&mut app, "all");
+    type_text(&mut app, "folder-all");
     key(&mut app, KeyCode::Enter);
     assert!(app.all);
 }
@@ -672,14 +790,15 @@ fn literal_find_replace_and_line_deletion_support_unicode_and_undo() {
 fn folder_commands_keep_last_accessible_folder_and_reorder_bookmarks() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = app(temp.path());
-    assert!(app.command("close-folder").is_err());
-    assert!(app.command("folder 0").is_err());
+    assert!(app.command("folder-close").is_err());
+    assert!(app.command("folder-open 0").is_err());
     let other = temp.path().join("second");
     fs::create_dir(&other).unwrap();
-    app.command(&format!("folder {}", other.display())).unwrap();
+    app.command(&format!("folder-open {}", other.display()))
+        .unwrap();
     app.command("folder-up").unwrap();
     assert_eq!(app.settings.note_folders[0], other.canonicalize().unwrap());
-    app.command("close-folder").unwrap();
+    app.command("folder-close").unwrap();
     assert!(other.is_dir());
     assert_eq!(app.settings.note_folders, [temp.path().join("notes")]);
 }
@@ -980,7 +1099,7 @@ fn host_secret_prompts_do_not_forward_input_to_neovim() {
         return;
     };
     let text = app.session.text.clone();
-    app.command("unlock").unwrap();
+    app.command("vault-unlock").unwrap();
     type_text(&mut app, "private vault passphrase");
     key(&mut app, KeyCode::Tab);
     app.poll_neovim().unwrap();
@@ -1176,7 +1295,7 @@ fn folder_badges_and_note_rows_use_the_same_rgb_colors_in_all_and_search_views()
     app.settings.add_folder(other.clone(), false);
     app.settings.folder_colors.insert(first, "preset-0".into());
     app.settings.folder_colors.insert(other, "#aabbcc".into());
-    for command in ["all", "search note"] {
+    for command in ["folder-all", "search note"] {
         app.command(command).unwrap();
         let mut terminal = Terminal::new(TestBackend::new(110, 25)).unwrap();
         terminal.draw(|frame| ui::render(frame, &mut app)).unwrap();
@@ -1228,11 +1347,11 @@ fn all_folder_row_supports_keyboard_mouse_and_unchanged_folder_numbers() {
     assert!(app.all);
     assert_eq!(app.notes.len(), 2);
     assert!(app.command("folder-down").is_err());
-    app.command("folder 2").unwrap();
+    app.command("folder-open 2").unwrap();
     assert_eq!(app.settings.notes_dir, other.canonicalize().unwrap());
     assert_eq!(app.folder_index, 1);
     assert!(!app.all);
-    app.command("folder 1").unwrap();
+    app.command("folder-open 1").unwrap();
     assert_eq!(app.settings.notes_dir, first);
     render_app(&mut app, 100, 25);
     let pane = app.panes[0];
@@ -1259,8 +1378,7 @@ fn sync_folder_checklist_saves_or_cancels_without_touching_notes_or_editor() {
     fs::create_dir(&other).unwrap();
     fs::write(other.join("keep.txt"), "keep").unwrap();
     app.settings.add_folder(other.clone(), false);
-    app.command("sync-configure https://sync.example https://issuer.example native")
-        .unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Char('i'));
     app.paste("Unsaved ");
@@ -1310,8 +1428,7 @@ fn sync_folder_server_fixture(root: &std::path::Path, deleted: bool) -> App {
     let other = root.join("other");
     fs::create_dir(&other).unwrap();
     app.settings.add_folder(other.clone(), false);
-    app.command("sync-configure https://sync.example https://issuer.example native")
-        .unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
     let first = "AAAAAAAAAAAAAAAAAAAAAA";
     let second = "AQEBAQEBAQEBAQEBAQEBAQ";
     let mut state = papertrail_sync::engine::State {
@@ -1347,6 +1464,7 @@ fn sync_folder_server_fixture(root: &std::path::Path, deleted: bool) -> App {
             id.into(),
             papertrail_sync::folders::Binding {
                 observed_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+                observed_label: None,
                 observed_color: None,
                 path,
                 managed: false,
@@ -1382,7 +1500,7 @@ fn closing_a_synced_folder_pauses_only_this_device_and_reopening_does_not_resume
     let note = fs::read(folder.join("00.txt")).unwrap();
     let path = temp.path().join("config/sync/state.json");
     let journal = fs::read(&path).unwrap();
-    app.command("close-folder").unwrap();
+    app.command("folder-close").unwrap();
     let paused = app.sync.saved_config().unwrap().unwrap();
     assert!(paused.excluded_folders.contains(first));
     assert!(!paused.selected_folders.contains(first));
@@ -1390,9 +1508,9 @@ fn closing_a_synced_folder_pauses_only_this_device_and_reopening_does_not_resume
     assert!(!app.settings.note_folders.contains(&folder));
     assert_eq!(fs::read(&path).unwrap(), journal);
     assert_eq!(fs::read(folder.join("00.txt")).unwrap(), note);
-    assert!(app.command("close-folder").is_err()); // Last accessible folder.
+    assert!(app.command("folder-close").is_err()); // Last accessible folder.
     assert!(app.sync.saved_config().unwrap().unwrap() == paused);
-    app.command(&format!("folder {}", folder.display()))
+    app.command(&format!("folder-open {}", folder.display()))
         .unwrap();
     assert!(app
         .settings
@@ -1696,6 +1814,35 @@ fn sync_folder_hides_server_only_markers_and_rejects_unpublished_deletion() {
 }
 
 #[test]
+fn closed_deleted_folders_stay_hidden_until_reopened_without_forgetting_history() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = sync_folder_server_fixture(temp.path(), true);
+    let path = temp.path().join("config/sync/state.json");
+    let journal = fs::read(&path).unwrap();
+    let closed = app.settings.notes_dir.clone();
+    app.settings.note_folders.retain(|p| p != &closed);
+    app.command("sync-folders").unwrap();
+    assert!(!app
+        .sync_folders
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .any(|c| c.id.as_deref() == Some("AAAAAAAAAAAAAAAAAAAAAA")));
+    key(&mut app, KeyCode::Esc);
+    app.settings.add_folder(closed.clone(), false);
+    app.command("sync-folders").unwrap();
+    let picker = app.sync_folders.as_ref().unwrap();
+    let index = picker
+        .choices
+        .iter()
+        .position(|c| c.path.as_ref() == Some(&closed))
+        .unwrap();
+    assert!(picker.local_only(index));
+    assert_eq!(fs::read(path).unwrap(), journal);
+}
+
+#[test]
 fn sync_folder_hides_deleted_identities_when_their_local_directory_is_unavailable() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = sync_folder_server_fixture(temp.path(), true);
@@ -1719,8 +1866,7 @@ fn sync_folder_hides_deleted_identities_when_their_local_directory_is_unavailabl
 fn sync_folder_checklist_rejects_stale_configuration_and_missing_new_directories() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = app(temp.path());
-    app.command("sync-configure https://sync.example https://issuer.example native")
-        .unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
     let missing = temp.path().join("missing");
     app.settings.add_folder(missing, false);
     app.command("sync-folders").unwrap();
@@ -1749,8 +1895,7 @@ fn sync_folder_checklist_rejects_stale_configuration_and_missing_new_directories
 fn sync_folder_checklist_preserves_remote_ids_mappings_and_account_binding() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = browse_app(temp.path(), 1);
-    app.command("sync-configure https://sync.example https://issuer.example native")
-        .unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
     // Opaque IDs for sixteen zero/one bytes; no cryptographic material is needed.
     let mapped = "AAAAAAAAAAAAAAAAAAAAAA".to_owned();
     let remote = "AQEBAQEBAQEBAQEBAQEBAQ".to_owned();
@@ -1818,8 +1963,7 @@ fn sync_folder_checklist_preserves_remote_ids_mappings_and_account_binding() {
 fn sync_folder_checklist_mouse_scrolling_resize_and_no_mouse_are_safe() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = app(temp.path());
-    app.command("sync-configure https://sync.example https://issuer.example native")
-        .unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
     for index in 0..30 {
         let path = temp.path().join(format!("Long folder 界 {index}"));
         fs::create_dir(&path).unwrap();
@@ -1870,8 +2014,7 @@ fn sync_folder_checklist_mouse_scrolling_resize_and_no_mouse_are_safe() {
 fn sync_folder_checklist_pauses_automatic_sync_until_closed() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = app(temp.path());
-    app.command("sync-configure https://sync.example https://issuer.example native")
-        .unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
     app.command("sync-folders").unwrap();
     app.sync_unlocked = true;
     app.sync_last = std::time::Instant::now() - std::time::Duration::from_secs(60);
@@ -1895,8 +2038,7 @@ fn sync_folder_checklist_deduplicates_directory_aliases_without_moving_notes() {
     let alias = temp.path().join("alias");
     std::os::unix::fs::symlink(&real, &alias).unwrap();
     let mut app = app(&alias);
-    app.command("sync-configure https://sync.example https://issuer.example native")
-        .unwrap();
+    configure_sync_fixture(&mut app, "openid offline_access").unwrap();
     let original = app.settings.notes_dir.clone();
     let canonical = fs::canonicalize(&original).unwrap();
     fs::write(original.join("keep.txt"), "keep").unwrap();
@@ -2240,10 +2382,18 @@ fn completion_handles_options_colors_numbers_and_no_matches() {
         ["set folder-width 30"]
     );
     assert_eq!(
-        candidates("color preset-11", 2, root, root).unwrap(),
-        ["color preset-11"]
+        candidates("folder-color preset-11", 2, root, root).unwrap(),
+        ["folder-color preset-11"]
     );
     assert_eq!(candidates("move 2", 3, root, root).unwrap(), ["move 2"]);
+    assert_eq!(
+        candidates("folder-open 2", 3, root, root).unwrap(),
+        ["folder-open 2"]
+    );
+    assert_eq!(
+        candidates("sync-auto-download of", 3, root, root).unwrap(),
+        ["sync-auto-download off"]
+    );
     assert!(candidates("not-a-command", 0, root, root)
         .unwrap()
         .is_empty());
@@ -2266,8 +2416,8 @@ fn path_completion_supports_spaces_unicode_home_and_unique_directory_descent() {
     fs::create_dir(root.join("folder λ with spaces/child")).unwrap();
     fs::write(root.join("file.txt"), "keep").unwrap();
     assert_eq!(
-        candidates("folder fol", 0, root, root).unwrap(),
-        ["folder folder λ with spaces/"]
+        candidates("folder-open fol", 0, root, root).unwrap(),
+        ["folder-open folder λ with spaces/"]
     );
     assert!(candidates("move file", 0, root, root).unwrap().is_empty());
     assert_eq!(
@@ -2275,13 +2425,13 @@ fn path_completion_supports_spaces_unicode_home_and_unique_directory_descent() {
         ["saveas file.txt"]
     );
     assert_eq!(
-        candidates("folder ~/fol", 0, root, root).unwrap(),
-        ["folder ~/folder λ with spaces/"]
+        candidates("folder-open ~/fol", 0, root, root).unwrap(),
+        ["folder-open ~/folder λ with spaces/"]
     );
     let mut state = Completion::default();
-    let mut text = "folder fol".to_owned();
+    let mut text = "folder-open fol".to_owned();
     state.cycle(&mut text, false, 0, root, root).unwrap();
     state.cycle(&mut text, false, 0, root, root).unwrap();
-    assert_eq!(text, "folder folder λ with spaces/child/");
+    assert_eq!(text, "folder-open folder λ with spaces/child/");
     assert_eq!(fs::read_to_string(root.join("file.txt")).unwrap(), "keep");
 }

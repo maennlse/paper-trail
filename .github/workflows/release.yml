@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Validate tag against Cargo version
+      - name: Validate tag and unified platform versions
         env:
           TAG: ${{ github.ref_name }}
         run: python3 build-aux/prepare_release.py validate-tag "$TAG"
@@ -59,7 +59,7 @@ jobs:
           pattern: paper-trail-*
           path: downloaded-artifacts
           merge-multiple: false
-      - name: Validate all fifteen packages and collect release assets
+      - name: Validate all seventeen packages and collect release assets
         run: >-
           python3 build-aux/prepare_release.py collect
           downloaded-artifacts dist/release

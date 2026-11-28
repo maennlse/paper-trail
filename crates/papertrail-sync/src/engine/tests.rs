@@ -88,6 +88,289 @@ impl Remote for Memory {
     }
 }
 #[test]
+fn deletion_is_independent_of_local_preparation_and_preserves_unpublished_work() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (vault, key, _) = Vault::create(&a, "a long enough test passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut engine, mut config, settings) = setup(temp.path(), "device", &a, &vault);
+    fs::write(config.folders[0].join("private"), "keep locally").unwrap();
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    let target = engine.state.bindings.keys().next().unwrap().clone();
+
+    let mut catalog = engine.state.catalog.clone().unwrap();
+    let other = papertrail_crypto::opaque_id();
+    catalog.folders.insert(
+        other.clone(),
+        papertrail_crypto::FolderData {
+            name: "Collision".into(),
+            color: "preset-0".into(),
+        },
+    );
+    let update = Revision::seal_record(
+        &key,
+        &a,
+        &vault.id,
+        &vault.id,
+        engine.state.catalog_head.clone(),
+        &Record::FolderCatalog(catalog),
+    )
+    .unwrap();
+    remote.upload(&update).unwrap().unwrap();
+    let downloads = temp.path().join("downloads");
+    fs::create_dir_all(downloads.join("Collision")).unwrap();
+    fs::write(downloads.join("Collision/untouched"), "unmanaged").unwrap();
+    config.download_dir = Some(downloads.clone());
+
+    // Discovery survives a failure in local folder creation and is visible even
+    // when an older unpublished draft exists.
+    let failure = engine
+        .run(&remote, &config, &key, &settings, &[])
+        .unwrap_err();
+    assert!(failure.to_string().contains("Collision"));
+    drop(engine);
+    let mut engine = Engine::open(temp.path().join("device/sync/state.json")).unwrap();
+    assert!(engine
+        .state
+        .catalog
+        .as_ref()
+        .unwrap()
+        .folders
+        .contains_key(&other));
+    let unpublished = papertrail_crypto::opaque_id();
+    let mut draft = engine.state.catalog.clone().unwrap();
+    draft.folders.remove(&other);
+    draft.folders.insert(
+        unpublished.clone(),
+        papertrail_crypto::FolderData {
+            name: "Unpublished".into(),
+            color: "preset-0".into(),
+        },
+    );
+    engine.state.catalog_draft = Some(draft);
+    engine.save().unwrap();
+    let service =
+        crate::control::Service::new_session_only(&temp.path().join("device/settings.json"));
+    let choices = service.folder_choices(&settings).unwrap();
+    assert!(choices.iter().any(|c| c.id.as_ref() == Some(&other)));
+    assert!(!choices.iter().any(|c| c.id.as_ref() == Some(&unpublished)));
+
+    // All of these would fail normal local preparation.
+    config
+        .folder_mappings
+        .insert(other.clone(), temp.path().join("missing"));
+    engine.state.folder_conflicts.insert(other.clone());
+    let mut pending_note = engine
+        .state
+        .notes
+        .values()
+        .next()
+        .unwrap()
+        .baseline
+        .clone()
+        .unwrap();
+    pending_note.folder_id = Some(other.clone());
+    let pending_id = papertrail_crypto::opaque_id();
+    let pending = Revision::seal_record(
+        &key,
+        &a,
+        &vault.id,
+        &pending_id,
+        None,
+        &Record::Note(pending_note),
+    )
+    .unwrap();
+    engine.state.outgoing.push(pending.clone());
+    let before = remote.revisions.borrow().len();
+    engine
+        .delete_folder(&remote, &config, &key, &settings, &target)
+        .unwrap();
+    assert_eq!(remote.revisions.borrow().len(), before + 1);
+    assert_eq!(
+        fs::read_to_string(config.folders[0].join("private")).unwrap(),
+        "keep locally"
+    );
+    assert_eq!(
+        fs::read_to_string(downloads.join("Collision/untouched")).unwrap(),
+        "unmanaged"
+    );
+    assert!(!temp.path().join("missing").exists());
+    assert!(engine
+        .state
+        .catalog_draft
+        .as_ref()
+        .unwrap()
+        .folders
+        .contains_key(&unpublished));
+    assert!(engine
+        .state
+        .catalog_draft
+        .as_ref()
+        .unwrap()
+        .deleted_folders
+        .contains(&target));
+    assert!(engine.state.folder_conflicts.contains(&other));
+    assert!(engine.state.outgoing.contains(&pending));
+}
+
+#[test]
+fn concurrent_server_changes_abort_deletion_without_marking_the_folder_deleted() {
+    struct Concurrent<'a> {
+        remote: &'a Memory,
+        update: Revision,
+    }
+    impl Remote for Concurrent<'_> {
+        fn changes(&self, cursor: u64, through: Option<u64>) -> io::Result<Changes> {
+            self.remote.changes(cursor, through)
+        }
+        fn upload(&self, _: &Revision) -> io::Result<Option<u64>> {
+            panic!("Deletion must not publish unrelated uploads");
+        }
+        fn erase_folder(&self, request: &papertrail_crypto::Erasure) -> io::Result<()> {
+            self.remote.upload(&self.update)?.unwrap();
+            self.remote.erase_folder(request)
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (vault, key, _) = Vault::create(&a, "a long enough test passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut engine, config, settings) = setup(temp.path(), "device", &a, &vault);
+    fs::write(config.folders[0].join("note"), "keep").unwrap();
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    let folder = engine.state.bindings.keys().next().unwrap().clone();
+    let update = Revision::seal_record(
+        &key,
+        &a,
+        &vault.id,
+        &vault.id,
+        engine.state.catalog_head.clone(),
+        &Record::FolderCatalog(engine.state.catalog.clone().unwrap()),
+    )
+    .unwrap();
+    let racing = Concurrent {
+        remote: &remote,
+        update,
+    };
+    assert!(engine
+        .delete_folder(&racing, &config, &key, &settings, &folder)
+        .is_err());
+    assert!(!engine
+        .state
+        .catalog
+        .as_ref()
+        .unwrap()
+        .deleted_folders
+        .contains(&folder));
+    assert!(remote.erased.borrow().is_empty());
+    assert_eq!(
+        fs::read_to_string(config.folders[0].join("note")).unwrap(),
+        "keep"
+    );
+    engine
+        .delete_folder(&remote, &config, &key, &settings, &folder)
+        .unwrap();
+}
+
+#[test]
+fn folder_choices_only_include_live_remote_ids_or_open_local_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (vault, key, _) = Vault::create(&a, "a long enough test passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut engine, mut config, mut settings) = setup(temp.path(), "device", &a, &vault);
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    let published = engine.state.bindings.keys().next().unwrap().clone();
+    let closed_draft = temp.path().join("closed-draft");
+    let config_only = temp.path().join("config-only");
+    fs::create_dir(&closed_draft).unwrap();
+    fs::create_dir(&config_only).unwrap();
+    let draft_id = papertrail_crypto::opaque_id();
+    let mut draft = engine.state.catalog.clone().unwrap();
+    draft
+        .folders
+        .insert(draft_id.clone(), draft.folders[&published].clone());
+    engine.state.catalog_draft = Some(draft);
+    engine.state.bindings.insert(
+        draft_id.clone(),
+        crate::folders::Binding {
+            path: closed_draft.clone(),
+            managed: false,
+            observed_name: "closed-draft".into(),
+            observed_label: None,
+            observed_color: None,
+        },
+    );
+    config.folders.push(config_only.clone());
+    engine.save().unwrap();
+    fs::write(
+        temp.path().join("device/sync/config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    let journal = fs::read(&engine.state_path).unwrap();
+    settings.note_folders.clear(); // A live remote collection remains visible.
+    let service =
+        crate::control::Service::new_session_only(&temp.path().join("device/settings.json"));
+    let choices = service.folder_choices(&settings).unwrap();
+    assert_eq!(choices.len(), 1);
+    assert_eq!(choices[0].id.as_ref(), Some(&published));
+    settings.note_folders.push(closed_draft);
+    let choices = service.folder_choices(&settings).unwrap();
+    assert!(choices.iter().any(|c| c.id.as_ref() == Some(&draft_id)));
+    assert!(!choices
+        .iter()
+        .any(|c| c.path.as_ref() == Some(&config_only)));
+    assert_eq!(fs::read(&engine.state_path).unwrap(), journal);
+}
+
+#[test]
+fn mapping_preflight_reports_retained_owners_without_partial_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (vault, key, _) = Vault::create(&a, "a long enough test passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut engine, mut config, settings) = setup(temp.path(), "device", &a, &vault);
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    let owner = engine.state.bindings.keys().next().unwrap().clone();
+    let first = "BBBBBBBBBBBBBBBBBBBBBB".to_owned();
+    let second = "CCCCCCCCCCCCCCCCCCCCCC".to_owned();
+    let data = engine.state.catalog.as_ref().unwrap().folders[&owner].clone();
+    let catalog = engine.state.catalog.as_mut().unwrap();
+    catalog.folders.insert(first.clone(), data.clone());
+    catalog.folders.insert(second.clone(), data);
+    // Unchecking an owner does not give another folder permission to adopt it.
+    config.excluded_folders.insert(owner.clone());
+    let separate = temp.path().join("separate");
+    fs::create_dir(&separate).unwrap();
+    config.folder_mappings.insert(first.clone(), separate);
+    config
+        .folder_mappings
+        .insert(second.clone(), config.folders[0].clone());
+    let message = engine
+        .run(&remote, &config, &key, &settings, &[])
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains(&owner));
+    assert!(message.contains(&second));
+    assert!(message.contains(&config.folders[0].display().to_string()));
+    assert!(!engine.state.bindings.contains_key(&first));
+    assert!(!engine.state.bindings.contains_key(&second));
+}
+
+#[test]
 fn folder_erasure_keeps_local_edits_and_prevents_offline_reupload() {
     let temp = tempfile::tempdir().unwrap();
     let a = Account {
@@ -354,6 +637,7 @@ fn setup(root: &Path, name: &str, a: &Account, v: &Vault) -> (Engine, Config, Se
             path: notes.clone(),
             managed: false,
             observed_name: "Notes".into(),
+            observed_label: None,
             observed_color: None,
         },
     );
@@ -1315,7 +1599,7 @@ fn a_lost_catalog_response_keeps_folder_ids_stable_across_restart() {
     let (v, key, _) = Vault::create(&a, "long enough passphrase").unwrap();
     let remote = Memory::default();
     let (mut e1, mut c1, s1) = setup(temp.path(), "one", &a, &v);
-    let (mut e2, mut c2, s2) = setup(temp.path(), "two", &a, &v);
+    let (mut e2, mut c2, mut s2) = setup(temp.path(), "two", &a, &v);
     e1.run(&remote, &c1, &key, &s1, &[]).unwrap();
     e2.run(&remote, &c2, &key, &s2, &[]).unwrap();
     let remote_new = temp.path().join("one/Remote new");
@@ -1340,11 +1624,204 @@ fn a_lost_catalog_response_keeps_folder_ids_stable_across_restart() {
         .0
         .clone();
     drop(e2);
-    let mut e2 = Engine::open(journal).unwrap();
+    let mut e2 = Engine::open(journal.clone()).unwrap();
     assert!(e2.state.bindings.contains_key(&id));
     e2.run(&remote, &c2, &key, &s2, &[]).unwrap();
     assert_eq!(e2.state.catalog.as_ref().unwrap().folders.len(), 3);
     assert_eq!(e2.state.bindings[&id].path, local_new);
+    s2.folder_labels
+        .insert(local_new.clone(), "Rename with lost response".into());
+    let lost = LostResponse {
+        remote: &remote,
+        lost: std::cell::Cell::new(false),
+    };
+    assert!(e2.run(&lost, &c2, &key, &s2, &[]).is_err());
+    let published = remote.revisions.borrow().len();
+    drop(e2);
+    let mut e2 = Engine::open(journal).unwrap();
+    e2.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    e2.folder_settings(&c2, &mut s2);
+    assert_eq!(s2.folder_name(&local_new), "Rename with lost response");
+    assert_eq!(e2.state.bindings[&id].path, local_new);
+    assert_eq!(remote.revisions.borrow().len(), published);
+}
+
+#[test]
+fn display_label_renames_survive_sync_restart_and_differently_named_device_mappings() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (v, key, _) = Vault::create(&a, "long enough passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut one, c1, mut s1) = setup(temp.path(), "one", &a, &v);
+    let (mut two, mut c2, mut s2) = setup(temp.path(), "two", &a, &v);
+    let id = "AAAAAAAAAAAAAAAAAAAAAA";
+    let first_path = c1.folders[0].clone();
+    let second_path = temp.path().join("Local inbox");
+    fs::create_dir(&second_path).unwrap();
+    s2.add_folder(second_path.clone(), false);
+    c2.folders = vec![second_path.clone()];
+    c2.folder_mappings.insert(id.into(), second_path.clone());
+    fs::write(first_path.join("keep.txt"), "keep my note").unwrap();
+    s1.folder_labels
+        .insert(first_path.clone(), "Before first sync".into());
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    assert_eq!(
+        one.state.catalog.as_ref().unwrap().folders[id].name,
+        "Before first sync"
+    );
+    two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    two.folder_settings(&c2, &mut s2);
+    assert_eq!(s2.folder_name(&second_path), "Before first sync");
+
+    // iOS edits only folder_labels, not the physical directory.
+    s1.folder_labels
+        .insert(first_path.clone(), "Renamed on iOS".into());
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    one.folder_settings(&c1, &mut s1);
+    assert_eq!(s1.folder_name(&first_path), "Renamed on iOS");
+    let journal = one.state_path.clone();
+    let note_ids: BTreeSet<_> = one.state.notes.keys().cloned().collect();
+    drop(one);
+    let mut one = Engine::open(journal.clone()).unwrap();
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    two.folder_settings(&c2, &mut s2);
+    assert_eq!(s2.folder_name(&second_path), "Renamed on iOS");
+    let revisions = remote.revisions.borrow().len();
+    // Downloaded labels must not be mistaken for a new local rename on retry.
+    for _ in 0..2 {
+        one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+        two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    }
+    assert_eq!(remote.revisions.borrow().len(), revisions);
+    assert_eq!(
+        one.state.notes.keys().cloned().collect::<BTreeSet<_>>(),
+        note_ids
+    );
+    assert_eq!(one.state.bindings[id].path, first_path);
+    assert_eq!(two.state.bindings[id].path, second_path);
+    assert_eq!(
+        fs::read_to_string(first_path.join("keep.txt")).unwrap(),
+        "keep my note"
+    );
+    assert_eq!(
+        fs::read_to_string(second_path.join("keep.txt")).unwrap(),
+        "keep my note"
+    );
+
+    // Old journals have no display-label observation. A pending rename must
+    // still be published on the first sync after upgrade.
+    drop(one);
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+    legacy["bindings"][id]
+        .as_object_mut()
+        .unwrap()
+        .remove("observed_label");
+    fs::write(&journal, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    s1.folder_labels
+        .insert(first_path.clone(), "Rename from old journal".into());
+    let mut one = Engine::open(journal).unwrap();
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    assert_eq!(
+        one.state.catalog.as_ref().unwrap().folders[id].name,
+        "Rename from old journal"
+    );
+    assert!(first_path.is_dir());
+}
+
+#[test]
+fn new_and_paused_collections_preserve_display_labels_without_renaming_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (v, key, _) = Vault::create(&a, "long enough passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut engine, mut config, mut settings) = setup(temp.path(), "device", &a, &v);
+    engine.state.bindings.clear();
+    engine.state.catalog_draft = None;
+    let path = config.folders[0].clone();
+    settings
+        .folder_labels
+        .insert(path.clone(), "Custom name before sync".into());
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    let id = engine.state.bindings.keys().next().unwrap().clone();
+    assert_eq!(
+        engine.state.catalog.as_ref().unwrap().folders[&id].name,
+        "Custom name before sync"
+    );
+    config.excluded_folders.insert(id.clone());
+    settings
+        .folder_labels
+        .insert(path.clone(), "Renamed while paused".into());
+    let before = remote.revisions.borrow().len();
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    engine.folder_settings(&config, &mut settings);
+    assert_eq!(remote.revisions.borrow().len(), before);
+    assert_eq!(settings.folder_name(&path), "Renamed while paused");
+    config.excluded_folders.remove(&id);
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    engine.folder_settings(&config, &mut settings);
+    assert_eq!(settings.folder_name(&path), "Renamed while paused");
+    // Clearing a label restores the physical basename logically; it does not
+    // move or rename the directory.
+    settings.folder_labels.remove(&path);
+    engine.run(&remote, &config, &key, &settings, &[]).unwrap();
+    assert_eq!(
+        engine.state.catalog.as_ref().unwrap().folders[&id].name,
+        "Notes"
+    );
+    assert_eq!(engine.state.bindings[&id].path, path);
+    assert!(path.is_dir());
+}
+
+#[test]
+fn concurrent_display_label_renames_require_confirmation_and_remote_updates_do_not_echo() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = Account {
+        iss: "https://issuer.example".into(),
+        sub: "alice".into(),
+    };
+    let (v, key, _) = Vault::create(&a, "long enough passphrase").unwrap();
+    let remote = Memory::default();
+    let (mut one, c1, mut s1) = setup(temp.path(), "one", &a, &v);
+    let (mut two, c2, mut s2) = setup(temp.path(), "two", &a, &v);
+    let id = "AAAAAAAAAAAAAAAAAAAAAA";
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    one.folder_settings(&c1, &mut s1);
+    two.folder_settings(&c2, &mut s2);
+    s1.folder_labels
+        .insert(c1.folders[0].clone(), "First rename".into());
+    s2.folder_labels
+        .insert(c2.folders[0].clone(), "Second rename".into());
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    assert!(two.run(&remote, &c2, &key, &s2, &[]).is_err());
+    assert!(two.state.folder_conflicts.contains(id));
+    assert_eq!(s2.folder_name(&c2.folders[0]), "Second rename");
+    let journal = two.state_path.clone();
+    drop(two);
+    let service = crate::control::Service::new_session_only(&temp.path().join("two/settings.json"));
+    service.accept_remote_folder(id, &s2).unwrap();
+    let mut two = Engine::open(journal).unwrap();
+    two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    two.folder_settings(&c2, &mut s2);
+    assert_eq!(s2.folder_name(&c2.folders[0]), "First rename");
+    // A second remote rename arrives before another local preparation. The
+    // settings label from the previous download is not a competing local edit.
+    s1.folder_labels
+        .insert(c1.folders[0].clone(), "Third rename".into());
+    one.run(&remote, &c1, &key, &s1, &[]).unwrap();
+    two.run(&remote, &c2, &key, &s2, &[]).unwrap();
+    two.folder_settings(&c2, &mut s2);
+    assert_eq!(s2.folder_name(&c2.folders[0]), "Third rename");
+    assert!(two.state.folder_conflicts.is_empty());
+    assert!(c1.folders[0].is_dir() && c2.folders[0].is_dir());
 }
 
 #[test]

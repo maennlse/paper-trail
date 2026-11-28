@@ -19,7 +19,7 @@ settings:
     CODE_SIGNING_REQUIRED: NO
     DEVELOPMENT_TEAM: ""
     TARGETED_DEVICE_FAMILY: "1,2"
-    MARKETING_VERSION: "0.7.0"
+    MARKETING_VERSION: "0.8.0"
     CURRENT_PROJECT_VERSION: "1"
 targets:
   PaperTrail:
@@ -47,6 +47,14 @@ targets:
         product: TreeSitterTOMLRunestone
       - package: TreeSitterLanguages
         product: TreeSitterYAMLRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterBashRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterHTMLRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterCSSRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterSQLRunestone
     sources:
       - Sources
       - Resources
@@ -94,6 +102,10 @@ targets:
       - Sources/NoteExport.swift
       - Sources/SyntaxHighlighting.swift
       - Sources/SyncRelativeTime.swift
+      - Sources/SyncFolderDeletion.swift
+      - Sources/NoteTimestamp.swift
+      - Sources/NoteFindState.swift
+      - Sources/SyncTriggerState.swift
       - Sources/AppVersion.swift
     settings:
       base:

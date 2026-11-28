@@ -49,7 +49,7 @@ python3 build-aux/build_local.py --mode standalone --components server --dry-run
 - **Native** is the default: local TUI/server archives have `-native` in their
   names and a `BUILD-INFO.txt` warning that compatible OS/runtime libraries may
   be needed. They are **not** silently advertised as static/portable releases.
-  GTK packaging currently supports Linux x86_64 and requires the GNOME development
+  GTK packaging supports Linux x86_64 and aarch64 and requires the GNOME development
   libraries below; other hosts can build TUI/server without GTK.
 - **Standalone** builds TUI/server using the same target and linkage checks as CI:
   Linux musl, Windows MSVC with static CRT, or Apple system libraries on macOS.

@@ -186,7 +186,7 @@ impl App {
         app.refresh()?;
         if let Some(recovery) = recovery {
             app.status = format!(
-                "Folder unavailable: {}. Using {}. :folder PATH to restore access.",
+                "Folder unavailable: {}. Using {}. :folder-open PATH to restore access.",
                 recovery.unavailable.display(),
                 recovery.fallback.display()
             );
@@ -250,7 +250,7 @@ impl App {
             .min(self.notes.len().saturating_sub(1));
         if !unavailable.is_empty() {
             self.status = format!(
-                "{} unavailable folder(s); :folder PATH to restore access",
+                "{} unavailable folder(s); :folder-open PATH to restore access",
                 unavailable.len()
             );
         }
@@ -1123,14 +1123,46 @@ impl App {
         self.refresh()
     }
     pub fn command(&mut self, input: &str) -> io::Result<()> {
-        self.synchronize_neovim()?;
-        let (command, arg) = input.trim().split_once(' ').unwrap_or((input.trim(), ""));
+        let (command, arg) = input
+            .trim()
+            .split_once(char::is_whitespace)
+            .unwrap_or((input.trim(), ""));
         let arg = arg.trim();
+        if let Some((_, replacement)) = crate::completion::RETIRED
+            .iter()
+            .find(|(old, _)| *old == command)
+        {
+            return Err(io::Error::other(format!(
+                "Command :{command} was removed; use {replacement}"
+            )));
+        }
+        if !arg.is_empty()
+            && matches!(
+                command,
+                "folder-all"
+                    | "folder-close"
+                    | "folder-up"
+                    | "folder-down"
+                    | "login-sign-out"
+                    | "login-cancel"
+                    | "login-show"
+                    | "vault-lock"
+                    | "sync"
+                    | "sync-folders"
+                    | "sync-status"
+                    | "sync-discovery-cancel"
+            )
+        {
+            return Err(io::Error::other(format!(
+                "Use :{command} without arguments"
+            )));
+        }
+        self.synchronize_neovim()?;
         match command {
             "sync-configure" => {
                 let parts = shell_words::split(arg).map_err(io::Error::other)?;
-                if !matches!(parts.len(), 1 | 3 | 4) {
-                    return Err(io::Error::other("Usage: :sync-configure HTTPS_SERVER (discovery), or :sync-configure HTTPS_SERVER HTTPS_ISSUER PUBLIC_CLIENT_ID 'openid offline_access API_SCOPE' (manual; scopes optional)"));
+                if parts.len() != 1 {
+                    return Err(io::Error::other("Usage: :sync-configure HTTPS_SERVER. Authentication is discovered from the server; manual setup is no longer supported"));
                 }
                 if self.sync_job.is_some() {
                     return Err(io::Error::other(
@@ -1148,32 +1180,15 @@ impl App {
                 if fresh {
                     config.folders = vec![self.settings.notes_dir.clone()];
                 }
-                if parts.len() == 1 {
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    std::thread::spawn(move || {
-                        let _ = tx.send(papertrail_sync::auth::config::prepare(config));
-                    });
-                    self.discovery_job = Some(DiscoveryJob {
-                        result: rx,
-                        previous: saved,
-                    });
-                    self.status = "Discovering authentication; editing remains available. :sync-discovery-cancel cancels".into();
-                    return Ok(());
-                }
-                config.discover_auth = false;
-                config.issuer = parts[1].clone();
-                config.client_id = parts[2].clone();
-                config.scopes = parts.get(3).cloned().unwrap_or_else(|| {
-                    if config.scopes.is_empty() {
-                        "openid offline_access".into()
-                    } else {
-                        config.scopes.clone()
-                    }
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(papertrail_sync::auth::config::prepare(config));
                 });
-                self.sync.configure(config)?;
-                self.status =
-                    "Sync configured for active folder. :login, then :create-vault or :unlock"
-                        .into();
+                self.discovery_job = Some(DiscoveryJob {
+                    result: rx,
+                    previous: saved,
+                });
+                self.status = "Discovering authentication; editing remains available. :sync-discovery-cancel cancels".into();
             }
             "sync-discovery-cancel" => {
                 self.discovery_job = None;
@@ -1208,34 +1223,7 @@ impl App {
                 self.sync.configure(config)?;
                 self.status = "Remote-folder download policy saved".into();
             }
-            "sync-select-folder" | "sync-unselect-folder" => {
-                let choices = self.sync.folder_choices(&self.settings)?;
-                let choice = choices
-                    .iter()
-                    .find(|f| f.id.as_deref() == Some(arg))
-                    .ok_or_else(|| {
-                        io::Error::other("Unknown remote folder ID; use :sync-folders")
-                    })?;
-                let mut config = self
-                    .sync
-                    .saved_config()?
-                    .ok_or_else(|| io::Error::other("Configure Sync first"))?;
-                if command == "sync-select-folder" {
-                    config.selected_folders.insert(arg.into());
-                    config.excluded_folders.remove(arg);
-                } else {
-                    config.selected_folders.remove(arg);
-                    config.excluded_folders.insert(arg.into());
-                    if let Some(path) = &choice.path {
-                        config
-                            .folders
-                            .retain(|p| !papertrail_sync::same_directory(p, path));
-                    }
-                }
-                self.sync.configure(config)?;
-                self.status = "Folder selection saved; no notes deleted".into();
-            }
-            "sync-add-folder" | "sync-remove-folder" | "sync-download-dir" => {
+            "sync-download-dir" => {
                 let mut config = self
                     .sync
                     .saved_config()?
@@ -1246,44 +1234,10 @@ impl App {
                 } else {
                     std::env::current_dir()?.join(path)
                 };
-                if command == "sync-download-dir" {
-                    config.download_dir = Some(path);
-                } else {
-                    let path = fs::canonicalize(path)?;
-                    check_notes_folder(&path)?;
-                    if command == "sync-add-folder" {
-                        if !config
-                            .folders
-                            .iter()
-                            .any(|p| papertrail_sync::same_directory(p, &path))
-                        {
-                            config.folders.push(path.clone());
-                        }
-                    } else {
-                        config.download_dir = Some(config.download_root()?);
-                        config
-                            .folders
-                            .retain(|p| !papertrail_sync::same_directory(p, &path));
-                    }
-                    for choice in self.sync.folder_choices(&self.settings)? {
-                        if choice
-                            .path
-                            .as_ref()
-                            .is_some_and(|p| papertrail_sync::same_directory(p, &path))
-                        {
-                            if let Some(id) = choice.id {
-                                if command == "sync-add-folder" {
-                                    config.excluded_folders.remove(&id);
-                                } else {
-                                    config.excluded_folders.insert(id);
-                                }
-                            }
-                        }
-                    }
-                }
+                config.download_dir = Some(path);
                 self.sync.configure(config)?;
                 self.status =
-                    "Sync folder selection saved; local and remote notes were kept".into();
+                    "Remote-folder download directory saved; existing mappings unchanged".into();
             }
             "sync-map-folder" | "sync-map-legacy" => {
                 let parts = shell_words::split(arg).map_err(io::Error::other)?;
@@ -1325,10 +1279,10 @@ impl App {
             }
             "sync" => self.sync_now()?,
             "sync-status" => self.sync_start(SyncCommand::Status)?,
-            "login" => {
+            "login-start" => {
                 if !arg.is_empty() {
                     return Err(io::Error::other(
-                        "Use :login without arguments; approve the displayed code in your browser",
+                        "Use :login-start without arguments; approve the displayed code in your browser",
                     ));
                 }
                 self.login_device()?;
@@ -1345,10 +1299,10 @@ impl App {
                     self.device_details = true;
                     self.help_scroll = 0;
                 } else {
-                    self.status = "No device code to display; use :login".into();
+                    self.status = "No device code to display; use :login-start".into();
                 }
             }
-            "logout" => {
+            "login-sign-out" => {
                 self.sync_unlocked = false;
                 self.recovery_key = None;
                 if self.sync_job.is_some() {
@@ -1361,7 +1315,7 @@ impl App {
                     self.sync_start(SyncCommand::Logout)?;
                 }
             }
-            "lock" => {
+            "vault-lock" => {
                 self.sync_unlocked = false;
                 self.recovery_key = None;
                 if self.sync_job.is_some() {
@@ -1374,14 +1328,14 @@ impl App {
                     self.sync_start(SyncCommand::Lock)?;
                 }
             }
-            "unlock" | "create-vault" | "recover-vault" | "change-passphrase" => {
+            "vault-unlock" | "vault-create" | "vault-recover" | "vault-change-passphrase" => {
                 if !arg.is_empty() {
                     return Err(io::Error::other("Never enter a passphrase or recovery key as a command argument; use the masked prompt"));
                 }
                 self.start_prompt(match command {
-                    "unlock" => PromptKind::Unlock,
-                    "create-vault" => PromptKind::CreateVault,
-                    "recover-vault" => PromptKind::RecoverVault,
+                    "vault-unlock" => PromptKind::Unlock,
+                    "vault-create" => PromptKind::CreateVault,
+                    "vault-recover" => PromptKind::RecoverVault,
                     _ => PromptKind::ChangePassphrase,
                 });
             }
@@ -1422,7 +1376,7 @@ impl App {
                 self.persist()?;
                 self.refresh()?;
             }
-            "folder" => {
+            "folder-open" => {
                 self.flush()?;
                 let folder = self.folder_arg(arg)?;
                 check_notes_folder(&folder)?;
@@ -1440,7 +1394,7 @@ impl App {
                 self.refresh()?;
                 self.persist()?;
             }
-            "close-folder" => {
+            "folder-close" => {
                 let folder = self.settings.notes_dir.clone();
                 let next = self
                     .settings
@@ -1478,17 +1432,17 @@ impl App {
                 self.folder_index = next;
                 self.persist()?;
             }
-            "all" => {
+            "folder-all" => {
                 self.activate_folder_row(0)?;
             }
             "pin" => {
                 let path = self.current_path()?;
                 self.pin(&path)?;
             }
-            "color" => {
+            "folder-color" => {
                 if !valid_color(arg) {
                     return Err(io::Error::other(
-                        "Use :color preset-0 through preset-11, or #rrggbb",
+                        "Use :folder-color preset-0 through preset-11, or #rrggbb",
                     ));
                 }
                 self.settings
@@ -1722,7 +1676,7 @@ impl App {
             self.status = if cancel.cancel() {
                 "Cancelling device sign-in… Editing remains available."
             } else {
-                "Sign-in is already approved and finishing. Use :logout to clear the session."
+                "Sign-in is already approved and finishing. Use :login-sign-out to clear the session."
             }
             .into();
         } else {
@@ -1884,7 +1838,7 @@ impl App {
         }
         self.sync.configure(config)?;
         self.status =
-            "Authentication configuration accepted. :login, then :create-vault or :unlock".into();
+            "Authentication configuration accepted. :login-start, then :vault-create or :vault-unlock".into();
         Ok(())
     }
     fn folder_arg(&self, arg: &str) -> io::Result<PathBuf> {

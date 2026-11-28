@@ -16,6 +16,10 @@ final class SyntaxHighlightingTests: XCTestCase {
             "swift": "let answer = 42\n",
             "toml": "[note]\nanswer = 42\n",
             "yaml": "answer: true\n",
+            "sh": "#!/bin/bash\nfor file in *.txt; do echo \"$file\"; done\n",
+            "html": "<main class=\"note\">Hello</main>",
+            "css": ".note { color: red; }",
+            "sql": "SELECT title FROM notes WHERE pinned = 1;",
         ]
         for (id, text) in samples {
             let language = highlighter.treeSitterLanguage(named: id)

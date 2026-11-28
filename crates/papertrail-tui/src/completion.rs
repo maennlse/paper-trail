@@ -3,14 +3,9 @@
 use std::{fs, io, path::Path};
 
 pub const COMMANDS: &[&str] = &[
-    "all",
-    "close-folder",
-    "color ",
+    // Notes, editing, and conventional Vim commands.
     "delete",
     "edit",
-    "folder ",
-    "folder-down",
-    "folder-up",
     "help",
     "move ",
     "new ",
@@ -30,30 +25,56 @@ pub const COMMANDS: &[&str] = &[
     "w",
     "wq",
     "x",
+    // Local folders.
+    "folder-all",
+    "folder-close",
+    "folder-color ",
+    "folder-down",
+    "folder-open ",
+    "folder-up",
+    // Account authentication.
+    "login-start",
+    "login-browser",
+    "login-cancel",
+    "login-show",
+    "login-sign-out",
+    // Vault key lifecycle.
+    "vault-unlock",
+    "vault-lock",
+    "vault-create",
+    "vault-recover",
+    "vault-change-passphrase",
+    // Sync and mapping/migration operations not covered by the folder picker.
     "sync",
     "sync-configure ",
     "sync-discovery-cancel",
     "sync-status",
-    "login",
-    "logout",
-    "unlock",
-    "lock",
-    "create-vault",
-    "recover-vault",
-    "change-passphrase",
     "sync-folders",
-    "sync-add-folder ",
-    "sync-remove-folder ",
     "sync-download-dir ",
     "sync-map-folder ",
     "sync-map-legacy ",
     "sync-accept-remote ",
     "sync-auto-download ",
-    "sync-select-folder ",
-    "sync-unselect-folder ",
-    "login-browser",
-    "login-cancel",
-    "login-show",
+];
+
+/// Retired spellings are errors, not hidden executable aliases. Never echo the
+/// user's arguments: they may contain a passphrase entered by mistake.
+pub const RETIRED: &[(&str, &str)] = &[
+    ("folder", ":folder-open PATH or NUMBER"),
+    ("close-folder", ":folder-close"),
+    ("all", ":folder-all"),
+    ("color", ":folder-color COLOR"),
+    ("login", ":login-start"),
+    ("logout", ":login-sign-out"),
+    ("unlock", ":vault-unlock"),
+    ("lock", ":vault-lock"),
+    ("create-vault", ":vault-create"),
+    ("recover-vault", ":vault-recover"),
+    ("change-passphrase", ":vault-change-passphrase"),
+    ("sync-add-folder", ":sync-folders to select folders"),
+    ("sync-remove-folder", ":sync-folders to uncheck folders"),
+    ("sync-select-folder", ":sync-folders to select folders"),
+    ("sync-unselect-folder", ":sync-folders to uncheck folders"),
 ];
 
 #[derive(Default)]
@@ -168,14 +189,19 @@ pub fn candidates(
             .map(|v| format!("set {v}"))
             .collect()
         }
-        "color" => (0..12)
+        "folder-color" => (0..12)
             .map(|n| format!("preset-{n}"))
             .filter(|v| v.starts_with(arg))
-            .map(|v| format!("color {v}"))
+            .map(|v| format!("folder-color {v}"))
             .collect(),
-        "folder" | "move" | "saveas" => {
+        "sync-auto-download" => ["on", "off"]
+            .iter()
+            .filter(|value| value.starts_with(arg))
+            .map(|value| format!("{command} {value}"))
+            .collect(),
+        "folder-open" | "move" | "saveas" | "sync-download-dir" => {
             let mut values = paths(command, arg, cwd, home, command != "saveas")?;
-            if command != "saveas" {
+            if matches!(command, "folder-open" | "move") {
                 values.extend(
                     (1..=folder_count)
                         .map(|n| n.to_string())

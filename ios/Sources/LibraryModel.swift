@@ -97,9 +97,16 @@ final class NativeHost: @unchecked Sendable {
         for url in scopedURLs { url.stopAccessingSecurityScopedResource() }
     }
 
-    func perform<T>(_ work: @escaping (PaperTrailClient) throws -> T) async throws -> T {
+    func perform<T>(coordinatingFiles: Bool = true,
+                    _ work: @escaping (PaperTrailClient) throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             worker.addOperation {
+                // Catalog-only operations must not depend on unrelated Files
+                // providers being available. They still use the serial worker.
+                guard coordinatingFiles else {
+                    continuation.resume(with: Result { try work(self.client) })
+                    return
+                }
                 // Collapse nested roots to avoid coordinating the same provider twice.
                 let unique = Array(Set(self.roots))
                 let roots = unique.filter { candidate in
@@ -208,6 +215,7 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     private var automaticSyncBlocked = false
     private var operationCancelled = false
     private var stopGeneration = 0
+    private var syncTriggers = SyncTriggerState()
 
     var colorScheme: ColorScheme? {
         switch snapshot?.appearance ?? "light" {
@@ -221,9 +229,10 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
     var title: String { folders.first { $0.path == selectedFolder }?.name ?? "All Notes" }
     var saveFailed: Bool { editorSave.phase == .failed }
 
-    func call<T>(_ work: @escaping (PaperTrailClient) throws -> T) async throws -> T {
+    func call<T>(coordinatingFiles: Bool = true,
+                 _ work: @escaping (PaperTrailClient) throws -> T) async throws -> T {
         guard let host else { throw CocoaError(.fileReadUnknown) }
-        return try await host.perform(work)
+        return try await host.perform(coordinatingFiles: coordinatingFiles, work)
     }
 
     func start() async {
@@ -356,6 +365,7 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
             try await call { try $0.closeNote() }
             editorPath = nil
             await refresh()
+            requestAutomaticSync()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -534,6 +544,7 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         stopGeneration += 1
         operationCancelled = true
         automaticSyncBlocked = true
+        syncTriggers.cancel()
         authentication?.cancel()
         try? host?.client.cancelSync()
         syncMessage = "Cancelling… Waiting for the current request to finish."
@@ -545,18 +556,71 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         if let pending = pendingSyncAction {
             pendingSyncAction = nil
             await sync(pending)
-        } else if autoSync && !automaticSyncBlocked && !operationCancelled && unlocked {
-            // Release the secret dialog before starting network work. A lock
-            // requested in between must prevent this automatic follow-up.
-            let generation = stopGeneration
-            Task {
-                guard !self.busy, !self.automaticSyncBlocked, self.pendingSyncAction == nil,
-                      self.stopGeneration == generation else { return }
-                await self.sync(.synchronize)
-            }
         } else if operationCancelled {
             syncMessage = "Operation cancelled. Automatic sync paused; choose Sync Now to resume."
+        } else {
+            if autoSync { syncTriggers.request() }
+            scheduleRequestedSync()
         }
+    }
+
+    private var canAutomaticallySync: Bool {
+        configured && signedIn && unlocked && recovery == nil && !automaticSyncBlocked
+            && !operationCancelled && pendingSyncAction == nil
+    }
+
+    private func requestAutomaticSync() {
+        guard canAutomaticallySync else { return }
+        syncTriggers.request()
+        scheduleRequestedSync()
+    }
+
+    private func scheduleRequestedSync() {
+        guard syncTriggers.takeIfReady(allowed: canAutomaticallySync, busy: busy) else { return }
+        let generation = stopGeneration
+        Task {
+            guard self.stopGeneration == generation, self.canAutomaticallySync else { return }
+            if self.busy {
+                self.syncTriggers.request()
+                return
+            }
+            await self.sync(.synchronize)
+        }
+    }
+
+    func refreshAndSync() async {
+        await refresh()
+        guard configured, signedIn, unlocked, recovery == nil else { return }
+        if busy {
+            // Never revive a cancelled operation or override a queued lock.
+            guard !operationCancelled, pendingSyncAction == nil else { return }
+            syncTriggers.request()
+        } else {
+            // An explicit pull resumes sync after cancellation, like Sync Now.
+            automaticSyncBlocked = false
+            await sync(.synchronize)
+        }
+    }
+
+    func downloadRemoteFolder(_ id: String) async {
+        guard !busy, configured, signedIn, unlocked, recovery == nil else { return }
+        let generation = stopGeneration
+        busy = true
+        operationCancelled = false
+        var selected = false
+        do {
+            try await call(coordinatingFiles: false) { try $0.selectSyncFolder(id: id) }
+            selected = true
+        } catch {
+            if pendingSyncAction == nil && !operationCancelled {
+                errorMessage = error.localizedDescription
+            }
+        }
+        await finishOperation()
+        guard selected, stopGeneration == generation, pendingSyncAction == nil,
+              !operationCancelled, signedIn, unlocked else { return }
+        automaticSyncBlocked = false
+        await sync(.synchronize)
     }
 
     @discardableResult
@@ -569,6 +633,7 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
             }
             stopGeneration += 1
             automaticSyncBlocked = true
+            syncTriggers.cancel()
             unlocked = false
             recovery = nil
             vaultPrompt = nil
@@ -587,6 +652,13 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         default: break
         }
         guard !busy else { return false }
+        let deletingFolder: Bool
+        if case .deleteFolder = action {
+            guard signedIn, unlocked, recovery == nil else { return false }
+            deletingFolder = true
+        } else {
+            deletingFolder = false
+        }
         switch action {
         case .unlock, .create, .recover, .changePassphrase, .synchronize:
             automaticSyncBlocked = false
@@ -598,6 +670,7 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
             syncing = true
             syncMessage = "Synchronizing…"
         }
+        if deletingFolder { syncMessage = "Deleting folder from server…" }
         operationCancelled = false
         var succeeded = false
         var autoSync = false
@@ -608,7 +681,9 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
                 await finishOperation()
                 return false
             }
-            let result = try await call { try $0.syncAction(action: action, secret: secret, remember: remember) }
+            let result = try await call(coordinatingFiles: !deletingFolder) {
+                try $0.syncAction(action: action, secret: secret, remember: remember)
+            }
             if pendingSyncAction == nil && !operationCancelled {
                 syncMessage = [result.message, result.warning].compactMap { $0 }.joined(separator: "\n")
                 if let value = result.recovery { recovery = value }
@@ -621,13 +696,14 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
                     host?.lastSuccessfulSync = syncFeedback.lastSuccess
                 }
             }
-            if pendingSyncAction == nil && !operationCancelled { await refresh() }
+            if !deletingFolder && pendingSyncAction == nil && !operationCancelled { await refresh() }
         } catch {
             if pendingSyncAction == nil && !operationCancelled {
                 if syncing {
                     syncMessage = "Sync did not finish."
                     syncFeedback.failure = error.localizedDescription
                 } else {
+                    if deletingFolder { syncMessage = "Folder deletion did not finish." }
                     errorMessage = error.localizedDescription
                 }
             }
@@ -635,6 +711,21 @@ final class LibraryModel: NSObject, ObservableObject, ASWebAuthenticationPresent
         syncing = false
         await finishOperation(autoSync: autoSync)
         return succeeded
+    }
+
+    func acceptRemoteFolder(_ id: String) async {
+        guard !busy, recovery == nil else { return }
+        busy = true
+        operationCancelled = false
+        do {
+            try await call(coordinatingFiles: false) { try $0.acceptSyncFolder(id: id) }
+            syncMessage = "Remote folder name and color accepted. Sync Now to apply them."
+        } catch {
+            if pendingSyncAction == nil && !operationCancelled {
+                errorMessage = error.localizedDescription
+            }
+        }
+        await finishOperation()
     }
 
     func prepareConfiguration(_ profile: SyncProfile) async -> SyncSetup? {

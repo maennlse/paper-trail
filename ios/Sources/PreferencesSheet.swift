@@ -51,7 +51,11 @@ struct PreferencesSheet: View {
                 Section("Registered Folders") {
                     ForEach(model.folders, id: \.path) { folder in
                         VStack(alignment: .leading) {
-                            Text(folder.name)
+                            Label {
+                                Text(folder.name)
+                            } icon: {
+                                FolderBadge(badge: folder.badge, color: Color(folderHex: folder.color), size: 25)
+                            }
                             Text(folder.path).font(.caption2).foregroundStyle(.secondary)
                             Button("Edit Folder…") { editingFolder = folder }
                             if model.folders.count > 1 {

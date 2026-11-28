@@ -23,6 +23,9 @@ pub struct Binding {
     pub path: PathBuf,
     pub managed: bool,
     pub observed_name: String,
+    /// Last local display-label observation, separate from the physical basename.
+    #[serde(default)]
+    pub observed_label: Option<String>,
     pub observed_color: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -38,6 +41,75 @@ pub struct FolderChoice {
     pub name: String,
     pub selected: bool,
     pub conflict: bool,
+    /// The journal's current binding, when a configured remap is still pending.
+    pub stored_path: Option<PathBuf>,
+}
+
+pub(crate) struct DiscoveredFolders {
+    catalog: Option<FolderCatalog>,
+    head: Option<String>,
+    latest_folders: BTreeMap<String, String>,
+    legacy: BTreeMap<String, LegacyNote>,
+}
+
+pub(crate) fn validate_folder_mappings(
+    state: &crate::engine::State,
+    config: &Config,
+    protected: &[PathBuf],
+) -> io::Result<()> {
+    // Validate the entire batch before copying any notes or changing a binding.
+    // Retained (including deleted/unchecked) owners must not be silently adopted.
+    let mut targets: Vec<(&str, &Path)> = Vec::new();
+    for (id, path) in &config.folder_mappings {
+        if config.excluded_folders.contains(id)
+            || state
+                .catalog
+                .as_ref()
+                .is_some_and(|c| c.deleted_folders.contains(id))
+        {
+            continue;
+        }
+        if !state
+            .catalog
+            .iter()
+            .chain(state.catalog_draft.iter())
+            .any(|c| c.folders.contains_key(id))
+        {
+            return Err(error(format!("Unknown folder ID {id} in local mapping")));
+        }
+        if !path.is_dir() {
+            return Err(error(format!(
+                "Mapped directory '{}' for folder {id} is unavailable; no mappings applied",
+                path.display()
+            )));
+        }
+        let other = targets
+            .iter()
+            .find(|(_, target)| crate::same_directory(target, path))
+            .map(|(id, _)| *id)
+            .or_else(|| {
+                state.bindings.iter().find_map(|(other, binding)| {
+                    (other != id && crate::same_directory(&binding.path, path))
+                        .then_some(other.as_str())
+                })
+            });
+        if let Some(other) = other {
+            return Err(error(format!(
+                "Two remote folders cannot share a local directory: folders {id} and {other} both map to '{}'. Unchecked and deleted folders retain their directory bindings; choose a separate directory",
+                path.display()
+            )));
+        }
+        if let Some(old) = state.bindings.get(id).filter(|b| b.path != *path) {
+            if protected.iter().any(|p| p.starts_with(&old.path)) {
+                return Err(error(format!(
+                    "Close notes in '{}' before remapping folder {id}",
+                    old.path.display()
+                )));
+            }
+        }
+        targets.push((id, path));
+    }
+    Ok(())
 }
 
 fn physical_name(path: &Path) -> String {
@@ -55,14 +127,66 @@ fn color(settings: &Settings, path: &Path) -> String {
 }
 
 impl Engine {
-    pub(crate) fn prepare_folders(
+    pub(crate) fn reconcile_deleted_folders(
+        &mut self,
+        key: &Secret,
+        latest_folders: &BTreeMap<String, String>,
+    ) -> io::Result<()> {
+        // Retain bindings so erased local folders cannot silently acquire new IDs.
+        let Some(catalog) = &self.state.catalog else {
+            return Ok(());
+        };
+        let deleted = &catalog.deleted_folders;
+        let removed: BTreeSet<_> = self
+            .state
+            .notes
+            .iter()
+            .filter(|(id, tracked)| {
+                latest_folders
+                    .get(*id)
+                    .or_else(|| tracked.baseline.as_ref().and_then(|n| n.folder_id.as_ref()))
+                    .is_some_and(|folder| deleted.contains(folder))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut removed_outgoing = BTreeSet::new();
+        for r in &self.state.outgoing {
+            if let Record::Note(n) = r.open_record(key, self.account()?).map_err(error)? {
+                if n.folder_id.as_ref().is_some_and(|id| deleted.contains(id)) {
+                    removed_outgoing.insert(r.id.clone());
+                }
+            }
+        }
+        self.state
+            .outgoing
+            .retain(|r| !removed.contains(&r.note_id) && !removed_outgoing.contains(&r.id));
+        self.state
+            .deferred
+            .retain(|r| !removed.contains(&r.revision.note_id));
+        self.state
+            .folder_conflicts
+            .retain(|id| !deleted.contains(id));
+        if self.state.applying.as_ref().is_some_and(|pending| {
+            self.state.bindings.iter().any(|(id, b)| {
+                deleted.contains(id) && pending.path.parent() == Some(b.path.as_path())
+            })
+        }) {
+            self.state.applying = None;
+        }
+        // A local draft must not override a confirmed deletion when shown or
+        // published later. Keep all unrelated unpublished changes.
+        if let Some(draft) = &mut self.state.catalog_draft {
+            draft.deleted_folders.extend(deleted.iter().cloned());
+        }
+        Ok(())
+    }
+
+    fn discover_folders(
         &mut self,
         remote: &impl Remote,
-        c: &Config,
         key: &Secret,
-        settings: &Settings,
         first: &Changes,
-    ) -> io::Result<()> {
+    ) -> io::Result<DiscoveredFolders> {
         let previous = self.state.catalog.clone();
         let mut catalog = previous.clone();
         let mut head = self.state.catalog_head.clone();
@@ -92,6 +216,7 @@ impl Engine {
         let mut page = first.clone();
         let mut cursor = self.state.cursor;
         loop {
+            remote.check_cancelled()?;
             if page.through != first.through || page.next < cursor || page.next > page.through {
                 return Err(error("Invalid catalog change snapshot"));
             }
@@ -163,52 +288,58 @@ impl Engine {
             }
             page = remote.changes(cursor, Some(first.through))?;
         }
+        Ok(DiscoveredFolders {
+            catalog,
+            head,
+            latest_folders,
+            legacy,
+        })
+    }
+
+    // This phase only updates the journal. In particular, server deletion must
+    // not depend on local directories, migration, or publishing a local draft.
+    pub(crate) fn refresh_folders(
+        &mut self,
+        remote: &impl Remote,
+        key: &Secret,
+        first: &Changes,
+    ) -> io::Result<DiscoveredFolders> {
+        if first.through < self.state.highwater.max(self.state.through) {
+            return Err(error(
+                "Server history moved backward; folder discovery stopped",
+            ));
+        }
+        let discovered = self.discover_folders(remote, key, first)?;
+        self.state.highwater = self.state.highwater.max(first.through);
+        self.state.catalog = discovered.catalog.clone();
+        self.state.catalog_head = discovered.head.clone();
+        self.reconcile_deleted_folders(key, &discovered.latest_folders)?;
+        self.save()?;
+        Ok(discovered)
+    }
+
+    pub(crate) fn prepare_folders(
+        &mut self,
+        remote: &impl Remote,
+        c: &Config,
+        key: &Secret,
+        settings: &Settings,
+        first: &Changes,
+    ) -> io::Result<()> {
+        let previous = self.state.catalog.clone();
+        let DiscoveredFolders {
+            catalog,
+            mut head,
+            latest_folders: _,
+            legacy,
+        } = self.refresh_folders(remote, key, first)?;
         let access = self.local.clone();
         let activity = access
             .lock()
             .map_err(|_| error("Local note access unavailable"))?;
+        validate_folder_mappings(&self.state, c, &activity.protected)?;
         self.relocate_pending()?;
         self.check_config(c)?;
-        // Keep bindings, including local-only paths, so a configured local path
-        // can never silently become a new folder identity after remote erasure.
-        if let Some(confirmed) = &catalog {
-            self.state.catalog = Some(confirmed.clone());
-            let deleted = &confirmed.deleted_folders;
-            let mut removed = BTreeSet::new();
-            for (id, tracked) in &self.state.notes {
-                if latest_folders
-                    .get(id)
-                    .or_else(|| tracked.baseline.as_ref().and_then(|n| n.folder_id.as_ref()))
-                    .is_some_and(|folder| deleted.contains(folder))
-                {
-                    removed.insert(id.clone());
-                }
-            }
-            let mut removed_outgoing = BTreeSet::new();
-            for r in &self.state.outgoing {
-                if let Record::Note(n) = r.open_record(key, self.account()?).map_err(error)? {
-                    if n.folder_id.as_ref().is_some_and(|id| deleted.contains(id)) {
-                        removed_outgoing.insert(r.id.clone());
-                    }
-                }
-            }
-            self.state
-                .outgoing
-                .retain(|r| !removed.contains(&r.note_id) && !removed_outgoing.contains(&r.id));
-            self.state
-                .deferred
-                .retain(|r| !removed.contains(&r.revision.note_id));
-            self.state
-                .folder_conflicts
-                .retain(|id| !deleted.contains(id));
-            if self.state.applying.as_ref().is_some_and(|pending| {
-                self.state.bindings.iter().any(|(id, b)| {
-                    deleted.contains(id) && pending.path.parent() == Some(b.path.as_path())
-                })
-            }) {
-                self.state.applying = None;
-            }
-        }
         // If another device won the initial catalog CAS, adopt its confirmed
         // membership IDs rather than registering a second identity for the same
         // already-known legacy notes.
@@ -340,13 +471,14 @@ impl Engine {
                 .folders
                 .entry(id.clone())
                 .or_insert_with(|| FolderData {
-                    name: physical_name(&path),
+                    name: settings.folder_name(&path),
                     color: color(settings, &path),
                 });
             self.state.bindings.insert(
                 id,
                 Binding {
                     observed_name: physical_name(&path),
+                    observed_label: settings.folder_labels.get(&path).cloned(),
                     observed_color: settings.folder_colors.get(&path).cloned(),
                     path,
                     managed: false,
@@ -425,10 +557,22 @@ impl Engine {
             let Some(data) = desired.folders.get_mut(id) else {
                 continue;
             };
-            let name = physical_name(&binding.path);
+            let physical = physical_name(&binding.path);
+            let label = settings.folder_labels.get(&binding.path);
             let current_color = settings.folder_colors.get(&binding.path);
             let old = previous.as_ref().and_then(|old| old.folders.get(id));
-            if name != binding.observed_name {
+            // Applying a remote catalog writes its logical name into settings
+            // after preparation. That is not a new local rename on the next run.
+            // Comparing with the previous catalog also upgrades old journals
+            // whose bindings did not record display-label observations.
+            let label_changed = label != binding.observed_label.as_ref()
+                && label.map(String::as_str) != old.map(|data| data.name.as_str());
+            if label_changed || physical != binding.observed_name {
+                let name = if label_changed {
+                    settings.folder_name(&binding.path)
+                } else {
+                    physical
+                };
                 if old.is_some_and(|old| old.name != data.name && name != data.name) {
                     self.state.folder_conflicts.insert(id.clone());
                 } else {
@@ -512,13 +656,15 @@ impl Engine {
                     path = root.join(format!("{name} ({})", &id[..8]));
                 }
                 if path.exists() {
-                    return Err(error(format!("Folder '{}' already exists. Map folder {id} explicitly in Configure Sync; nothing was merged",data.name)));
+                    self.save()?;
+                    return Err(error(format!("Folder '{}' already exists at '{}'. Map folder {id} explicitly in Configure Sync; nothing was merged",data.name, path.display())));
                 }
                 fs::create_dir(&path)?;
                 self.state.bindings.insert(
                     id.clone(),
                     Binding {
                         observed_name: physical_name(&path),
+                        observed_label: None,
                         observed_color: None,
                         path,
                         managed: true,
@@ -537,6 +683,7 @@ impl Engine {
         for (id, b) in &mut self.state.bindings {
             if enabled.contains(id) {
                 b.observed_name = physical_name(&b.path);
+                b.observed_label = settings.folder_labels.get(&b.path).cloned();
                 b.observed_color = settings.folder_colors.get(&b.path).cloned();
             }
         }
@@ -562,13 +709,16 @@ impl Engine {
         settings: &Settings,
         protected: &[PathBuf],
     ) -> io::Result<()> {
-        if self
+        if let Some((other, _)) = self
             .state
             .bindings
             .iter()
-            .any(|(other, b)| other != id && b.path == path)
+            .find(|(other, b)| other.as_str() != id && crate::same_directory(&b.path, path))
         {
-            return Err(error("Two remote folders cannot share a local directory"));
+            return Err(error(format!(
+                "Two remote folders cannot share a local directory: folders {id} and {other} both map to '{}'. Unchecked and deleted folders retain their directory bindings",
+                path.display()
+            )));
         }
         if let Some(old) = self
             .state
@@ -598,6 +748,7 @@ impl Engine {
                     path: path.into(),
                     managed,
                     observed_name: physical_name(path),
+                    observed_label: settings.folder_labels.get(path).cloned(),
                     observed_color: settings.folder_colors.get(path).cloned(),
                 },
             );
@@ -622,6 +773,7 @@ impl Engine {
                     path: path.into(),
                     managed,
                     observed_name: physical_name(path),
+                    observed_label: settings.folder_labels.get(path).cloned(),
                     observed_color: settings.folder_colors.get(path).cloned(),
                 });
         }

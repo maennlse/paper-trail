@@ -82,8 +82,13 @@ impl Picker {
             if let Some(catalog) = &state.catalog {
                 for (id, data) in &catalog.folders {
                     if catalog.deleted_folders.contains(id) {
-                        let Some(binding) = state.bindings.get(id).filter(|b| b.path.is_dir())
-                        else {
+                        let Some(binding) = state.bindings.get(id).filter(|b| {
+                            b.path.is_dir()
+                                && settings
+                                    .note_folders
+                                    .iter()
+                                    .any(|p| same_directory(p, &b.path))
+                        }) else {
                             continue;
                         };
                         choices.push(FolderChoice {
@@ -92,6 +97,7 @@ impl Picker {
                             name: data.name.clone(),
                             selected: false,
                             conflict: false,
+                            stored_path: None,
                         });
                         colors.push(data.color.clone());
                         restartable.insert(id.clone());
@@ -256,7 +262,7 @@ impl Picker {
             return format!("{} · Local only\nLocal: {path}\nUse s to Sync as New Folder. The deleted identity and history cannot be restored.", choice.name);
         }
         format!(
-            "{}\nLocal: {path}\nID: {}{}",
+            "{}\nLocal: {path}\nID: {}{}{}",
             choice.name,
             choice
                 .id
@@ -266,7 +272,15 @@ impl Picker {
                 "\nMetadata conflict: use :sync-accept-remote ID after reviewing the remote name/color."
             } else {
                 ""
-            }
+            },
+            choice
+                .stored_path
+                .as_ref()
+                .map(|p| format!(
+                    "\nCurrent directory: {} (mapping change pending)",
+                    p.display()
+                ))
+                .unwrap_or_default()
         )
     }
     fn move_by(&mut self, delta: isize) {

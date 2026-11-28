@@ -10,6 +10,10 @@ import TreeSitterJavaScriptRunestone
 import TreeSitterSwiftRunestone
 import TreeSitterTOMLRunestone
 import TreeSitterYAMLRunestone
+import TreeSitterBashRunestone
+import TreeSitterHTMLRunestone
+import TreeSitterCSSRunestone
+import TreeSitterSQLRunestone
 
 /// The parser set is pinned to the Tree-sitter ABI used by Runestone 0.5.2.
 /// Unknown/injected languages remain readable plain text.
@@ -39,6 +43,10 @@ final class SyntaxHighlighter: TreeSitterLanguageProvider {
         case "swift": original = .swift
         case "toml": original = .toml
         case "yaml", "yml": original = .yaml
+        case "sh", "bash", "shell": original = .bash
+        case "html", "htm": original = .html
+        case "css": original = .css
+        case "sql": original = .sql
         default: return nil
         }
         // Syntax highlighting is visual only: do not introduce grammar-driven

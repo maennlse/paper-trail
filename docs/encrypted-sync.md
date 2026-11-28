@@ -65,21 +65,21 @@ TUI:
 ```text
 :sync-configure https://sync.example
 # Review the displayed sync server and identity provider; type yes to trust it.
-:login
+:login-start
 # Open the displayed verification URL/code on another device. No SSH browser needed.
-:create-vault
+:vault-create
 # Save the displayed recovery key, then type yes at the confirmation prompt.
-:unlock
+:vault-unlock
 :sync
 :sync-status
-:recover-vault
-:change-passphrase
-:lock
-:logout
+:vault-recover
+:vault-change-passphrase
+:vault-lock
+:login-sign-out
 ```
 
 Secrets use masked prompts, never command arguments or command completion/history.
-TUI `:login` uses discovered RFC 8628 device authorization. The verification URL
+TUI `:login-start` uses discovered RFC 8628 device authorization. The verification URL
 and short-lived **user code** appear only in the current UI, not the high-entropy
 device code or tokens. `:login-show` expands the instructions; `:login-cancel` or
 Ctrl-C cancels without losing edits. `:login-browser` explicitly selects the local
@@ -108,9 +108,9 @@ the authenticated account and current vault version. Without a saved password,
 unlock manually. An unavailable/locked keyring, expired login, changed password or
 offline server produces a status message, not a browser launch or repeated password
 dialog; manual sign-in/unlock remains available. Startup restoration is asynchronous.
-Lock Vault / `:lock` drops the in-memory key and prevents automatic unlocking for
+Lock Vault / `:vault-lock` drops the in-memory key and prevents automatic unlocking for
 the rest of that session, retaining the saved password for the next launch.
-Sign Out / `:logout` removes both saved login and encryption credentials.
+Sign Out / `:login-sign-out` removes both saved login and encryption credentials.
 SSH/headless TUI sessions never read or save desktop credentials and continue to
 use manual, session-only login/unlock.
 
@@ -141,7 +141,7 @@ Local saves continue without network access.
 
 Application renames retain opaque note identity via local mapping updates. External
 renames cannot be identified reliably without filesystem metadata: they may appear
-as a deletion plus creation. **Close Folder** (TUI: `:close-folder`) removes the
+as a deletion plus creation. **Close Folder** (TUI: `:folder-close`) removes the
 bookmark and pauses that folder's sync on this device. Local files, server data,
 other devices, stable IDs and pending edits are kept. Reopening the folder only
 restores local access: explicitly check it again in Configure Sync / `:sync-folders`
@@ -164,7 +164,9 @@ infer that those erased notes belonged together; it still cannot read names or c
 It can recognize the catalog's reserved opaque ID and infer metadata-update activity
 from its size/timing; this does not hide all usage information.
 
-Configure Sync lists checked local folders and known remote folders. Pick a local
+Configure Sync lists opened local folders and active remote folders. Closed local
+folders absent from the active server catalog are hidden even if their directories
+or journal bindings remain. Pick a local
 directory for a remote ID, or leave its automatic mapping in place. Newly discovered
 remote collections get separate directories under **New remote folders are
 downloaded into** (by default a sibling `Paper Trail Synced` directory). An existing
@@ -175,12 +177,27 @@ folder during setup to avoid registering it as an additional empty collection.
 Turn off **Download folders created on other devices** before unlocking when you
 want to select individual remote IDs first rather than import all collections.
 
+Validated remote folder discoveries remain available in Configure Sync even when
+local setup fails. Automatic-directory errors include the full conflicting path
+and folder ID. Use the folder-open button beside that exact ID to choose its local
+directory; changing the default download root is not an explicit mapping.
+Mapping changes are checked together before any are applied. Unchecked and
+server-deleted folders retain ownership of their local directories; a collision
+reports both IDs, even when one owner is not selected. Retained directories are
+never silently reassigned. Pending remaps show the currently bound directory as
+well as the configured destination. Direct directory swaps remain blocked; use
+separate destinations rather than merging collections.
+
 Folder scans remain non-recursive, matching the existing application model. Select
 subdirectories separately when needed; this is a list of collections, not a mirrored
 arbitrary directory tree. Empty folders exist in the encrypted catalog and therefore
 sync even with no notes. Names/colors are logical metadata; each device can map them
 to a differently named physical directory, and remote renames do not move arbitrary
-user directories. Folder labels in GTK/TUI show the synced logical name.
+user directories. Folder labels in GTK/TUI/iOS show the synced logical name.
+Display-label edits (including iOS Edit Folder) publish that logical name without
+renaming the local directory. Sync tracks display-label and physical-name changes
+separately, preserves paused renames, and requires confirmation for competing
+renames on different devices. Downloading a remote name is not a new local edit.
 
 Unchecking a folder stops its uploads and local application of downloads without
 deleting notes, changing its ID, or dropping pending revisions. Its encrypted changes
@@ -198,16 +215,31 @@ unavailable during another sync operation. The native confirmation defaults to
 Cancel and uses a red **Delete from Server** confirmation button.
 Configure Sync stays open during deletion, preserving unsaved configuration edits.
 The affected row and Save button are disabled while the request runs. Success
-changes the retained folder's row to **Local only**, with **Sync as New Folder…**;
-failure keeps the row and shows the error.
+changes an opened retained folder's row to **Local only**, with **Sync as New Folder…**;
+closed folders disappear from the list.
+Failure keeps the row and shows the error.
+
+Server deletion validates the remote catalog and history independently of local
+folder setup. Unrelated directory collisions, missing mapped directories, and
+folder metadata conflicts do not block it. It does not download folders, copy
+local notes, or publish unrelated pending uploads or folder drafts. History
+validation, confirmed legacy membership, and the atomic server checkpoint remain
+required. Deletion does not interrupt an already running sync operation.
 
 In TUI **`:sync-folders`**, press **`d`/Delete** on a published folder, then explicitly
 select **Delete from Server** in the confirmation (Cancel is the default).
-Retained local folders stay in the same list marked **local**; **`s`** offers
+Opened retained local folders stay in the same list marked **local**; **`s`** offers
 **Sync as New Folder** for those rows.
 The picker stays open and preserves other draft selections; confirmed remote
 operations are not undone by cancelling the selection draft. See the
 [TUI guide](tui.md) for keyboard controls and scrolling the confirmation.
+
+On iOS, open **Sync Settings → Remote Folders** and tap the trash button beside
+a published folder, then confirm **Delete from Server**. Sign in and unlock
+first. The confirmation identifies the stable folder ID as well as its name.
+The sheet preserves unsaved configuration edits and refreshes its folder rows
+afterward. Opened retained deleted folders are labelled **Local only**. See the
+[iOS guide](ios.md#sync-folder-management) for native behavior and limitations.
 
 Deletion permanently removes the current collection's notes (including already
 deleted notes) and their stored note revision payloads from the live server.
@@ -240,7 +272,7 @@ marker before scanning local files. An in-flight stale upload fails rather than
 creating a new note identity.
 
 There is no user-facing list of server deletion markers. Only folders still
-available locally appear in the normal folder list, with the explicit
+opened and available locally appear in the normal folder list, with the explicit
 **Sync as New Folder…** action. Its confirmation opts into publishing the retained
 local files under fresh folder and note IDs; it does not restore the erased
 history. Other devices may download a separate copy. No background job invokes
@@ -256,14 +288,12 @@ metadata in Configure Sync; rename again afterward if a different global name is
 TUI: `:sync-folders` opens an interactive checklist for local and known remote
 collections. Space/click toggles, Enter saves, and Esc cancels; `i` shows full
 folder names, local paths and opaque IDs. Selection changes never delete notes.
-Existing path/ID commands remain compatibility shortcuts:
+Mapping and migration commands remain available where the picker has no equivalent:
 
 ```text
 :sync-folders
 :sync-download-dir /absolute/download/root
 :sync-auto-download off
-:sync-select-folder FOLDER_ID
-:sync-unselect-folder FOLDER_ID
 :sync-map-folder FOLDER_ID '/absolute/local/directory'
 :sync-map-legacy NOTE_ID FOLDER_ID
 :sync-accept-remote FOLDER_ID
@@ -290,7 +320,7 @@ metadata fetches use HTTPS, fixed timeouts, size limits and no redirects. Invali
 incomplete, unavailable or mismatched discovery fails closed without using tokens
 or silently falling back to manual/insecure settings. The endpoint is public and
 read-only; missing server native-client settings produce an empty HTTP 503. Older
-servers can return 404, with instructions to configure authentication manually.
+servers can return 404; upgrade/configure the server to supply `/v1/auth/config`.
 
 ### Configuration ownership and precedence
 
@@ -317,15 +347,13 @@ and do not replace signature, issuer, audience, time or account-authorization ch
   `false`. Explicit issuer/client/scopes continue taking precedence, with no fetch
   from the new endpoint. Existing servers need no configuration changes to keep
   these clients working.
-- Select **Discover authentication from sync server** in GTK or run the one-argument
-  TUI setup command to explicitly opt in. Discovery uses the advertised native ID
-  and scopes as a complete set, not a silent mix of manual and discovered fields.
-- For manual/older-server setup, turn that switch off or use
-  `:sync-configure HTTPS_SERVER HTTPS_ISSUER PUBLIC_CLIENT_ID 'SCOPES'`. The optional
-  scopes argument retains existing scopes, or defaults to `openid offline_access`.
+- New account setup on GTK, TUI, and iOS accepts only the HTTPS sync-server URL.
+  Authentication is discovered from the server as a complete issuer/client/scopes
+  set. Manual controls and multi-argument TUI setup have been removed.
+  GTK folder-only saves retain already trusted legacy profiles without rediscovery.
 - Discovery failures never overwrite a saved manual configuration. Discovery mode
   requires the configuration endpoint to remain available; there is no automatic
-  downgrade when it fails. You may explicitly select manual configuration.
+  downgrade or manual setup fallback when it fails.
 
 ### Issuer trust and account identity
 
@@ -375,7 +403,7 @@ stages in the sync menu. Linux TUI `:login-browser` uses `xdg-open` (from
 become a three-minute wait for a callback. Browser dispatch has a 30-second
 timeout and remains cancellable in GTK. Desktop-launcher output and OAuth URLs
 are not included in error messages.
-TUI `:login` is device-code authentication: it does not visit or serve this
+TUI `:login-start` is device-code authentication: it does not visit or serve this
 loopback callback page, even after successful approval in a browser.
 
 Linux browser login registers `http://127.0.0.1:{ephemeral-port}/callback` per RFC 8252.

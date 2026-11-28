@@ -1,18 +1,23 @@
-# Paper Trail 0.7.0
+# Paper Trail 0.8.0
 
 ## Highlights
 
-- Experimental native iOS client now included in releases as an unsigned ARM64 IPA.
-  It shares the Rust core, file handling, and encrypted sync with desktop clients.
-- Native iOS sync setup, vault controls, folder colors and ordering, note moves,
-  rename, pinning, deletion, share, and in-note Find.
-- Runestone syntax highlighting for Markdown, JSON, Python, Rust, JavaScript,
-  Swift, TOML, and YAML, with per-note language choices shared with GTK.
-- Editor font/display preferences, live title above filename, save-before-close
-  edge swipe, floating New Note, pull-down search, and clearer local/sync feedback.
-- Settings About shows the installed version/build and source link. Updated
-  screenshots and regression tests cover the native interfaces.
-- All fifteen release packages require verified checksums and successful builds;
+- Native aarch64 GTK archives and Flatpak bundles join the x86_64 desktop builds.
+  Every platform and build variant uses the unified version 0.8.0.
+- Improved iOS note browsing with bottom search, a `+` button, folder badges,
+  upper-right timestamps, and native full-swipe actions with delete confirmation.
+- Native iOS 26 Liquid Glass controls and navigation, with readable content,
+  older-system material fallbacks, and opaque high-contrast/accessibility surfaces.
+- Floating Runestone-powered Find with match counts, navigation, case/matching
+  options, and regular expressions; share note text as well as files.
+- Expand Find for tappable match previews; undo-aware Replace and Replace All
+  support regular-expression capture groups.
+- Bash/shell, HTML, CSS, and SQL highlighting alongside existing languages.
+- Fixed remote-folder downloads, sync after successful note close, and pull-to-sync.
+- Independent server-folder deletion, clearer folder discovery and mappings,
+  persistent synced folder renames, and simpler URL-only account setup.
+- Unified TUI command names and server `--help`/`--version` support.
+- All seventeen release packages require verified checksums and successful builds;
   iOS simulator UI, state, and grammar tests now gate release publication.
 
 Sync is experimental and has not had an independent security audit. Local working
@@ -22,7 +27,7 @@ older server binaries then refuse to open it. After erasure, legacy/stale client
 fail closed instead of resurrecting data. Existing vault passphrases and recovery
 keys remain valid. Deletion retains encrypted catalog metadata and content-free
 history receipts; independent server backups and previously downloaded copies are
-not erased. See [encrypted sync setup and security boundaries](https://github.com/maennlse/paper-trail/blob/v0.7.0/docs/encrypted-sync.md).
+not erased. See [encrypted sync setup and security boundaries](https://github.com/maennlse/paper-trail/blob/v0.8.0/docs/encrypted-sync.md).
 
 Embedded Neovim requires an installed `nvim` 0.9+ executable and is not bundled.
 Press F2, type `set editor neovim`, and Enter to enable it; F6 changes panes.
@@ -35,11 +40,11 @@ login callback tab from closing automatically; manual close remains available.
 - **iOS 17+, ARM64 (experimental):** `paper-trail-ios-arm64-unsigned.ipa` requires
   signing with your chosen sideloading tool before installation. It is not an
   App Store or TestFlight build. No Apple credentials are used in CI. See the
-  [iOS build and sideloading guide](https://github.com/maennlse/paper-trail/blob/v0.7.0/docs/ios.md).
-- **GTK desktop, Linux x86_64:** `paper-trail-gtk-linux-x86_64.flatpak` is the
-  recommended download. Flatpak installs the separate GNOME runtime from Flathub
+  [iOS build and sideloading guide](https://github.com/maennlse/paper-trail/blob/v0.8.0/docs/ios.md).
+- **GTK desktop, Linux x86_64/aarch64:** `paper-trail-gtk-linux-ARCH.flatpak` is the
+  recommended download (replace `ARCH` with `x86_64` or `aarch64`). Flatpak installs the separate GNOME runtime from Flathub
   as needed; the bundle does not include the runtime for offline installation.
-- **Native GTK, Linux x86_64:** `paper-trail-gtk-linux-x86_64.tar.gz` requires
+- **Native GTK, Linux x86_64/aarch64:** `paper-trail-gtk-linux-ARCH.tar.gz` requires
   compatible GTK/libadwaita/GtkSourceView and glibc libraries. It is not static.
   The archive includes installation guidance and exact build/dependency details.
 - **TUI:** choose `paper-trail-tui-<target>.tar.gz` (Linux/macOS) or `.zip`

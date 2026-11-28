@@ -98,11 +98,15 @@ final class EditorStateTests: XCTestCase {
         var export: NoteExport? = try NoteExport(filename: "draft.md", data: bytes)
         let url = try XCTUnwrap(export?.url)
         XCTAssertEqual(url.lastPathComponent, "draft.md")
+        XCTAssertEqual(export?.text, "Unsaved draft\nUnicode: café 🌿")
         try withExtendedLifetime(export) {
             XCTAssertEqual(try Data(contentsOf: url), bytes)
         }
         let other = try NoteExport(filename: "draft.md", data: Data([0, 255, 12]))
         XCTAssertNotEqual(other.url, url)
+        XCTAssertNil(other.text)
+        let nul = try NoteExport(filename: "binary.txt", data: Data("text\0binary".utf8))
+        XCTAssertNil(nul.text)
         export = nil
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
         XCTAssertEqual(try Data(contentsOf: other.url), Data([0, 255, 12]))

@@ -51,6 +51,7 @@ pub struct NoteInfo {
     pub modified: u64,
     pub folder: String,
     pub folder_name: String,
+    pub folder_badge: String,
     pub color: String,
     pub pinned: bool,
 }
@@ -122,6 +123,10 @@ pub struct SyncFolder {
     pub path: Option<String>,
     pub name: String,
     pub selected: bool,
+    pub stored_path: Option<String>,
+    pub published: bool,
+    pub deleted: bool,
+    pub conflict: bool,
 }
 #[derive(uniffi::Enum)]
 pub enum SyncAction {
@@ -135,6 +140,7 @@ pub enum SyncAction {
     Lock,
     Logout,
     Synchronize,
+    DeleteFolder { id: String },
 }
 
 struct State {
@@ -159,6 +165,16 @@ pub struct PaperTrailClient {
 }
 
 impl PaperTrailClient {
+    #[cfg(test)]
+    fn configure_sync(&self, profile: SyncProfile) -> Result<()> {
+        if profile.discover_auth {
+            return Err(error("Discovery requires review and confirmation"));
+        }
+        self.service
+            .configure(self.configuration(profile, self.service.saved_config()?)?)?;
+        Ok(())
+    }
+
     fn state(&self) -> Result<MutexGuard<'_, State>> {
         self.state.lock().map_err(|_| error("Client unavailable"))
     }
@@ -444,6 +460,7 @@ impl PaperTrailClient {
                             .as_secs(),
                         folder: parent.to_string_lossy().into(),
                         folder_name: settings.folder_name(parent),
+                        folder_badge: colors::badge(&settings.folder_name(parent)),
                         color: colors::hex(
                             settings
                                 .folder_colors
@@ -812,18 +829,11 @@ impl PaperTrailClient {
             folders,
         })
     }
-    pub fn configure_sync(&self, profile: SyncProfile) -> Result<()> {
-        if profile.discover_auth {
-            return Err(error(
-                "Discovered authentication requires setup review and confirmation",
-            ));
-        }
-        self.service
-            .configure(self.configuration(profile, self.service.saved_config()?)?)?;
-        Ok(())
-    }
     /// Discovery never persists settings or starts authentication.
-    pub fn prepare_sync_setup(&self, profile: SyncProfile) -> Result<SyncSetup> {
+    pub fn prepare_sync_setup(&self, mut profile: SyncProfile) -> Result<SyncSetup> {
+        // Legacy fields remain readable for saved profiles, but are never an
+        // alternative to server discovery in the native setup API.
+        profile.discover_auth = true;
         self.prepare_setup(profile, papertrail_sync::auth::config::prepare)
     }
     pub fn confirm_sync_setup(&self, token: u64) -> Result<()> {
@@ -901,21 +911,79 @@ impl PaperTrailClient {
         Ok(())
     }
     pub fn sync_folders(&self) -> Result<Vec<SyncFolder>> {
-        Ok(self
+        let settings = self.state()?.settings.clone();
+        let snapshot = self.service.snapshot()?;
+        let catalog = snapshot.as_ref().and_then(|state| state.catalog.as_ref());
+        let mut folders: Vec<_> = self
             .service
-            .folder_choices(&self.state()?.settings)?
+            .folder_choices(&settings)?
             .into_iter()
             .map(|f| SyncFolder {
+                published: f.id.as_ref().is_some_and(|id| {
+                    catalog.is_some_and(|c| {
+                        c.folders.contains_key(id) && !c.deleted_folders.contains(id)
+                    })
+                }),
                 id: f.id,
                 path: f.path.map(|p| p.to_string_lossy().into()),
                 name: f.name,
                 selected: f.selected,
+                stored_path: f.stored_path.map(|p| p.to_string_lossy().into()),
+                deleted: false,
+                conflict: f.conflict,
             })
-            .collect())
+            .collect();
+        // Only retained local folders are shown, not server-only deletion markers.
+        if let (Some(state), Some(catalog)) = (&snapshot, catalog) {
+            for id in &catalog.deleted_folders {
+                if let (Some(data), Some(binding)) =
+                    (catalog.folders.get(id), state.bindings.get(id))
+                {
+                    if binding.path.is_dir()
+                        && settings
+                            .note_folders
+                            .iter()
+                            .any(|p| papertrail_sync::same_directory(p, &binding.path))
+                    {
+                        folders.push(SyncFolder {
+                            id: Some(id.clone()),
+                            path: Some(binding.path.to_string_lossy().into()),
+                            name: data.name.clone(),
+                            selected: false,
+                            stored_path: None,
+                            published: false,
+                            deleted: true,
+                            conflict: false,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(folders)
     }
     pub fn accept_sync_folder(&self, id: String) -> Result<()> {
         self.service
             .accept_remote_folder(&id, &self.state()?.settings)?;
+        Ok(())
+    }
+    /// Select a live remote identity without accepting conflicting metadata,
+    /// adopting a directory, or publishing unrelated local folders.
+    pub fn select_sync_folder(&self, id: String) -> Result<()> {
+        let state = self.service.snapshot()?;
+        if !state
+            .as_ref()
+            .and_then(|s| s.catalog.as_ref())
+            .is_some_and(|c| c.folders.contains_key(&id) && !c.deleted_folders.contains(&id))
+        {
+            return Err(error("Choose an active published remote folder"));
+        }
+        let mut config = self
+            .service
+            .saved_config()?
+            .ok_or_else(|| error("Configure sync first"))?;
+        config.excluded_folders.remove(&id);
+        config.selected_folders.insert(id);
+        self.service.configure(config)?;
         Ok(())
     }
     pub fn sync_action(
@@ -948,6 +1016,29 @@ impl PaperTrailClient {
                         .iter()
                         .map(|n| n.path.clone())
                         .collect(),
+                }
+            }
+            SyncAction::DeleteFolder { id } => {
+                if !self.service.signed_in() || !self.service.unlocked() {
+                    return Err(error(
+                        "Sign in and unlock the vault before deleting a folder from the server",
+                    ));
+                }
+                let snapshot = self.service.snapshot()?;
+                if !snapshot
+                    .as_ref()
+                    .and_then(|s| s.catalog.as_ref())
+                    .is_some_and(|c| {
+                        c.folders.contains_key(&id) && !c.deleted_folders.contains(&id)
+                    })
+                {
+                    return Err(error("Choose a published folder to delete from the server"));
+                }
+                // No flush, scan, or mapping operation: unsaved editor text and
+                // local files are independent of explicit server erasure.
+                Command::DeleteFolder {
+                    id,
+                    settings: Box::new(state.settings.clone()),
                 }
             }
         };
@@ -1056,16 +1147,10 @@ mod tests {
     }
 
     #[test]
-    fn manual_setup_skips_discovery_and_failed_discovery_keeps_saved_profile() {
+    fn legacy_profiles_survive_failed_discovery_and_native_setup_cannot_bypass_it() {
         let root = tempfile::tempdir().unwrap();
         let app = client(root.path());
-        let manual = app
-            .prepare_setup(setup_profile(&app, false), |_| {
-                panic!("Manual setup must not discover")
-            })
-            .unwrap();
-        assert!(!manual.needs_confirmation);
-        app.confirm_sync_setup(manual.token).unwrap();
+        app.configure_sync(setup_profile(&app, false)).unwrap();
         let saved = app.service.saved_config().unwrap();
         assert!(app
             .prepare_setup(setup_profile(&app, true), |_| Err(io::Error::other(
@@ -1078,6 +1163,10 @@ mod tests {
             app.configure_sync(setup_profile(&app, true)).is_err(),
             "discovery must not bypass review"
         );
+        let mut bypass = setup_profile(&app, false);
+        bypass.server = "http://not-https.example".into();
+        assert!(app.prepare_sync_setup(bypass).is_err());
+        assert!(app.service.saved_config().unwrap() == saved);
     }
 
     #[test]
@@ -1130,6 +1219,202 @@ mod tests {
         assert_eq!(actual.excluded_folders, saved.excluded_folders);
         assert_eq!(actual.download_dir, saved.download_dir);
         assert!(!actual.auto_download);
+    }
+
+    #[test]
+    fn native_folder_list_exposes_pending_mappings_and_only_published_deletion_targets() {
+        use serde_json::json;
+        const LIVE: &str = "AAAAAAAAAAAAAAAAAAAAAA";
+        const DRAFT: &str = "BBBBBBBBBBBBBBBBBBBBBB";
+        const RETAINED: &str = "CCCCCCCCCCCCCCCCCCCCCC";
+        const SERVER_ONLY: &str = "DDDDDDDDDDDDDDDDDDDDDD";
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        app.configure_sync(setup_profile(&app, false)).unwrap();
+        let current = app.home.join("Paper Trail");
+        let destination = app.home.join("Destination");
+        let retained = app.home.join("Retained");
+        fs::create_dir(&destination).unwrap();
+        fs::create_dir(&retained).unwrap();
+        app.state()
+            .unwrap()
+            .settings
+            .add_folder(retained.clone(), false);
+        let mut config = app.service.saved_config().unwrap().unwrap();
+        config
+            .folder_mappings
+            .insert(LIVE.into(), destination.clone());
+        app.service.configure(config).unwrap();
+        let state: papertrail_sync::engine::State = serde_json::from_value(json!({
+            "version": 2, "account": null, "vault_id": "", "generation": 0,
+            "cursor": 0, "through": 0, "notes": {}, "known": {},
+            "outgoing": [], "incoming": null,
+            "folder_conflicts": [LIVE],
+            "catalog": {
+                "version": 2,
+                "folders": {
+                    (LIVE): {"name": "Notes", "color": "preset-0"},
+                    (RETAINED): {"name": "Notes", "color": "preset-0"},
+                    (SERVER_ONLY): {"name": "Notes", "color": "preset-0"}
+                },
+                "legacy_notes": {}, "deleted_folders": [RETAINED, SERVER_ONLY]
+            },
+            "catalog_draft": {
+                "version": 2, "folders": {
+                    (DRAFT): {"name": "Notes", "color": "preset-0"}
+                }, "legacy_notes": {}, "deleted_folders": []
+            },
+            "bindings": {
+                (LIVE): {
+                    "path": current, "managed": false,
+                    "observed_name": "Paper Trail", "observed_color": null
+                },
+                (RETAINED): {
+                    "path": retained, "managed": false,
+                    "observed_name": "Retained", "observed_color": null
+                }
+            }
+        }))
+        .unwrap();
+        fs::write(
+            root.path().join("Support/sync/state.json"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        let folders = app.sync_folders().unwrap();
+        let live = folders
+            .iter()
+            .find(|f| f.id.as_deref() == Some(LIVE))
+            .unwrap();
+        assert_eq!(live.path.as_deref(), destination.to_str());
+        assert_eq!(live.stored_path.as_deref(), current.to_str());
+        assert!(live.published && !live.deleted);
+        assert!(live.conflict);
+        assert!(!folders.iter().any(|f| f.id.as_deref() == Some(DRAFT)));
+        let local = folders
+            .iter()
+            .find(|f| f.id.as_deref() == Some(RETAINED))
+            .unwrap();
+        assert!(local.deleted && !local.published && !local.selected);
+        assert!(!folders.iter().any(|f| f.id.as_deref() == Some(SERVER_ONLY)));
+        app.accept_sync_folder(LIVE.into()).unwrap();
+        let live = app
+            .sync_folders()
+            .unwrap()
+            .into_iter()
+            .find(|f| f.id.as_deref() == Some(LIVE))
+            .unwrap();
+        assert!(!live.conflict);
+        assert_eq!(live.stored_path.as_deref(), current.to_str());
+        app.state()
+            .unwrap()
+            .settings
+            .note_folders
+            .retain(|p| p != &retained);
+        assert!(!app
+            .sync_folders()
+            .unwrap()
+            .iter()
+            .any(|f| f.id.as_deref() == Some(RETAINED)));
+        app.state()
+            .unwrap()
+            .settings
+            .add_folder(retained.clone(), false);
+        fs::remove_dir(&retained).unwrap();
+        assert!(!app
+            .sync_folders()
+            .unwrap()
+            .iter()
+            .any(|f| f.id.as_deref() == Some(RETAINED)));
+    }
+
+    #[test]
+    fn selecting_a_remote_folder_enables_download_without_accepting_metadata_or_creating_directories(
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        app.configure_sync(setup_profile(&app, false)).unwrap();
+        let live = "AAAAAAAAAAAAAAAAAAAAAA";
+        let deleted = "BBBBBBBBBBBBBBBBBBBBBB";
+        let mut config = app.service.saved_config().unwrap().unwrap();
+        config.auto_download = false;
+        config.excluded_folders.insert(live.into());
+        app.service.configure(config.clone()).unwrap();
+        let state = papertrail_sync::engine::State {
+            version: 3,
+            catalog: Some(
+                serde_json::from_value(serde_json::json!({
+                    "version": 2, "folders": {
+                        (live): {"name": "Notes", "color": "preset-0"},
+                        (deleted): {"name": "Notes", "color": "preset-0"}
+                    }, "legacy_notes": {}, "deleted_folders": [deleted]
+                }))
+                .unwrap(),
+            ),
+            folder_conflicts: [live.to_owned()].into(),
+            ..Default::default()
+        };
+        let path = root.path().join("Support/sync/state.json");
+        fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+        let journal = fs::read(&path).unwrap();
+        assert!(
+            !app.sync_folders()
+                .unwrap()
+                .iter()
+                .find(|f| f.id.as_deref() == Some(live))
+                .unwrap()
+                .selected
+        );
+        app.select_sync_folder(live.into()).unwrap();
+        let saved = app.service.saved_config().unwrap().unwrap();
+        assert!(saved.selected_folders.contains(live));
+        assert!(!saved.excluded_folders.contains(live));
+        assert_eq!(saved.folders, config.folders);
+        assert_eq!(saved.folder_mappings, config.folder_mappings);
+        assert!(!saved.auto_download);
+        let folder = app
+            .sync_folders()
+            .unwrap()
+            .into_iter()
+            .find(|f| f.id.as_deref() == Some(live))
+            .unwrap();
+        assert!(folder.selected && folder.conflict);
+        assert!(folder.path.is_none());
+        assert!(!saved.download_root().unwrap().exists());
+        for invalid in [deleted, "unknown"] {
+            assert!(app.select_sync_folder(invalid.into()).is_err());
+            assert!(app.service.saved_config().unwrap().unwrap() == saved);
+        }
+        assert_eq!(fs::read(&path).unwrap(), journal);
+    }
+
+    #[test]
+    fn locked_server_deletion_preserves_unsaved_editor_text_and_local_files() {
+        let root = tempfile::tempdir().unwrap();
+        let app = client(root.path());
+        let path = app.create_note(None).unwrap();
+        let original = fs::read_to_string(&path).unwrap();
+        app.open_note(path.clone()).unwrap();
+        app.edit("unsaved text must survive".into()).unwrap();
+        let result = app.sync_action(
+            SyncAction::DeleteFolder {
+                id: "folder".into(),
+            },
+            "".into(),
+            false,
+        );
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Sign in and unlock"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(
+            app.state().unwrap().session.text,
+            "unsaved text must survive"
+        );
+        assert!(!app.service.configured());
+        assert!(app.operation.lock().unwrap().is_none());
     }
 
     #[test]
@@ -1190,6 +1475,12 @@ mod tests {
         assert_eq!(snapshot.notes.len(), 1);
         assert!(snapshot.notes[0].pinned);
         assert_eq!(snapshot.notes[0].color, "#aabbcc");
+        let folder = snapshot
+            .folders
+            .iter()
+            .find(|f| f.path == snapshot.notes[0].folder)
+            .unwrap();
+        assert_eq!(snapshot.notes[0].folder_badge, folder.badge);
         let snapshot = client(root.path()).snapshot(None, "".into()).unwrap();
         assert!(snapshot.notes[0].pinned);
     }

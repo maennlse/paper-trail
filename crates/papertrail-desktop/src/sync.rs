@@ -80,7 +80,15 @@ impl FolderDeletionView {
                 if let (Some(binding), Some(data)) =
                     (state.bindings.get(&self.id), catalog.folders.get(&self.id))
                 {
-                    if !binding.path.is_dir() {
+                    if !binding.path.is_dir()
+                        || !desktop
+                            .model
+                            .borrow()
+                            .settings
+                            .note_folders
+                            .iter()
+                            .any(|p| papertrail_sync::same_directory(p, &binding.path))
+                    {
                         return;
                     }
                     folders.add(&desktop.sync_local_folder_row(
@@ -913,47 +921,9 @@ impl Desktop {
         server.set_text(initial.as_ref().map(|c| c.server.as_str()).unwrap_or(""));
         server.set_editable(!bound);
         group.add(&server);
-        let discovery = adw::SwitchRow::new();
-        discovery.set_title("Discover authentication from sync server");
-        discovery.set_subtitle("Turn off for manual configuration or older servers");
-        discovery.set_active(initial.as_ref().is_none_or(|c| c.discover_auth));
-        group.add(&discovery);
-        let issuer = adw::EntryRow::new();
-        issuer.set_title("Exact HTTPS OIDC issuer");
-        issuer.set_text(initial.as_ref().map(|c| c.issuer.as_str()).unwrap_or(""));
-        issuer.set_editable(!bound);
-        group.add(&issuer);
-        let client = adw::EntryRow::new();
-        client.set_title("Public native client ID");
-        client.set_text(initial.as_ref().map(|c| c.client_id.as_str()).unwrap_or(""));
-        client.set_editable(!bound);
-        group.add(&client);
-        let scopes = adw::EntryRow::new();
-        scopes.set_title("Scopes");
-        scopes.set_text(
-            initial
-                .as_ref()
-                .map(|c| c.scopes.as_str())
-                .unwrap_or("openid offline_access"),
-        );
-        group.add(&scopes);
-        for row in [&issuer, &client, &scopes] {
-            discovery
-                .bind_property("active", row, "sensitive")
-                .invert_boolean()
-                .sync_create()
-                .build();
-        }
+        group.set_description(Some("Authentication settings are discovered from the HTTPS sync server. You will be asked before trusting a new identity provider."));
         content.append(&group);
-        for (id, row) in [
-            ("sync_config_server", &server),
-            ("sync_config_issuer", &issuer),
-            ("sync_config_client", &client),
-            ("sync_config_scopes", &scopes),
-        ] {
-            config_widgets.expose_object(id, row);
-        }
-        config_widgets.expose_object("sync_config_discovery", &discovery);
+        config_widgets.expose_object("sync_config_server", &server);
         let downloads = adw::EntryRow::new();
         downloads.set_title("New remote folders are downloaded into");
         let root = initial
@@ -967,6 +937,7 @@ impl Desktop {
                     .join("Paper Trail Synced")
             });
         downloads.set_text(&root.to_string_lossy());
+        config_widgets.expose_object("sync_config_downloads", &downloads);
         let folders = adw::PreferencesGroup::new();
         folders.set_title("Folders");
         folders.add(&downloads);
@@ -995,13 +966,21 @@ impl Desktop {
             row.set_activatable_widget(Some(&selected));
             let path = Rc::new(std::cell::RefCell::new(choice.path.clone()));
             row.set_subtitle(&format!(
-                "{} · {}",
+                "{} · {}{}",
                 choice
                     .path
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| "Automatic download directory".into()),
-                choice.id.as_deref().unwrap_or("New synced folder")
+                choice.id.as_deref().unwrap_or("New synced folder"),
+                choice
+                    .stored_path
+                    .as_ref()
+                    .map(|p| format!(
+                        " · Current directory: {} (mapping change pending)",
+                        p.display()
+                    ))
+                    .unwrap_or_default()
             ));
             if let Some(id) = &choice.id {
                 let choose = gtk::Button::from_icon_name("folder-open-symbolic");
@@ -1012,6 +991,11 @@ impl Desktop {
                 let weak = Rc::downgrade(self);
                 let chosen = path.clone();
                 let weak_row = row.downgrade();
+                let mapping_id = id.clone();
+                let stored_path = state
+                    .as_ref()
+                    .and_then(|state| state.bindings.get(id))
+                    .map(|binding| binding.path.clone());
                 choose.connect_clicked(move |_| {
                     if let Some(d) = weak.upgrade() {
                         let files = gtk::FileDialog::builder()
@@ -1019,6 +1003,8 @@ impl Desktop {
                             .build();
                         let chosen = chosen.clone();
                         let weak_row = weak_row.clone();
+                        let mapping_id = mapping_id.clone();
+                        let stored_path = stored_path.clone();
                         files.select_folder(
                             Some(&d.window),
                             None::<&gio::Cancellable>,
@@ -1026,7 +1012,11 @@ impl Desktop {
                                 if let Ok(file) = result {
                                     if let Some(path) = file.path() {
                                         if let Some(row) = weak_row.upgrade() {
-                                            row.set_subtitle(&path.to_string_lossy());
+                                            let pending = stored_path.as_ref()
+                                                .filter(|old| !papertrail_sync::same_directory(old, &path))
+                                                .map(|old| format!(" · Current directory: {} (mapping change pending)", old.display()))
+                                                .unwrap_or_default();
+                                            row.set_subtitle(&format!("{} · {mapping_id}{pending}", path.display()));
                                         }
                                         *chosen.borrow_mut() = Some(path);
                                     }
@@ -1114,7 +1104,12 @@ impl Desktop {
                     let Some(binding) = state.bindings.get(id) else {
                         continue;
                     };
-                    if !binding.path.is_dir() {
+                    if !binding.path.is_dir()
+                        || !settings
+                            .note_folders
+                            .iter()
+                            .any(|p| papertrail_sync::same_directory(p, &binding.path))
+                    {
                         continue;
                     }
                     let Some(data) = catalog.folders.get(id) else {
@@ -1181,10 +1176,6 @@ impl Desktop {
                 let mut config = initial.clone().unwrap_or_default();
                 config.version = 2;
                 config.server = server.text().trim().into();
-                config.issuer = issuer.text().trim().into();
-                config.client_id = client.text().trim().into();
-                config.scopes = scopes.text().into();
-                config.discover_auth = discovery.is_active();
                 config.download_dir = Some(downloads.text().trim().into());
                 config.folders.clear();
                 config.auto_download = auto_download.is_active();
@@ -1220,15 +1211,21 @@ impl Desktop {
                             .insert(id.clone(), folder.clone());
                     }
                 }
-                let accepted = conflicts
+                let accepted: Vec<String> = conflicts
                     .iter()
                     .filter(|(_, accept)| accept.is_active())
                     .map(|(id, _)| id.clone())
                     .collect();
-                if config.discover_auth {
-                    d.sync_discover(config, initial.clone(), accepted);
-                } else {
+                if initial
+                    .as_ref()
+                    .is_some_and(|old| old.server == config.server && !old.discover_auth)
+                {
+                    // Folder-only edits retain a trusted legacy account. New
+                    // and discovery-enabled profiles always review discovery.
                     d.sync_save_configuration(config, initial.as_ref(), &accepted);
+                } else {
+                    config.discover_auth = true;
+                    d.sync_discover(config, initial.clone(), accepted);
                 }
             }
         });

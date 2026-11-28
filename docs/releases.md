@@ -2,12 +2,14 @@
 
 `.github/workflows/release.yml` runs only when a `v*` tag is pushed. The tag must
 exactly match `v` plus `[workspace.package].version` in `Cargo.toml`; a mismatched
-tag fails before any build or publication. Prerelease versions such as
+tag fails before any build or publication. The same gate validates workspace
+crates, lockfile entries, Meson/Flatpak metadata, iOS marketing version, and release
+notes against the workspace version. Prerelease versions such as
 `v0.3.0-rc.1` are published as GitHub prereleases.
 
 The release workflow reuses the Rust/GTK, standalone TUI, standalone server, and iOS
 workflows. All tests, six native TUI and six server target builds/linkage checks,
-the native GTK build, the GTK Flatpak build, and unsigned iOS builds with simulator
+both native GTK and GTK Flatpak architectures, and unsigned iOS builds with simulator
 UI/state/grammar tests must succeed before publishing.
 Normal branch pushes and PRs still upload CI artifacts, but do not create releases.
 
@@ -18,13 +20,14 @@ Normal branch pushes and PRs still upload CI artifacts, but do not create releas
 - Six server archives for the same targets: Linux musl and macOS `.tar.gz`,
   Windows MSVC with static CRT `.zip`, each for x86_64 and ARM64. Archives include
   the server executable and deployment readme, never configuration or credentials.
-- Native GTK Linux x86_64 `.tar.gz`: executable, `README.md`, and build/dependency info.
-- GTK Linux x86_64 `.flatpak` bundle, with runtime-repository information.
+- Native GTK Linux x86_64 and aarch64 `.tar.gz` archives: executable, `README.md`,
+  and build/dependency info. GTK packaging validates the ELF architecture.
+- GTK Linux x86_64 and aarch64 `.flatpak` bundles, with runtime-repository information.
 - Experimental iOS 17+ ARM64 unsigned device IPA:
   `paper-trail-ios-arm64-unsigned.ipa`. Installation requires signing with a
   sideloading tool; no Apple credentials are used in CI. Simulator apps,
   screenshots, and test reports remain CI artifacts, not release assets.
-- Per-package `.sha256` files and a combined `SHA256SUMS` (fifteen packages total).
+- Per-package `.sha256` files and a combined `SHA256SUMS` (seventeen packages total).
 
 The publish job downloads artifacts from the same workflow run, rejects missing
 or duplicate packages, verifies every checksum, and stages only the expected
@@ -41,8 +44,8 @@ the publish job has `contents: write`; build jobs use read-only permissions.
 3. Create and push the matching version tag. For the current Cargo version:
 
    ```sh
-    git tag -a v0.7.0 -m "Release 0.7.0"
-    git push origin v0.7.0
+    git tag -a v0.8.0 -m "Release 0.8.0"
+    git push origin v0.8.0
    ```
 
 4. Watch the **Release** workflow. Inspect the resulting downloads and release notes.
@@ -61,7 +64,7 @@ releases are not silently overwritten.
 
 ```sh
 python3 -m unittest discover -s build-aux -p test_release.py
-python3 build-aux/prepare_release.py validate-tag v0.7.0
+python3 build-aux/prepare_release.py validate-tag v0.8.0
 python3 build-aux/package_desktop.py
 python3 build-aux/package_server.py x86_64-unknown-linux-musl
 ```

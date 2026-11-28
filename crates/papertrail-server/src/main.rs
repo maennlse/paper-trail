@@ -3,8 +3,10 @@ use papertrail_server::{
     auth::{Authenticator, TokenValidation},
     router, NativeClientConfig, Server,
 };
-use std::{net::SocketAddr, path::Path, sync::Arc};
+use std::{net::SocketAddr, path::Path, process::ExitCode, sync::Arc};
 use zeroize::Zeroizing;
+
+mod cli;
 
 fn token_validation() -> Result<TokenValidation, Box<dyn std::error::Error>> {
     match std::env::var("PAPERTRAIL_TOKEN_VALIDATION").as_deref() {
@@ -34,23 +36,37 @@ fn token_validation() -> Result<TokenValidation, Box<dyn std::error::Error>> {
     }
 }
 
+fn main() -> ExitCode {
+    match cli::parse(std::env::args_os().skip(1)) {
+        Ok(cli::Action::Help) => {
+            println!(
+                "paper-trail-server {}\n\n{}",
+                env!("CARGO_PKG_VERSION"),
+                cli::HELP
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(cli::Action::Version) => {
+            println!("paper-trail-server {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Ok(cli::Action::Serve { verbose }) => match serve(verbose) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::args().any(|a| a == "--help") {
-        println!("paper-trail-server [--verbose|-v]\nRequired: PAPERTRAIL_OIDC_ISSUER, PAPERTRAIL_API_AUDIENCE\nOptional: PAPERTRAIL_DATABASE (papertrail.sqlite3), PAPERTRAIL_LISTEN (127.0.0.1:8787)\nPAPERTRAIL_TOKEN_VALIDATION: jwt (default, RFC 9068 at+jwt) or introspection (RFC 7662; ZITADEL-compatible).\nIntrospection requires PAPERTRAIL_INTROSPECTION_CLIENT_ID and PAPERTRAIL_INTROSPECTION_CLIENT_SECRET_FILE (server-only API credentials).\nLogging: stderr, info by default; --verbose/-v enables server debug logs. RUST_LOG overrides the filter (e.g. warn,papertrail_server=debug).\nRequires an HTTPS reverse proxy. Only loopback listen addresses are accepted.\nNever use an ID token as an API credential.");
-        println!("Native authentication discovery (optional): PAPERTRAIL_NATIVE_CLIENT_ID (public native client, never the introspection client), PAPERTRAIL_NATIVE_SCOPES (default: openid offline_access; add provider-specific API scopes). GET /v1/auth/config returns 503 until a native client ID is configured. The issuer is reused from PAPERTRAIL_OIDC_ISSUER; PAPERTRAIL_API_AUDIENCE remains server-only.");
-        return Ok(());
-    }
-    let verbose = std::env::args()
-        .skip(1)
-        .any(|a| a == "--verbose" || a == "-v");
+async fn serve(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
     papertrail_server::logging::init(verbose)?;
-    if std::env::args()
-        .skip(1)
-        .any(|a| a != "--verbose" && a != "-v")
-    {
-        return Err("Unknown argument; use --help".into());
-    }
     tracing::info!(
         target: "papertrail_server",
         version = env!("CARGO_PKG_VERSION"),
