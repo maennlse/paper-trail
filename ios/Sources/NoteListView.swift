@@ -65,6 +65,7 @@ struct NoteListView: View {
                     }
                     .refreshable { await model.refreshAndSync() }
                 }
+                .accessibilityHidden(model.railOpen)
                 .background(Color(uiColor: .systemGroupedBackground))
                 .navigationTitle(model.title)
                 .navigationBarTitleDisplayMode(.inline)
@@ -75,6 +76,7 @@ struct NoteListView: View {
                         }
                         .accessibilityLabel("Preferences")
                         .accessibilityIdentifier("preferences")
+                        .accessibilityHidden(model.railOpen)
                     }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -94,6 +96,7 @@ struct NoteListView: View {
                             Button { Task { await model.compose() } } label: {
                                 Image(systemName: "plus").font(.title2.weight(.medium))
                                     .frame(width: 54, height: 54)
+                                    .contentShape(Circle())
                             }
                             .buttonStyle(.plain)
                             .controlGlass(radius: 27, interactive: true)
@@ -108,10 +111,9 @@ struct NoteListView: View {
                         }
                     }
                     .padding(.top, 8).padding(.bottom, 6)
+                    .accessibilityHidden(model.railOpen)
                 }
             }
-            .allowsHitTesting(!model.railOpen)
-            .accessibilityHidden(model.railOpen)
 
             // Edge-only hit target does not interfere with scrolling or text selection.
             if !model.railOpen {
@@ -134,7 +136,9 @@ struct NoteListView: View {
                     })
                     .accessibilityLabel("Dismiss folders")
                     .accessibilityAddTraits(.isButton)
-                    .transition(.opacity)
+                    // Remove the scrim immediately on selection. An invisible
+                    // fading dismissal button must not intercept the next tap.
+                    .transition(.identity)
                     .zIndex(1)
                 FolderRailOverlay(
                     newFolder: { showNewFolder = true },
