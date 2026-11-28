@@ -73,6 +73,13 @@ final class PaperTrailUITests: XCTestCase {
         app.buttons["folder-toggle"].tap()
         XCTAssertTrue(app.buttons["All Notes"].waitForExistence(timeout: 5))
         app.buttons["All Notes"].tap()
+        let railClosed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: app.otherElements["folder-rail"])
+        XCTAssertEqual(XCTWaiter.wait(for: [railClosed], timeout: 5), .completed)
+        let composeReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true AND enabled == true"),
+            object: app.buttons["compose"])
+        XCTAssertEqual(XCTWaiter.wait(for: [composeReady], timeout: 5), .completed)
         app.buttons["compose"].tap()
         let editor = app.scrollViews["note-editor"].textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 10))

@@ -184,9 +184,11 @@ struct NoteListView: View {
         )) {
             Button("OK") { model.errorMessage = nil }
         } message: { Text(model.errorMessage ?? "") }
-        .confirmationDialog("Delete this note permanently?", isPresented: Binding(
+        // An unanchored native alert survives the row's full-swipe settling
+        // animation; iOS 26 can dismiss an anchored confirmation popover with it.
+        .alert("Delete this note permanently?", isPresented: Binding(
             get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }
-        ), titleVisibility: .visible) {
+        )) {
             if let note = pendingDelete {
                 Button("Delete Note", role: .destructive) {
                     Task { await model.delete(note) }
