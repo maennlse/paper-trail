@@ -152,7 +152,7 @@ Physical-device appearance, landscape, large text, and VoiceOver need manual rev
   changing the document. Pull the handle up (or tap it with VoiceOver) to reveal
   match previews; tapping a result selects and reveals it in the editor. Pull down
   to collapse without closing Find. **Replace** reveals single/all replacement
-  controls, including regex capture templates such as `$1`. Replacements use
+  controls, including regular expression capture templates such as `$1`. Replacements use
   Runestone's undo-aware editing APIs, and stale/read-only results cannot be edited.
   Closing Find restores the original selection, clamped to the current document.
   Finding alone does not change text or reset undo history. The save/sync
