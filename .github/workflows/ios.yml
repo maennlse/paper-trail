@@ -48,10 +48,12 @@ jobs:
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -derivedDataPath ios/build/DerivedData \
             -resultBundlePath ios/build/UITests.xcresult \
+            -parallel-testing-enabled NO \
             test CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
              CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= ARCHS=arm64
       - name: Test material fallback on iOS 18
         run: |
+          xcrun simctl shutdown all
           DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for runtime in sorted(d, reverse=True) if "iOS-18-" in runtime for x in d[runtime] if x["name"].startswith("iPhone")))')
           xcrun simctl bootstatus "$DEVICE_ID" -b
           xcodebuild -project ios/PaperTrail.xcodeproj -scheme PaperTrail \
@@ -61,6 +63,7 @@ jobs:
             -resultBundlePath ios/build/FallbackTests.xcresult \
             -only-testing:PaperTrailStateTests \
             -only-testing:PaperTrailUITests/PaperTrailUITests/testFindAndPrepareNativeShareWithoutChangingNote \
+            -parallel-testing-enabled NO \
             test-without-building CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= ARCHS=arm64
       - name: Export simulator screenshots

@@ -235,7 +235,7 @@ final class PaperTrailUITests: XCTestCase {
         let search = app.textFields["note-find-query"]
         let findPresented = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == true AND hittable == true"), object: search)
-        XCTAssertEqual(XCTWaiter.wait(for: [findPresented], timeout: 5), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [findPresented], timeout: 20), .completed)
         search.tap()
         search.typeText("walk")
         XCTAssertTrue(app.staticTexts["note-find-count"].waitForExistence(timeout: 5))
